@@ -577,6 +577,15 @@ export const SETTINGS_SEARCH_ITEMS = [
     searchTerms: ["allow disable enable open drive preview tools sessions project override"],
   },
   {
+    id: "agent-thread-access",
+    title: "Agent thread access",
+    to: "/settings/integrations",
+    scope: "project-defaults",
+    searchTerms: [
+      "allow disable enable threads orchestrate subagents create message wait parallel tools project override",
+    ],
+  },
+  {
     id: "device-hosts",
     title: "Device hosts",
     to: "/settings/integrations",

@@ -5064,14 +5064,20 @@ describe("agent browser access", () => {
   const projectId = ProjectId.make("project-browser-access");
 
   const startSessionWith = (
-    access: boolean | { readonly browser: boolean; readonly device: boolean },
+    access:
+      | boolean
+      | { readonly browser: boolean; readonly device: boolean; readonly threads?: boolean },
     threadId: ThreadId,
-    projectOverride?: boolean | { readonly browser?: boolean; readonly device?: boolean },
+    projectOverride?:
+      | boolean
+      | { readonly browser?: boolean; readonly device?: boolean; readonly threads?: boolean },
     options?: { readonly withoutOrchestration?: boolean },
   ) =>
     Effect.gen(function* () {
       const enableAgentBrowserAccess = typeof access === "boolean" ? access : access.browser;
       const enableAgentDeviceAccess = typeof access === "boolean" ? access : access.device;
+      const enableAgentThreadAccess =
+        typeof access === "boolean" ? access : (access.threads ?? false);
       const issued: Array<{ threadId: ThreadId; capabilities: ReadonlyArray<string> }> = [];
       const codex = makeFakeCodexAdapter();
       const providerAdapterLayer = Layer.succeed(
@@ -5149,6 +5155,7 @@ describe("agent browser access", () => {
           ServerSettings.ServerSettingsService.layerTest({
             enableAgentBrowserAccess,
             enableAgentDeviceAccess,
+            enableAgentThreadAccess,
             projectSettingsOverrides:
               projectOverride === undefined
                 ? {}
@@ -5161,6 +5168,9 @@ describe("agent browser access", () => {
                           : {}),
                         ...(projectOverride.device !== undefined
                           ? { enableAgentDeviceAccess: projectOverride.device }
+                          : {}),
+                        ...(projectOverride.threads !== undefined
+                          ? { enableAgentThreadAccess: projectOverride.threads }
                           : {}),
                       },
                     },
@@ -5209,7 +5219,7 @@ describe("agent browser access", () => {
       const issued = yield* startSessionWith(true, threadId);
 
       assert.deepEqual(issued, [
-        { threadId, capabilities: ["device", "preview", "pull-requests"] },
+        { threadId, capabilities: ["device", "preview", "pull-requests", "threads"] },
       ]);
     }).pipe(Effect.provide(NodeServices.layer)),
   );
@@ -5236,7 +5246,9 @@ describe("agent browser access", () => {
     Effect.gen(function* () {
       const threadId = asThreadId("thread-project-browser-off-device-on");
       const issued = yield* startSessionWith(true, threadId, false);
-      assert.deepEqual(issued, [{ threadId, capabilities: ["device", "pull-requests"] }]);
+      assert.deepEqual(issued, [
+        { threadId, capabilities: ["device", "pull-requests", "threads"] },
+      ]);
     }).pipe(Effect.provide(NodeServices.layer)),
   );
 
@@ -5255,6 +5267,29 @@ describe("agent browser access", () => {
         device: true,
       });
       assert.deepEqual(issued, [{ threadId, capabilities: ["device", "pull-requests"] }]);
+    }).pipe(Effect.provide(NodeServices.layer)),
+  );
+
+  it.effect("issues the threads capability when agent thread access is on", () =>
+    Effect.gen(function* () {
+      const threadId = asThreadId("thread-threads-on");
+      const issued = yield* startSessionWith(
+        { browser: false, device: false, threads: true },
+        threadId,
+      );
+      assert.deepEqual(issued, [{ threadId, capabilities: ["pull-requests", "threads"] }]);
+    }).pipe(Effect.provide(NodeServices.layer)),
+  );
+
+  it.effect("withholds the threads capability when the project disables thread access", () =>
+    Effect.gen(function* () {
+      const threadId = asThreadId("thread-project-threads-off");
+      const issued = yield* startSessionWith(
+        { browser: false, device: false, threads: true },
+        threadId,
+        { threads: false },
+      );
+      assert.deepEqual(issued, [{ threadId, capabilities: ["pull-requests"] }]);
     }).pipe(Effect.provide(NodeServices.layer)),
   );
 

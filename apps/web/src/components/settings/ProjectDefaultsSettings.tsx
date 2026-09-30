@@ -78,6 +78,7 @@ export function ProjectDefaultsSettings({ category }: { category: ProjectSetting
   const mixedWorkspace = useScopedSettingsMixed(["defaultThreadEnvMode"]);
   const mixedSubmodules = useScopedSettingsMixed(["worktreeSubmodules"]);
   const mixedBrowser = useScopedSettingsMixed(["enableAgentBrowserAccess"]);
+  const mixedThreads = useScopedSettingsMixed(["enableAgentThreadAccess"]);
   const mixedAutoPull = useScopedSettingsMixed(["defaultAutoPull"]);
   const mixedMergeMethod = useScopedSettingsMixed(["pullRequestMergeMethod"]);
   const modelSource = useScopedSettingSource(["defaultModelSelection"]);
@@ -493,6 +494,39 @@ export function ProjectDefaultsSettings({ category }: { category: ProjectSetting
                 mixed={mixedBrowser}
                 checked={mixedBrowser ? false : settings.enableAgentBrowserAccess}
                 onCheckedChange={(enabled) => updateSettings({ enableAgentBrowserAccess: enabled })}
+              />
+            }
+          />
+          <SettingsRow
+            serverScoped
+            settingKeys={["enableAgentThreadAccess"]}
+            mixed={mixedThreads}
+            id={searchableSetting("agent-thread-access").id}
+            title="Agent thread access"
+            description={
+              isProjectScope
+                ? "Allow agents in this project to list, read, start, message, and wait on other threads. Applies when the agent session next starts."
+                : "Allow agents to list, read, start, message, and wait on other threads. Projects can override it."
+            }
+            resetAction={
+              settings.enableAgentThreadAccess !==
+              DEFAULT_SERVER_SETTINGS.enableAgentThreadAccess ? (
+                <SettingResetButton
+                  label="default thread access"
+                  onClick={() =>
+                    updateSettings({
+                      enableAgentThreadAccess: DEFAULT_SERVER_SETTINGS.enableAgentThreadAccess,
+                    })
+                  }
+                />
+              ) : null
+            }
+            control={
+              <Switch
+                aria-label="Agent thread access"
+                mixed={mixedThreads}
+                checked={mixedThreads ? false : settings.enableAgentThreadAccess}
+                onCheckedChange={(enabled) => updateSettings({ enableAgentThreadAccess: enabled })}
               />
             }
           />

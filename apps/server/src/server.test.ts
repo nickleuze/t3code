@@ -126,6 +126,7 @@ import * as OrchestrationEngine from "./orchestration/Services/OrchestrationEngi
 import { OrchestrationThreadSettleBlockedError } from "./orchestration/Errors.ts";
 import * as ProjectionSnapshotQuery from "./orchestration/Services/ProjectionSnapshotQuery.ts";
 import { ThreadDeletionReactor } from "./orchestration/Services/ThreadDeletionReactor.ts";
+import { ProjectionTurnRepository } from "./persistence/Services/ProjectionTurns.ts";
 import * as PullRequestSyncReactor from "./orchestration/PullRequestSyncReactor.ts";
 import { SqlitePersistenceMemory } from "./persistence/Layers/Sqlite.ts";
 import { OrchestrationEventStoreLive } from "./persistence/Layers/OrchestrationEventStore.ts";
@@ -1018,6 +1019,9 @@ const buildAppUnderTest = (options?: {
             start: () => Effect.void,
             drain: Effect.void,
             requestSync: () => Effect.void,
+          }),
+          Layer.mock(ProjectionTurnRepository)({
+            getPendingTurnStartByThreadId: () => Effect.succeed(Option.none()),
           }),
         ),
       ),

@@ -48,7 +48,11 @@ const PAGE_TITLES: Record<SettingsPage, string> = {
 const PAGE_PROJECT_KEYS: Record<SettingsPage, readonly ProjectScopedServerSettingKey[]> = {
   "new-threads": ["defaultThreadEnvMode", "worktreeSubmodules", "defaultRuntimeMode"],
   "source-control": ["defaultAutoPull", "newWorktreesStartFromOrigin"],
-  "agent-behavior": ["responseStreamingMode", "enableAgentBrowserAccess"],
+  "agent-behavior": [
+    "responseStreamingMode",
+    "enableAgentBrowserAccess",
+    "enableAgentThreadAccess",
+  ],
   maintenance: ["continueThreadsAfterServerUpdate"],
 };
 
@@ -394,6 +398,16 @@ function ServerSettingsDetail(props: { readonly page: SettingsPage }) {
                       value={uniform("enableAgentBrowserAccess")}
                       disabled={disabledFor("enableAgentBrowserAccess")}
                       onValueChange={(value) => write({ enableAgentBrowserAccess: value })}
+                    />
+                  </SettingsSection>
+                  <SettingsSection title="Threads">
+                    <FanoutSwitchRow
+                      icon="text.bubble"
+                      label="Agent thread access"
+                      subtitle="Allow agents to list, read, start, message, and wait on other threads."
+                      value={uniform("enableAgentThreadAccess")}
+                      disabled={disabledFor("enableAgentThreadAccess")}
+                      onValueChange={(value) => write({ enableAgentThreadAccess: value })}
                     />
                   </SettingsSection>
                 </>
