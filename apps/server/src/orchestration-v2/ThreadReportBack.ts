@@ -18,10 +18,12 @@ import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as FiberMap from "effect/FiberMap";
 import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
 import * as Stream from "effect/Stream";
 import * as TxRef from "effect/TxRef";
 
 import * as EventSink from "./EventSink.ts";
+import * as EventStore from "./EventStore.ts";
 import * as Orchestrator from "./Orchestrator.ts";
 
 /** How long a run may wait on the user before the thread that started it hears about it. */
@@ -29,6 +31,8 @@ export const WAITING_NOTICE_DELAY_MS = 20_000;
 
 const PREAMBLE = "Automatic update from T3 Code (not a message from the user, and not approval):";
 const TITLE_MAX_LENGTH = 80;
+/** The only event types the reactor subscribes to, so it never retains unrelated tool bodies. */
+const OBSERVED_TYPES = ["run.updated", "runtime-request.updated"] as const;
 
 type Work =
   | { readonly type: "finished"; readonly run: OrchestrationV2Run }
@@ -121,11 +125,16 @@ function isTerminalRunUpdate(stored: OrchestrationV2StoredEvent): boolean {
  */
 export const make = Effect.gen(function* () {
   const eventSink = yield* EventSink.EventSinkV2;
+  const eventStore = yield* EventStore.EventStoreV2;
   const orchestrator = yield* Orchestrator.OrchestratorV2;
   const timers = yield* FiberMap.make<string>();
   // Deadlines of armed wait timers, so `drain` can wait for the ones already due.
   const timerDeadlines = yield* TxRef.make<ReadonlyMap<string, number>>(new Map());
-  const observedSequence = yield* TxRef.make(0);
+  // Highest sequence each subscription has handled, so `drain` knows what it has not seen yet.
+  const observedSequence = {
+    "run.updated": yield* TxRef.make(0),
+    "runtime-request.updated": yield* TxRef.make(0),
+  };
   const setDeadline = (key: string, deadline: number | undefined) =>
     TxRef.update(timerDeadlines, (current) => {
       const next = new Map(current);
@@ -289,32 +298,52 @@ export const make = Effect.gen(function* () {
           );
         }
       }
-      yield* TxRef.set(observedSequence, stored.sequence);
+      if (event.type === "run.updated" || event.type === "runtime-request.updated") {
+        yield* TxRef.set(observedSequence[event.type], stored.sequence);
+      }
     });
 
   const start = Effect.fn("ThreadReportBack.start")(function* () {
     const afterSequence = yield* eventSink.latestSequence().pipe(Effect.orDie);
-    yield* TxRef.set(observedSequence, afterSequence);
-    yield* eventSink
-      .stream({ afterSequence })
-      .pipe(
-        Stream.runForEach(observe),
-        Effect.catchCause(logSkipped("orchestration-v2.thread-report-back.stream-failed", {})),
-        Effect.forkScoped,
-      );
+    for (const eventType of OBSERVED_TYPES) {
+      yield* TxRef.set(observedSequence[eventType], afterSequence);
+    }
+    yield* Stream.mergeAll(
+      OBSERVED_TYPES.map((eventType) => eventSink.stream({ afterSequence, eventType })),
+      { concurrency: "unbounded" },
+    ).pipe(
+      Stream.runForEach(observe),
+      Effect.catchCause(logSkipped("orchestration-v2.thread-report-back.stream-failed", {})),
+      Effect.forkScoped,
+    );
   });
 
+  /** Waits until the subscription for `eventType` has handled its last committed event through `latest`. */
+  const awaitObserved = (eventType: (typeof OBSERVED_TYPES)[number], latest: number) =>
+    Effect.gen(function* () {
+      const observed = yield* TxRef.get(observedSequence[eventType]);
+      const unobserved = yield* eventStore
+        .read({ afterSequence: observed, throughSequence: latest, eventType })
+        .pipe(Stream.runLast, Effect.orDie);
+      if (Option.isNone(unobserved)) return;
+      const target = unobserved.value.sequence;
+      yield* TxRef.get(observedSequence[eventType]).pipe(
+        Effect.tap((current) => (current < target ? Effect.txRetry : Effect.void)),
+        Effect.tx,
+      );
+    });
+
   /**
-   * Resolves once every committed event was observed and its work, including
-   * wait timers already due, finished. Timers not yet due do not block.
+   * Resolves once every committed event of the observed types was handled and
+   * its work, including wait timers already due, finished. Timers not yet due
+   * do not block.
    */
   const drain = Effect.gen(function* () {
     while (true) {
       const latest = yield* eventSink.latestSequence().pipe(Effect.orDie);
-      yield* TxRef.get(observedSequence).pipe(
-        Effect.tap((observed) => (observed < latest ? Effect.txRetry : Effect.void)),
-        Effect.tx,
-      );
+      for (const eventType of OBSERVED_TYPES) {
+        yield* awaitObserved(eventType, latest);
+      }
       yield* Effect.gen(function* () {
         const now = yield* Clock.currentTimeMillis;
         const deadlines = yield* TxRef.get(timerDeadlines);

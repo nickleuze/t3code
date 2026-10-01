@@ -37,6 +37,7 @@ import * as VcsProcess from "../vcs/VcsProcess.ts";
 import * as WorkspacePaths from "../workspace/WorkspacePaths.ts";
 import { CodexProviderCapabilitiesV2 } from "./Adapters/CodexAdapterV2.ts";
 import * as EventSink from "./EventSink.ts";
+import * as EventStore from "./EventStore.ts";
 import * as Orchestrator from "./Orchestrator.ts";
 import type { ProviderAdapterV2Shape } from "./ProviderAdapter.ts";
 import {
@@ -81,7 +82,11 @@ const providerInstance = {
   textGeneration: {} as ProviderInstance["textGeneration"],
 } satisfies ProviderInstance;
 
-const TestLayer = Layer.mergeAll(OrchestrationV2LayerLive, OrchestrationV2EventSinkLayerLive).pipe(
+const TestLayer = Layer.mergeAll(
+  OrchestrationV2LayerLive,
+  OrchestrationV2EventSinkLayerLive,
+  EventStore.layer,
+).pipe(
   Layer.provideMerge(ProjectServiceLayerLive),
   Layer.provide(
     Layer.mock(WorkspacePaths.WorkspacePaths)({

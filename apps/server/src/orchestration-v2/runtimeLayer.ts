@@ -311,7 +311,9 @@ export const OrchestrationV2ProductionLayerLive = Layer.mergeAll(
     Layer.provide(Layer.mergeAll(projectionStoreLayer, threadManagementProvided)),
   ),
   providerContinuationWorkerProvided,
-  threadReportBackLayer.pipe(Layer.provide(Layer.merge(eventSinkProvided, orchestratorProvided))),
+  threadReportBackLayer.pipe(
+    Layer.provide(Layer.mergeAll(eventSinkProvided, eventStoreProvided, orchestratorProvided)),
+  ),
   agentSessionImporterProvided,
 ).pipe(
   Layer.provide(Scheduler.layer),
