@@ -162,6 +162,87 @@ it.effect("launches a scratch thread into the Scratch project", () =>
   }),
 );
 
+it.effect("lets an auto caller launch without granting a broader runtime mode", () =>
+  Effect.gen(function* () {
+    const sourceThreadId = ThreadId.make("source-thread");
+    const projectId = ProjectId.make("project");
+    const providerInstanceId = ProviderInstanceId.make("codex");
+    const modelSelection = { instanceId: providerInstanceId, model: "gpt-5" };
+    let caller = {
+      id: sourceThreadId,
+      projectId,
+      providerInstanceId,
+      modelSelection,
+      runtimeMode: "auto",
+      interactionMode: "default",
+      activeRunId: "active-run",
+      archivedAt: null,
+      deletedAt: null,
+    } as OrchestrationV2ThreadShell;
+    const launched: Array<ThreadLaunch.ThreadLaunchInput> = [];
+    const dependencies = Layer.mergeAll(
+      NodeCrypto.layer,
+      Layer.succeed(McpInvocationContext.McpInvocationContext, {
+        environmentId: EnvironmentId.make("environment"),
+        threadId: sourceThreadId,
+        providerSessionId: "session",
+        providerInstanceId,
+        issuedAt: 0,
+        capabilities: new Set(["orchestration" as const]),
+      }),
+      Layer.mock(ThreadManagement.ThreadManagementService)({
+        getThreadShell: () => Effect.succeed(caller),
+      }),
+      Layer.mock(ThreadLaunch.ThreadLaunchService)({
+        launch: (input) => {
+          launched.push(input);
+          return Effect.succeed({
+            threadId: input.threadId,
+            projection: {
+              thread: { id: input.threadId, projectId, modelSelection },
+              runs: [],
+            },
+            resumed: false,
+          } as unknown as ThreadLaunch.ThreadLaunchResult);
+        },
+      }),
+      Layer.mock(Project.ProjectService)({}),
+      Layer.mock(ManagedProjectFolders.ManagedProjectFolders)({ namedProjectsRoot: "/projects" }),
+      NodeServices.layer,
+      ServerConfig.layerTest(process.cwd(), { prefix: "t3-auto-launch-" }).pipe(
+        Layer.provide(NodeServices.layer),
+      ),
+    );
+    const toolkit = yield* ProjectToolkit.pipe(
+      Effect.provide(ProjectHandlersLive.pipe(Layer.provide(dependencies))),
+    );
+    const handle = (params: Parameters<typeof toolkit.handle<"t3_thread_launch">>[1]) =>
+      toolkit
+        .handle("t3_thread_launch", params)
+        .pipe(Stream.unwrap, Stream.runCollect, Effect.provide(dependencies));
+
+    yield* handle({ title: "Inherits", message: "Go" });
+    yield* handle({ title: "Narrower", message: "Go", runtimeMode: "approval-required" });
+    expect(launched.map((input) => input.runtimeMode)).toEqual(["auto", "approval-required"]);
+
+    const escalated = yield* handle({
+      title: "Broader",
+      message: "Go",
+      runtimeMode: "full-access",
+    });
+    expect(escalated.at(-1)?.result).toMatchObject({ code: "runtime_mode_escalation_denied" });
+
+    caller = { ...caller, runtimeMode: "auto-accept-edits" };
+    const narrowCaller = yield* handle({ title: "Denied", message: "Go" });
+    expect(narrowCaller.at(-1)?.result).toMatchObject({ code: "capability_denied" });
+
+    caller = { ...caller, runtimeMode: "auto", interactionMode: "plan" };
+    const planCaller = yield* handle({ title: "Denied", message: "Go" });
+    expect(planCaller.at(-1)?.result).toMatchObject({ code: "capability_denied" });
+    expect(launched).toHaveLength(2);
+  }),
+);
+
 it.effect("starts a project from just a title when workspaceRoot is omitted", () =>
   Effect.gen(function* () {
     const sourceThreadId = ThreadId.make("source-thread");

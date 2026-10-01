@@ -7,6 +7,7 @@ import * as Project from "../../../project/ProjectService.ts";
 import * as ManagedProjectFolders from "../../../project/ManagedProjectFolders.ts";
 import * as Repositories from "../../../sourceControl/SourceControlRepositoryService.ts";
 import { newCommandId, readCaller, readMutationCaller, unavailable } from "../../threadAccess.ts";
+import { resolveRuntimeMode } from "../../OrchestratorMcpService.ts";
 import { ProjectToolkit } from "./tools.ts";
 
 function projectFailure(error: Project.ProjectServiceError) {
@@ -41,11 +42,16 @@ export const ProjectHandlersLive = ProjectToolkit.toLayer({
   t3_thread_launch: (input) =>
     Effect.gen(function* () {
       const { caller, scope } = yield* readMutationCaller();
-      if (caller.runtimeMode !== "full-access" || caller.interactionMode !== "default")
+      // Fork: auto callers may launch too; the new thread never gets a broader runtime mode.
+      if (
+        (caller.runtimeMode !== "full-access" && caller.runtimeMode !== "auto") ||
+        caller.interactionMode !== "default"
+      )
         return yield* new OrchestratorMcpFailure({
           code: "capability_denied",
-          message: "Project launches require a full-access/default calling thread.",
+          message: "Project launches require a full-access or auto calling thread in default mode.",
         });
+      const runtimeMode = yield* resolveRuntimeMode(caller.runtimeMode, input.runtimeMode);
       const commandId = yield* newCommandId();
       const threadId = ThreadId.make(commandId);
       const messageId = MessageId.make(commandId);
@@ -83,7 +89,7 @@ export const ProjectHandlersLive = ProjectToolkit.toLayer({
         projectId,
         title: input.title,
         modelSelection: input.modelSelection ?? caller.modelSelection,
-        runtimeMode: input.runtimeMode ?? caller.runtimeMode,
+        runtimeMode,
         interactionMode: input.interactionMode ?? caller.interactionMode,
         workspaceStrategy: input.workspaceStrategy ?? { type: "root" },
         ...(input.message === undefined && attachments.length === 0
