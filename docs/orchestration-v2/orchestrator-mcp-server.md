@@ -368,6 +368,14 @@ The target runtime and interaction modes may not be broader than the caller's.
 Stable command and message IDs are derived from `clientRequestId` for
 idempotent retries.
 
+Agent-started work reports back. When a run on another thread that a
+`t3_thread_launch`, `create_threads`, or `t3_thread_send` message started or
+steered ends, or stays waiting on a user approval or answer for 20 seconds, the
+sending thread receives a queued notification message from the server. A
+delegated child that waits on the user notifies its parent the same way. Turns
+started by these notices never report back, and the command and message IDs are
+derived from the run or request so each notice is delivered once.
+
 ### `t3_thread_wait`
 
 Waits for a selected run to become `completed`, `failed`, `cancelled`,
