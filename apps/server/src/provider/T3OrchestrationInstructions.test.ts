@@ -23,21 +23,31 @@ describe("T3 orchestration provider instructions", () => {
 
   it("injects prompt fallback only for an MCP-enabled first run", () => {
     const prompt = "Inspect the repository.";
-    const injected = t3OrchestrationPromptForFirstRun({
-      prompt,
-      runOrdinal: 1,
-      hasT3Mcp: true,
-    });
+    const base = { prompt, supportsStructuredQuestions: true };
+    const injected = t3OrchestrationPromptForFirstRun({ ...base, runOrdinal: 1, hasT3Mcp: true });
 
     assert.include(injected, "<t3_code_orchestration_instructions>");
     assert.include(injected, `<user_request>\n${prompt}\n</user_request>`);
     assert.equal(
-      t3OrchestrationPromptForFirstRun({ prompt, runOrdinal: 2, hasT3Mcp: true }),
+      t3OrchestrationPromptForFirstRun({ ...base, runOrdinal: 2, hasT3Mcp: true }),
       prompt,
     );
     assert.equal(
-      t3OrchestrationPromptForFirstRun({ prompt, runOrdinal: 1, hasT3Mcp: false }),
+      t3OrchestrationPromptForFirstRun({ ...base, runOrdinal: 1, hasT3Mcp: false }),
       prompt,
+    );
+  });
+
+  it("points providers without a usable question tool at t3_ask_user_question", () => {
+    const input = { prompt: "Plan it.", runOrdinal: 1, hasT3Mcp: true };
+
+    assert.include(
+      t3OrchestrationPromptForFirstRun({ ...input, supportsStructuredQuestions: false }),
+      "`t3_ask_user_question`",
+    );
+    assert.notInclude(
+      t3OrchestrationPromptForFirstRun({ ...input, supportsStructuredQuestions: true }),
+      "t3_ask_user_question",
     );
   });
 

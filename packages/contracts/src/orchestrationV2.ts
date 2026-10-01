@@ -2845,6 +2845,18 @@ const OrchestrationV2InternalCommand = Schema.Union([
     requestId: CommandId,
     message: TrimmedNonEmptyString,
   }),
+  /**
+   * Shows the agent's questions on `runId` for a provider with no native
+   * question tool. The answers arrive as the user's next message.
+   */
+  Schema.Struct({
+    type: Schema.Literal("thread.user-input.request"),
+    commandId: CommandId,
+    threadId: ThreadId,
+    runId: RunId,
+    requestId: RuntimeRequestId,
+    questions: Schema.Array(OrchestrationV2UserInputQuestion),
+  }),
 ]);
 export type OrchestrationV2InternalCommand = typeof OrchestrationV2InternalCommand.Type;
 

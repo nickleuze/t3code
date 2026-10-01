@@ -83,22 +83,35 @@ export function t3AcpPromptWithInstructions(input: {
   return `<t3_code_instructions>\n${instructions.join("\n\n")}\n</t3_code_instructions>\n\n<user_request>\n${input.prompt}\n</user_request>`;
 }
 
+/** For providers whose own question tool T3 Code cannot answer. */
+export const T3_CODE_ASK_USER_QUESTION_INSTRUCTIONS = `
+
+### Asking the user
+
+Your built-in question tool does not work in T3 Code. When a decision is genuinely the user's to make, ask with \`t3_ask_user_question\` instead of writing the choices as plain text, then end your turn. The answers arrive as the user's next message.
+`;
+
 /**
  * Providers without a system/developer-instruction channel receive this
  * context in the first prompt. Keep the wrapper explicit so it cannot be
  * mistaken for text authored by the user.
  */
-function prependT3OrchestrationInstructions(prompt: string): string {
-  return `<t3_code_orchestration_instructions>${T3_CODE_ORCHESTRATION_INSTRUCTIONS.trim()}</t3_code_orchestration_instructions>\n\n<user_request>\n${prompt}\n</user_request>`;
+function prependT3OrchestrationInstructions(prompt: string, askUserQuestion: boolean): string {
+  const instructions =
+    T3_CODE_ORCHESTRATION_INSTRUCTIONS.trim() +
+    (askUserQuestion ? T3_CODE_ASK_USER_QUESTION_INSTRUCTIONS.trimEnd() : "");
+  return `<t3_code_orchestration_instructions>${instructions}</t3_code_orchestration_instructions>\n\n<user_request>\n${prompt}\n</user_request>`;
 }
 
 export function t3OrchestrationPromptForFirstRun(input: {
   readonly prompt: string;
   readonly runOrdinal: number;
   readonly hasT3Mcp: boolean;
+  /** False when the provider's own question tool cannot be answered. */
+  readonly supportsStructuredQuestions: boolean;
 }): string {
   return input.runOrdinal === 1 && input.hasT3Mcp
-    ? prependT3OrchestrationInstructions(input.prompt)
+    ? prependT3OrchestrationInstructions(input.prompt, !input.supportsStructuredQuestions)
     : input.prompt;
 }
 

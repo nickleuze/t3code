@@ -1,6 +1,6 @@
 import {
   type CommandId,
-  type RuntimeRequestId,
+  RuntimeRequestId,
   ThreadId,
   type OrchestrationV2ThreadProjection,
   type RunId,
@@ -218,6 +218,40 @@ export const ThreadToolkitHandlersLive = ThreadToolkit.toLayer({
         })
         .pipe(Effect.mapError(unavailable));
       return { sequence: result.sequence };
+    }),
+  t3_ask_user_question: (input) =>
+    Effect.gen(function* () {
+      const { threads, caller } = yield* readMutationCaller();
+      if (caller.activeRunId === null) return yield* unavailable();
+      const commandId = yield* newCommandId();
+      const requestId = RuntimeRequestId.make(`${commandId}:question`);
+      yield* threads
+        .dispatch({
+          type: "thread.user-input.request",
+          commandId,
+          threadId: caller.id,
+          runId: caller.activeRunId,
+          requestId,
+          questions: input.questions.map((question, index) => ({
+            id: String(index + 1),
+            header: question.header,
+            question: question.question,
+            options: question.options.map((option) => ({
+              label: option.label,
+              description: option.description ?? option.label,
+            })),
+            multiSelect: question.multiSelect ?? false,
+          })),
+        })
+        .pipe(
+          // The orchestrator's refusal tells the agent what to do instead.
+          Effect.mapError((error) =>
+            error._tag === "OrchestratorDispatchError" && typeof error.cause === "string"
+              ? new OrchestratorMcpFailure({ code: "invalid_request", message: error.cause })
+              : unavailable(),
+          ),
+        );
+      return { requestId };
     }),
   t3_queue_list: (input) =>
     Effect.gen(function* () {

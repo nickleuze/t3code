@@ -49,6 +49,11 @@ provider turns. Same-provider Cursor forks use the orchestrator's portable full-
 handoff into a fresh Cursor agent. The SDK has in-process custom callback tools, but the V2 adapter
 intentionally uses the authenticated, thread-scoped MCP server instead.
 
+The local SDK refuses Cursor's own question tool. Cursor asks through T3 Code's question panel
+instead. The question does not pause the turn: your answer becomes a new message, sent after Cursor
+finishes the current turn. Unanswered questions survive reconnects, and you can dismiss one without
+sending anything.
+
 Portable handoffs summarize eligible timeline items and can omit the end of long messages. Read
 [Context in portable handoffs](./portable-handoffs.md) before using a fork for work whose exact
 instructions must carry forward.

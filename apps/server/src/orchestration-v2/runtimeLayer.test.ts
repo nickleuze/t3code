@@ -1104,6 +1104,167 @@ it.layer(TestLayer)("OrchestrationV2LayerLive", (it) => {
     }),
   );
 
+  it.effect(
+    "asks for a provider without a question tool and delivers the answer as a message",
+    () =>
+      Effect.gen(function* () {
+        const orchestrator = yield* Orchestrator.OrchestratorV2;
+        const eventSink = yield* EventSink.EventSinkV2;
+        const sessions = yield* ProviderSessionManager.ProviderSessionManagerV2;
+        const threadId = ThreadId.make("runtime-mcp-question");
+        yield* orchestrator.dispatch({
+          type: "thread.create",
+          createdBy: "user",
+          creationSource: "web",
+          commandId: CommandId.make("runtime-mcp-question-create"),
+          threadId,
+          projectId: ProjectId.make("runtime-mcp-question-project"),
+          title: "MCP question",
+          modelSelection,
+          runtimeMode: "full-access",
+          interactionMode: "default",
+          branch: null,
+          worktreePath: process.cwd(),
+        });
+        yield* orchestrator.dispatch({
+          type: "message.dispatch",
+          createdBy: "user",
+          creationSource: "web",
+          commandId: CommandId.make("runtime-mcp-question-first"),
+          threadId,
+          messageId: MessageId.make("runtime-mcp-question-first"),
+          text: "Plan the release.",
+          attachments: [],
+          dispatchMode: { type: "start_immediately" },
+        });
+        const initial = yield* orchestrator.getThreadProjection(threadId);
+        const run = initial.runs[0]!;
+        const providerThread = initial.providerThreads[0]!;
+        const now = yield* DateTime.now;
+        const withoutQuestions = {
+          ...CodexProviderCapabilitiesV2,
+          planning: { ...CodexProviderCapabilitiesV2.planning, supportsStructuredQuestions: false },
+        };
+        const providerSession = {
+          id: providerThread.providerSessionId!,
+          driver,
+          providerInstanceId: modelSelection.instanceId,
+          status: "running" as const,
+          cwd: process.cwd(),
+          model: modelSelection.model,
+          capabilities: withoutQuestions,
+          createdAt: now,
+          updatedAt: now,
+          lastError: null,
+        };
+        const providerTurn = {
+          id: ProviderTurnId.make("runtime-mcp-question-turn"),
+          providerThreadId: providerThread.id,
+          nodeId: run.rootNodeId!,
+          runAttemptId: run.activeAttemptId,
+          nativeTurnRef: null,
+          ordinal: 1,
+          status: "running" as const,
+          startedAt: now,
+          completedAt: null,
+        };
+        yield* eventSink.write({
+          commandId: CommandId.make("runtime-mcp-question-running"),
+          events: [
+            {
+              id: EventId.make("runtime-mcp-question-run-event"),
+              type: "run.updated",
+              threadId,
+              runId: run.id,
+              occurredAt: now,
+              payload: { ...run, status: "running", startedAt: now },
+            },
+            {
+              id: EventId.make("runtime-mcp-question-session-event"),
+              type: "provider-session.attached",
+              threadId,
+              occurredAt: now,
+              payload: providerSession,
+            },
+            {
+              id: EventId.make("runtime-mcp-question-turn-event"),
+              type: "provider-turn.updated",
+              threadId,
+              runId: run.id,
+              occurredAt: now,
+              payload: providerTurn,
+            },
+          ],
+        });
+        let capabilities = CodexProviderCapabilitiesV2;
+        const sessionSpy = vi.spyOn(sessions, "get").mockImplementation(() =>
+          Effect.succeed(
+            Option.some({
+              providerSession: { ...providerSession, capabilities },
+            } as ProviderAdapterV2SessionRuntime),
+          ),
+        );
+        yield* Effect.addFinalizer(() => Effect.sync(() => sessionSpy.mockRestore()));
+
+        const requestId = RuntimeRequestId.make("runtime-mcp-question-request");
+        const ask = (commandId: string) =>
+          orchestrator.dispatch({
+            type: "thread.user-input.request",
+            commandId: CommandId.make(commandId),
+            threadId,
+            runId: run.id,
+            requestId,
+            questions: [
+              {
+                id: "1",
+                header: "Targets",
+                question: "Which platforms ship?",
+                options: [
+                  { label: "Web", description: "Web" },
+                  { label: "Mobile", description: "Mobile" },
+                ],
+                multiSelect: true,
+              },
+            ],
+          });
+
+        const refused = yield* ask("runtime-mcp-question-native").pipe(Effect.result);
+        assert.equal(refused._tag, "Failure");
+        assert.deepEqual((yield* orchestrator.getThreadProjection(threadId)).runtimeRequests, []);
+
+        capabilities = withoutQuestions;
+        yield* ask("runtime-mcp-question-ask");
+        const asked = yield* orchestrator.getThreadProjection(threadId);
+        const request = asked.runtimeRequests.find((candidate) => candidate.id === requestId);
+        assert.equal(request?.status, "pending");
+        assert.deepEqual(request?.responseCapability, { type: "message" });
+        assert.equal(
+          asked.nodes.find((node) => node.id === request?.nodeId)?.parentNodeId,
+          run.rootNodeId,
+        );
+        const item = asked.turnItems.find(
+          (candidate) =>
+            candidate.type === "user_input_request" && candidate.requestId === requestId,
+        );
+        assert.equal(item?.type === "user_input_request" && item.responseMode, "message");
+
+        yield* orchestrator.dispatch({
+          type: "runtime-request.respond",
+          commandId: CommandId.make("runtime-mcp-question-answer"),
+          threadId,
+          requestId,
+          answers: { "1": ["Web", "Mobile"] },
+        });
+        const answered = yield* orchestrator.getThreadProjection(threadId);
+        assert.equal(
+          answered.runtimeRequests.find((candidate) => candidate.id === requestId)?.status,
+          "resolved",
+        );
+        assert.equal(answered.messages.at(-1)?.text, "Which platforms ship?\nWeb, Mobile");
+        assert.equal(answered.messages.at(-1)?.role, "user");
+      }),
+  );
+
   it.effect("dismisses message-capable questions directly and while settling", () =>
     Effect.gen(function* () {
       const orchestrator = yield* Orchestrator.OrchestratorV2;

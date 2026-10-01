@@ -702,6 +702,17 @@ describe("orchestrator MCP toolkit", () => {
             yield* invoke("t3_thread_organize", { action: "unpin" });
             expect((yield* orchestrator.getThreadShell(parentThreadId))?.pinnedAt).toBeNull();
 
+            // Codex asks with its own question tool, so the fallback refuses
+            // and says why.
+            const askCall = yield* invoke("t3_ask_user_question", {
+              questions: [{ header: "Scope", question: "Ship it?", options: [{ label: "Yes" }] }],
+            });
+            expect(askCall.structuredContent).toMatchObject({
+              _tag: "OrchestratorMcpFailure",
+              code: "invalid_request",
+              message: expect.stringContaining("its own question tool"),
+            });
+
             if (parentRun === undefined || parentRun.rootNodeId === null) {
               return yield* Effect.die(new Error("Parent run missing."));
             }

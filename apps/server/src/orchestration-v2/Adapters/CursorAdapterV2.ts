@@ -2115,6 +2115,8 @@ export function makeCursorAdapterV2(
             }),
             runOrdinal: turnInput.runOrdinal,
             hasT3Mcp: cursorMcpServers(turnInput.threadId) !== undefined,
+            supportsStructuredQuestions:
+              CursorProviderCapabilitiesV2.planning.supportsStructuredQuestions,
           });
           const images = yield* Effect.forEach(
             turnInput.message.attachments.filter(isProviderNativeImageAttachment),

@@ -355,6 +355,7 @@ function commandThreadId(command: OrchestrationV2ServerCommand): ThreadId {
     case "queued-run.edit":
     case "runtime-request.respond":
     case "thread.user-input.dismiss":
+    case "thread.user-input.request":
     case "checkpoint.rollback":
     case "checkpoint.rollback.fail":
     case "provider.switch":
@@ -6689,7 +6690,12 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         }
         const replies: string[] = [];
         for (const question of approvalTurnItem.questions) {
-          const answer = command.answers?.[question.id];
+          const raw = command.answers?.[question.id];
+          // Multi-select pickers answer with the chosen options.
+          const answer =
+            Array.isArray(raw) && raw.every((value) => typeof value === "string")
+              ? raw.join(", ")
+              : raw;
           if (typeof answer !== "string" || answer.trim().length === 0) {
             if (question.required === false) continue;
             return yield* new OrchestratorDispatchError({
@@ -8041,6 +8047,133 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
     });
 
   /**
+   * Opens a question on the running turn for a provider whose own question
+   * tool T3 cannot answer. It resolves through the message path, so the
+   * answers reach the agent as the user's next message.
+   */
+  const dispatchThreadUserInputRequest = (
+    command: Extract<
+      OrchestrationV2InternalCommand,
+      { readonly type: "thread.user-input.request" }
+    >,
+    events: Ref.Ref<Array<OrchestrationV2DomainEvent>>,
+  ) =>
+    Effect.gen(function* () {
+      const reject = (cause: string) =>
+        new OrchestratorDispatchError({
+          commandId: command.commandId,
+          commandType: command.type,
+          cause,
+        });
+      if (command.questions.length === 0) return yield* reject("Ask at least one question.");
+      const { run, providerThread, providerTurn } = yield* projectionStore
+        .getRunningTurnContext(command.threadId)
+        .pipe(mapDispatchError(command));
+      if (run?.id !== command.runId || run.rootNodeId === null) {
+        return yield* reject(`Run ${command.runId} is not running.`);
+      }
+      const rootNodeId = run.rootNodeId;
+      const session =
+        providerThread?.providerSessionId == null
+          ? Option.none()
+          : yield* providerSessions
+              .get(providerThread.providerSessionId)
+              .pipe(mapDispatchError(command));
+      if (Option.isNone(session)) {
+        return yield* reject("The provider session for this run is not live.");
+      }
+      const { providerSession } = session.value;
+      if (providerSession.capabilities.planning.supportsStructuredQuestions) {
+        return yield* reject(
+          "This provider has its own question tool. Ask with that tool instead.",
+        );
+      }
+      const parentThreadId = yield* appOwnedSubagentParentThreadId(command.threadId).pipe(
+        mapDispatchError(command),
+      );
+      if (parentThreadId !== undefined) {
+        return yield* reject(
+          "A delegated task cannot ask the user. Put the open question in your result instead.",
+        );
+      }
+
+      const thread = yield* projectionStore
+        .getThread(command.threadId)
+        .pipe(mapDispatchError(command));
+      const now = yield* DateTime.now;
+      const nodeId = idAllocator.derive.approvalNode({ requestId: command.requestId });
+      const common = {
+        threadId: command.threadId,
+        runId: run.id,
+        nodeId,
+        driver: providerSession.driver,
+        providerInstanceId: run.providerInstanceId,
+        occurredAt: now,
+      };
+      const emitEvent = emit(events, command);
+      yield* emitEvent({
+        ...common,
+        type: "node.updated",
+        payload: {
+          id: nodeId,
+          threadId: command.threadId,
+          runId: run.id,
+          parentNodeId: rootNodeId,
+          rootNodeId,
+          kind: "user_input_request",
+          status: "waiting",
+          countsForRun: false,
+          providerThreadId: run.providerThreadId,
+          providerTurnId: providerTurn?.id ?? null,
+          nativeItemRef: null,
+          runtimeRequestId: command.requestId,
+          checkpointScopeId: null,
+          startedAt: now,
+          completedAt: null,
+        },
+      });
+      yield* emitEvent({
+        ...common,
+        type: "runtime-request.updated",
+        payload: {
+          id: command.requestId,
+          nodeId,
+          providerTurnId: providerTurn?.id ?? null,
+          nativeRequestRef: null,
+          kind: "user_input",
+          status: "pending",
+          responseCapability: { type: "message" },
+          createdAt: now,
+          resolvedAt: null,
+        },
+      });
+      yield* emitEvent({
+        ...common,
+        type: "turn-item.updated",
+        payload: {
+          id: idAllocator.derive.approvalTurnItem({ requestId: command.requestId }),
+          threadId: command.threadId,
+          runId: run.id,
+          nodeId,
+          providerThreadId: run.providerThreadId,
+          providerTurnId: providerTurn?.id ?? null,
+          nativeItemRef: null,
+          parentItemId: null,
+          ordinal: yield* nextTurnItemOrdinal({ thread }),
+          status: "waiting",
+          title: null,
+          startedAt: now,
+          completedAt: null,
+          updatedAt: now,
+          type: "user_input_request",
+          requestId: command.requestId,
+          questions: command.questions,
+          responseMode: "message",
+        },
+      });
+    });
+
+  /**
    * Parent thread of an app-owned delegated child, or undefined when the
    * thread is not one. Thread lineage and fork origin are immutable, so this
    * is safe to read without holding either thread's dispatch lock.
@@ -9023,6 +9156,9 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         break;
       case "checkpoint.rollback.fail":
         yield* dispatchCheckpointRollbackFail(command, events);
+        break;
+      case "thread.user-input.request":
+        yield* dispatchThreadUserInputRequest(command, events);
         break;
       case "thread.fork":
         yield* dispatchThreadFork(command, events);

@@ -467,7 +467,7 @@ user-input.respond(RuntimeRequestId, answers)
   -> run resumes/runs
 ```
 
-If the provider does not support structured questions, the adapter may project a plain assistant message and no respondable request.
+If the provider does not support structured questions, the agent asks through the `t3_ask_user_question` MCP tool instead. The orchestrator opens a request with `responseCapability: message`: the run does not wait, and the answer is dispatched as the user's next message. Providers that do support structured questions are refused, so each question has one path.
 
 ## Plans And Todo Lists
 
