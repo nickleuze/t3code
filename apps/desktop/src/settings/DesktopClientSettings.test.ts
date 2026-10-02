@@ -64,6 +64,7 @@ const clientSettings: ClientSettings = {
   },
   sidebarProjectSortOrder: "manual",
   sidebarThreadSortOrder: "created_at",
+  sidebarFlatThreadSortOrder: "updated_at",
   sidebarThreadPreviewCount: 6,
   legacySidebarEnabled: false,
   loadBalancingEnabled: false,

@@ -279,6 +279,9 @@ export function planSidebarThreadDrop(input: {
   readonly activeOrder: readonly string[];
   readonly activeKeysById: ReadonlyMap<string, string | null | undefined>;
   readonly activeReorderableKeys?: ReadonlySet<string>;
+  /** The active list follows a timestamp sort: drops can move threads into
+      it, but placement is the sort's, so nothing is arranged or written. */
+  readonly activeSorted?: boolean;
 }): SidebarThreadDropPlan {
   const {
     activeKey,
@@ -292,6 +295,7 @@ export function planSidebarThreadDrop(input: {
     activeOrder,
     activeKeysById,
     activeReorderableKeys,
+    activeSorted = false,
   } = input;
   if (input.supportsSettlement === false && (target.section === "settled" || activeSettled)) {
     return { kind: "none" };
@@ -306,11 +310,14 @@ export function planSidebarThreadDrop(input: {
       ) {
         return { kind: "none" };
       }
-      const assignments = planPinnedReorder({
-        orderedIds: order,
-        keysById: activeKeysById,
-        movedId: activeKey,
-      });
+      if (activeSorted && activeSection === "active") return { kind: "none" };
+      const assignments = activeSorted
+        ? []
+        : planPinnedReorder({
+            orderedIds: order,
+            keysById: activeKeysById,
+            movedId: activeKey,
+          });
       if (activeReorderableKeys && assignments.some(({ id }) => !activeReorderableKeys.has(id))) {
         return { kind: "none" };
       }

@@ -18,6 +18,7 @@ import {
   getProjectSortTimestamp,
   getSidebarForkParentThreadId,
   getSidebarThreadIdsToPrewarm,
+  planSidebarThreadDrop,
   hasUnseenCompletion,
   isContextMenuPointerDown,
   isSidebarSubagentThread,
@@ -121,6 +122,51 @@ describe("animateSidebarLayoutChanges", () => {
 
   it("keeps layout movement while the user is sorting", () => {
     expect(animateSidebarLayoutChanges({ ...baseArgs, isSorting: true })).toBe(true);
+  });
+});
+
+describe("planSidebarThreadDrop with a sorted active list", () => {
+  const base = {
+    pinnedOrder: ["p1"],
+    pinnedKeysById: new Map([["p1", "a0"]]),
+    activeOrder: ["t1", "t2"],
+    activeKeysById: new Map([
+      ["t1", "a0"],
+      ["t2", "a1"],
+    ]),
+  };
+
+  it("keeps manual reordering when the list is not sorted", () => {
+    const plan = planSidebarThreadDrop({
+      ...base,
+      activeKey: "t2",
+      activeSection: "active",
+      target: { section: "active", pinnedOrder: ["p1"], activeOrder: ["t2", "t1"] },
+    });
+    expect(plan.kind).toBe("move-active");
+  });
+
+  it("rejects reordering within the sorted active list", () => {
+    const plan = planSidebarThreadDrop({
+      ...base,
+      activeKey: "t2",
+      activeSection: "active",
+      target: { section: "active", pinnedOrder: ["p1"], activeOrder: ["t2", "t1"] },
+      activeSorted: true,
+    });
+    expect(plan).toEqual({ kind: "none" });
+  });
+
+  it("unpins into the sorted active list without writing order keys", () => {
+    const plan = planSidebarThreadDrop({
+      ...base,
+      activeKey: "p1",
+      activeSection: "pinned",
+      target: { section: "active", pinnedOrder: [], activeOrder: ["t1", "p1", "t2"] },
+      activeSorted: true,
+      activeReorderableKeys: new Set(),
+    });
+    expect(plan).toMatchObject({ kind: "move-active", assignments: [], unpin: true });
   });
 });
 

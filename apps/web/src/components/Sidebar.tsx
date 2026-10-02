@@ -56,11 +56,12 @@ import {
   type ThreadId,
 } from "@t3tools/contracts";
 
-import type { TimestampFormat } from "@t3tools/contracts/settings";
+import type { SidebarFlatThreadSortOrder, TimestampFormat } from "@t3tools/contracts/settings";
 import {
   AlarmClockIcon,
   AlarmClockOffIcon,
   ArrowRightLeftIcon,
+  ArrowUpDownIcon,
   CheckIcon,
   CircleAlertIcon,
   CircleCheckIcon,
@@ -135,7 +136,8 @@ import { useHandleNewThread } from "../hooks/useHandleNewThread";
 import { useTerminalFocus } from "../hooks/useTerminalFocus";
 import { isCommandPaletteOpen, openCommandPalette } from "../commandPaletteBus";
 import { startNewThreadFromContext } from "../lib/chatThreadActions";
-import { useClientSettings } from "../hooks/useSettings";
+import { useClientSettings, useUpdateClientSettings } from "../hooks/useSettings";
+import { sortThreads } from "../lib/threadSort";
 import { useCopyToClipboard } from "../hooks/useCopyToClipboard";
 import { useLocalStorage } from "../hooks/useLocalStorage";
 import { useNowMinute } from "../hooks/useNowMinute";
@@ -259,7 +261,18 @@ import {
 import { SidebarContent, SidebarGroup, useSidebar } from "./ui/sidebar";
 import { SidebarChromeFooter, SidebarChromeHeader } from "./sidebar/SidebarChrome";
 import { SidebarHeaderIconButton, SidebarThreadHeader } from "./sidebar/SidebarThreadHeader";
-import { Menu, MenuItem, MenuPopup, MenuSeparator, MenuShortcut, MenuTrigger } from "./ui/menu";
+import {
+  Menu,
+  MenuGroup,
+  MenuGroupLabel,
+  MenuItem,
+  MenuPopup,
+  MenuRadioGroup,
+  MenuRadioItem,
+  MenuSeparator,
+  MenuShortcut,
+  MenuTrigger,
+} from "./ui/menu";
 import { Tooltip, TooltipPopup, TooltipProvider, TooltipTrigger } from "./ui/tooltip";
 import { MiddleTruncate } from "./ui/middle-truncate";
 import {
@@ -277,6 +290,12 @@ const EMPTY_PROVIDER_ENTRIES: ReadonlyMap<string, ProviderInstanceEntry> = new M
 // Collapsed shelves share one empty list so a route change alone does not
 // give the sidebar list a new identity.
 const EMPTY_THREADS: readonly EnvironmentThreadShell[] = [];
+
+const SIDEBAR_FLAT_THREAD_SORT_LABELS: Record<SidebarFlatThreadSortOrder, string> = {
+  manual: "Manual",
+  updated_at: "Last user message",
+  created_at: "Created at",
+};
 
 const SETTLED_TAIL_INITIAL_COUNT = 10;
 const SETTLED_TAIL_PAGE_COUNT = 25;
@@ -2252,6 +2271,9 @@ export default function Sidebar() {
   const confirmThreadDelete = useClientSettings((s) => s.confirmThreadDelete);
   const confirmThreadArchive = useClientSettings((s) => s.confirmThreadArchive);
   const sidebarProjectSortOrder = useClientSettings((s) => s.sidebarProjectSortOrder);
+  const threadSortOrder = useClientSettings((s) => s.sidebarFlatThreadSortOrder);
+  const activeSorted = threadSortOrder !== "manual";
+  const updateClientSettings = useUpdateClientSettings();
   const timestampFormat = useClientSettings((s) => s.timestampFormat);
   const projectGroupingSettings = useClientSettings(selectProjectGroupingSettings);
   const {
@@ -2692,7 +2714,10 @@ export default function Sidebar() {
     // sort, or mixed-version fleets would render different pinned orders on
     // web and mobile from the same data.
     const sortedPinned = sortPinnedThreadsForSidebar(pinned);
-    const sortedActive = sortThreadsForSidebar(active);
+    const sortedActive =
+      threadSortOrder === "manual"
+        ? sortThreadsForSidebar(active)
+        : sortThreads(active, threadSortOrder);
     return {
       pinnedThreads:
         optimisticDrop?.section !== "pinned" || optimisticDrop.order === null
@@ -2705,7 +2730,9 @@ export default function Sidebar() {
       draggableThreadKeys: draggable,
       activeReorderableThreadKeys: activeReorderable,
       activeThreads:
-        optimisticDrop?.section !== "active" || optimisticDrop.order === null
+        threadSortOrder !== "manual" ||
+        optimisticDrop?.section !== "active" ||
+        optimisticDrop.order === null
           ? sortedActive
           : orderItemsByPreferredIds({
               items: sortedActive,
@@ -2721,7 +2748,15 @@ export default function Sidebar() {
       settledThreads: sortSettledThreads(settled),
       snoozeNow: preciseNow,
     };
-  }, [nowMinute, optimisticDrop, scopedProjectKeys, serverConfigs, snoozeWakeTick, threads]);
+  }, [
+    nowMinute,
+    optimisticDrop,
+    scopedProjectKeys,
+    serverConfigs,
+    snoozeWakeTick,
+    threadSortOrder,
+    threads,
+  ]);
 
   const threadSearchInputRef = useRef<HTMLInputElement>(null);
   const [threadSearchQuery, setThreadSearchQuery] = useState("");
@@ -3651,6 +3686,7 @@ export default function Sidebar() {
             activeOrder: activeKeys,
             activeKeysById,
             activeReorderableKeys: activeReorderableThreadKeys,
+            activeSorted,
           }).kind !== "none"
         );
       },
@@ -3665,6 +3701,7 @@ export default function Sidebar() {
     serverConfigs,
     activeKeys,
     activeReorderableThreadKeys,
+    activeSorted,
     draggedThreadKey,
     draggedFromSection,
     dragActivationY,
@@ -3699,6 +3736,7 @@ export default function Sidebar() {
         activeOrder: activeKeys,
         activeKeysById,
         activeReorderableKeys: activeReorderableThreadKeys,
+        activeSorted,
       });
       if (plan.kind === "none") return;
       if (plan.kind === "settle" && settlingThreadKeysRef.current.has(activeKey)) return;
@@ -3819,6 +3857,7 @@ export default function Sidebar() {
       serverConfigs,
       activeKeys,
       activeReorderableThreadKeys,
+      activeSorted,
       draggableThreadKeys,
       pinThread,
       pinnedKeys,
@@ -4680,6 +4719,42 @@ export default function Sidebar() {
                     </ComboboxList>
                   </ComboboxPopup>
                 </Combobox>
+              }
+              threadSort={
+                <Menu>
+                  <MenuTrigger
+                    render={
+                      <SidebarHeaderIconButton
+                        label={`Sort threads: ${SIDEBAR_FLAT_THREAD_SORT_LABELS[threadSortOrder]}`}
+                      />
+                    }
+                  >
+                    <ArrowUpDownIcon className="size-4" />
+                  </MenuTrigger>
+                  <MenuPopup align="end" side="bottom">
+                    <MenuGroup>
+                      <MenuGroupLabel>Sort threads</MenuGroupLabel>
+                      <MenuRadioGroup
+                        value={threadSortOrder}
+                        onValueChange={(value) => {
+                          updateClientSettings({
+                            sidebarFlatThreadSortOrder: value as SidebarFlatThreadSortOrder,
+                          });
+                        }}
+                      >
+                        {(
+                          Object.entries(SIDEBAR_FLAT_THREAD_SORT_LABELS) as Array<
+                            [SidebarFlatThreadSortOrder, string]
+                          >
+                        ).map(([value, label]) => (
+                          <MenuRadioItem key={value} value={value}>
+                            {label}
+                          </MenuRadioItem>
+                        ))}
+                      </MenuRadioGroup>
+                    </MenuGroup>
+                  </MenuPopup>
+                </Menu>
               }
               onNewProject={openAddProjectCommandPalette}
               onNewThread={handleNewThreadClick}

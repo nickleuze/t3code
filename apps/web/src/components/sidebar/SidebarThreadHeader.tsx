@@ -6,7 +6,7 @@
  * The scope icon swaps to the project favicon while a project is selected,
  * so the header still names the scope after the row that showed it is gone.
  *
- * The scope picker itself is passed in: its combobox state lives with the rest
+ * The scope picker and thread sort menu are passed in: its combobox state lives with the rest
  * of the sidebar's scope logic. `searchFieldRef` lands on the search field so
  * the picker's popup can anchor to that width rather than to its 28px trigger.
  */
@@ -31,6 +31,8 @@ export interface SidebarThreadHeaderProps {
   hasProjects: boolean;
   /** The project scope combobox, rendered as the first icon of the group. */
   projectScope: ReactNode;
+  /** The thread sort menu, rendered ahead of the group's other icons. */
+  threadSort: ReactNode;
   onNewProject: () => void;
   /** Receives the click so Shift+click can skip the project picker. */
   onNewThread: (event: ReactMouseEvent) => void;
@@ -53,6 +55,7 @@ export function SidebarThreadHeader({
   searchFieldRef,
   hasProjects,
   projectScope,
+  threadSort,
   onNewProject,
   onNewThread,
   newThreadDisabled,
@@ -124,6 +127,7 @@ export function SidebarThreadHeader({
           hover states, and a background well reads far louder on themed
           palettes than on the base light and dark ones. */}
       <div className="flex shrink-0 items-center">
+        {threadSort}
         {hasProjects ? (
           <>
             {projectScope}
