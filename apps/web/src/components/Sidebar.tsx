@@ -204,6 +204,7 @@ import {
   sidebarMarkerId,
   sortPinnedThreadsForSidebar,
   sortSidebarV2ProjectGroups,
+  sortThreadsByLastActivity,
   sortThreadsForSidebar,
   useThreadJumpHintVisibility,
   useRetainedValue,
@@ -293,6 +294,7 @@ const EMPTY_THREADS: readonly EnvironmentThreadShell[] = [];
 
 const SIDEBAR_FLAT_THREAD_SORT_LABELS: Record<SidebarFlatThreadSortOrder, string> = {
   manual: "Manual",
+  last_activity: "Last activity",
   updated_at: "Last user message",
   created_at: "Created at",
 };
@@ -2717,7 +2719,9 @@ export default function Sidebar() {
     const sortedActive =
       threadSortOrder === "manual"
         ? sortThreadsForSidebar(active)
-        : sortThreads(active, threadSortOrder);
+        : threadSortOrder === "last_activity"
+          ? sortThreadsByLastActivity(active)
+          : sortThreads(active, threadSortOrder);
     return {
       pinnedThreads:
         optimisticDrop?.section !== "pinned" || optimisticDrop.order === null

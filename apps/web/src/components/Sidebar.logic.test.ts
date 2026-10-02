@@ -19,6 +19,7 @@ import {
   getSidebarForkParentThreadId,
   getSidebarThreadIdsToPrewarm,
   planSidebarThreadDrop,
+  sortThreadsByLastActivity,
   hasUnseenCompletion,
   isContextMenuPointerDown,
   isSidebarSubagentThread,
@@ -122,6 +123,45 @@ describe("animateSidebarLayoutChanges", () => {
 
   it("keeps layout movement while the user is sorting", () => {
     expect(animateSidebarLayoutChanges({ ...baseArgs, isSorting: true })).toBe(true);
+  });
+});
+
+describe("sortThreadsByLastActivity", () => {
+  const thread = (
+    id: string,
+    latestUserMessageAt: string | null,
+    completedAt: string | null,
+    updatedAt = "2026-01-01T00:00:00.000Z",
+  ) => ({
+    id,
+    createdAt: "2026-01-01T00:00:00.000Z",
+    updatedAt,
+    latestUserMessageAt,
+    latestRun: completedAt === null ? null : { completedAt },
+  });
+
+  it("surfaces a thread whose agent finished after newer user messages elsewhere", () => {
+    const sorted = sortThreadsByLastActivity([
+      thread("a", "2026-01-03T00:00:00.000Z", null),
+      thread("b", "2026-01-02T00:00:00.000Z", "2026-01-04T00:00:00.000Z"),
+    ]);
+    expect(sorted.map(({ id }) => id)).toEqual(["b", "a"]);
+  });
+
+  it("uses the user message when it is newer than the last run", () => {
+    const sorted = sortThreadsByLastActivity([
+      thread("a", "2026-01-05T00:00:00.000Z", "2026-01-02T00:00:00.000Z"),
+      thread("b", "2026-01-02T00:00:00.000Z", "2026-01-04T00:00:00.000Z"),
+    ]);
+    expect(sorted.map(({ id }) => id)).toEqual(["a", "b"]);
+  });
+
+  it("ignores updatedAt bumps from lifecycle actions", () => {
+    const sorted = sortThreadsByLastActivity([
+      thread("a", "2026-01-03T00:00:00.000Z", null),
+      thread("b", "2026-01-02T00:00:00.000Z", null, "2026-01-09T00:00:00.000Z"),
+    ]);
+    expect(sorted.map(({ id }) => id)).toEqual(["a", "b"]);
   });
 });
 

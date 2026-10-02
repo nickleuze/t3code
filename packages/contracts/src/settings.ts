@@ -60,7 +60,12 @@ export type SidebarThreadSortOrder = typeof SidebarThreadSortOrder.Type;
 const DEFAULT_SIDEBAR_THREAD_SORT_ORDER: SidebarThreadSortOrder = "updated_at";
 
 /** Active-list order in the flat sidebar. "manual" keeps drag-arranged order. */
-export const SidebarFlatThreadSortOrder = Schema.Literals(["manual", "updated_at", "created_at"]);
+export const SidebarFlatThreadSortOrder = Schema.Literals([
+  "manual",
+  "last_activity",
+  "updated_at",
+  "created_at",
+]);
 export type SidebarFlatThreadSortOrder = typeof SidebarFlatThreadSortOrder.Type;
 const DEFAULT_SIDEBAR_FLAT_THREAD_SORT_ORDER: SidebarFlatThreadSortOrder = "manual";
 
