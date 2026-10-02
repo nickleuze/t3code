@@ -115,24 +115,24 @@ export function responsePayloads(response: Response): Stream.Stream<unknown, Acp
   );
 }
 
-export interface AcpMcpToolCallOptions {
+export interface T3McpHttpSessionOptions {
   readonly endpoint: string;
   readonly authorization: string;
-  readonly tool: string;
-  readonly arguments: Readonly<Record<string, unknown>>;
   readonly fetchImplementation?: (url: string, init?: RequestInit) => Promise<Response>;
 }
 
-/**
- * Call one MCP tool through a fresh authenticated HTTP session.
- *
- * This is the terminal fallback for ACP agents that accept `mcpServers` in
- * `session/new` but fail to expose those tools to their model. Compliant ACP
- * agents continue to use the stdio bridge above.
- */
-export function callAcpMcpTool(
-  options: AcpMcpToolCallOptions,
-): Effect.Effect<unknown, AcpMcpBridgeError> {
+export interface T3McpHttpSession {
+  /** Sends one JSON-RPC request and returns its result, failing on a JSON-RPC error. */
+  readonly request: (
+    method: string,
+    params: Readonly<Record<string, unknown>>,
+  ) => Effect.Effect<unknown, AcpMcpBridgeError>;
+}
+
+/** Opens an initialized, authenticated session on T3's streamable-HTTP MCP endpoint. */
+export function openT3McpHttpSession(
+  options: T3McpHttpSessionOptions,
+): Effect.Effect<T3McpHttpSession, AcpMcpBridgeError> {
   const fetchImplementation = options.fetchImplementation ?? fetch;
   return Effect.gen(function* () {
     // The bridge is single-fibered at creation time; concurrent sends only
@@ -190,24 +190,45 @@ export function callAcpMcpTool(
     }
     yield* send({ jsonrpc: "2.0", method: "notifications/initialized" });
 
-    const callId = "t3-acp-cli-tool-call";
-    const responses = yield* send({
-      jsonrpc: "2.0",
-      id: callId,
-      method: "tools/call",
-      params: { name: options.tool, arguments: options.arguments },
-    });
-    const response = responses.find((entry) => asEnvelope(entry)?.id === callId);
-    const envelope = asEnvelope(response);
-    if (envelope === null || envelope.error !== undefined) {
-      return yield* Effect.fail(
-        new AcpMcpBridgeError(
-          `T3 Code MCP tool call failed${envelope?.error === undefined ? "." : `: ${JSON.stringify(envelope.error)}`}`,
-        ),
-      );
-    }
-    return envelope.result;
+    let nextId = 0;
+    const request: T3McpHttpSession["request"] = (method, params) =>
+      Effect.gen(function* () {
+        const id = `t3-mcp-request-${++nextId}`;
+        const responses = yield* send({ jsonrpc: "2.0", id, method, params });
+        const envelope = asEnvelope(responses.find((entry) => asEnvelope(entry)?.id === id));
+        if (envelope === null || envelope.error !== undefined) {
+          return yield* Effect.fail(
+            new AcpMcpBridgeError(
+              `T3 Code MCP ${method} failed${envelope?.error === undefined ? "." : `: ${JSON.stringify(envelope.error)}`}`,
+            ),
+          );
+        }
+        return envelope.result;
+      });
+    return { request };
   });
+}
+
+export interface AcpMcpToolCallOptions extends T3McpHttpSessionOptions {
+  readonly tool: string;
+  readonly arguments: Readonly<Record<string, unknown>>;
+}
+
+/**
+ * Call one MCP tool through a fresh authenticated HTTP session.
+ *
+ * This is the terminal fallback for ACP agents that accept `mcpServers` in
+ * `session/new` but fail to expose those tools to their model. Compliant ACP
+ * agents continue to use the stdio bridge above.
+ */
+export function callAcpMcpTool(
+  options: AcpMcpToolCallOptions,
+): Effect.Effect<unknown, AcpMcpBridgeError> {
+  return openT3McpHttpSession(options).pipe(
+    Effect.flatMap((session) =>
+      session.request("tools/call", { name: options.tool, arguments: options.arguments }),
+    ),
+  );
 }
 
 export function runAcpMcpStdioBridge(options: AcpMcpStdioBridgeOptions): Effect.Effect<void> {

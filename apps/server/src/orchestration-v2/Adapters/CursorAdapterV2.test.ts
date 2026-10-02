@@ -820,6 +820,17 @@ describe("CursorAdapterV2", () => {
       const logged = JSON.stringify(loggedCursorAgentOptions(options));
       assert.notInclude(logged, "secret-cursor-api-key");
       assert.notInclude(logged, "secret-cursor-mcp-token");
+
+      // Custom tools replace the MCP server, which sandboxed runs would refuse.
+      const customTools = { orchestrator_capabilities: { execute: () => "{}" } };
+      const withCustomTools = makeCursorAgentOptions({
+        modelSelection: { instanceId: ProviderInstanceId.make("cursor"), model: "composer-2.5" },
+        runtimePolicy: { runtimeMode: "auto", interactionMode: "default", cwd: "/workspace" },
+        threadId,
+        customTools,
+      });
+      assert.isUndefined(withCustomTools.mcpServers);
+      assert.strictEqual(withCustomTools.local?.customTools, customTools);
     } finally {
       McpProviderSession.clearMcpProviderSession(threadId);
     }

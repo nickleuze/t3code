@@ -46,8 +46,12 @@ The public SDK does not currently expose native agent fork, conversation rollbac
 or interactive approval callbacks. Direct active steering is advertised as unsupported, while V2
 steering uses the orchestrator's interrupt-and-restart path and preserves the app run identity across
 provider turns. Same-provider Cursor forks use the orchestrator's portable full-thread context
-handoff into a fresh Cursor agent. The SDK has in-process custom callback tools, but the V2 adapter
-intentionally uses the authenticated, thread-scoped MCP server instead.
+handoff into a fresh Cursor agent.
+
+The local SDK refuses MCP server calls whenever its sandbox or Auto-review is on, which is every
+runtime mode except full access. T3 Code tools therefore reach Cursor as SDK custom tools that
+forward to the authenticated, thread-scoped T3 MCP server, so they work in every runtime mode. If the
+tool list cannot be read when the agent starts, the adapter falls back to the MCP server config.
 
 The local SDK refuses Cursor's own question tool. Cursor asks through T3 Code's question panel
 instead. The question does not pause the turn: your answer becomes a new message, sent after Cursor

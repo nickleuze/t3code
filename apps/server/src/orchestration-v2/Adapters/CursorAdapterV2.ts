@@ -4,6 +4,7 @@ import type {
   InteractionUpdate,
   McpServerConfig,
   RunResult,
+  SDKCustomTool,
   SDKUserMessage,
   SettingSource,
   ToolCall,
@@ -56,6 +57,11 @@ import { mergeProviderInstanceEnvironment } from "../../provider/ProviderInstanc
 import { t3OrchestrationPromptForFirstRun } from "../../provider/T3OrchestrationInstructions.ts";
 import { buildRuntimeInstructions } from "../../provider/RuntimeInstructions.ts";
 import * as IdAllocator from "../IdAllocator.ts";
+import {
+  CURSOR_CUSTOM_TOOLS_PROVIDER,
+  listT3McpTools,
+  makeCursorT3CustomTools,
+} from "./CursorT3Tools.ts";
 import { makeProviderFailure } from "../ProviderFailure.ts";
 import { turnScopedSelectionTransition } from "../ProviderSelectionTransition.ts";
 import {
@@ -301,14 +307,44 @@ const CURSOR_AGENT_SETTING_SOURCES = [
   "plugins",
 ] as const satisfies ReadonlyArray<SettingSource>;
 
+/** The thread's T3 MCP endpoint and credential, read fresh for every tool call. */
+function cursorT3McpConnection(threadId: ThreadId) {
+  const session = McpProviderSession.readMcpProviderSession(threadId);
+  return session === undefined
+    ? undefined
+    : { endpoint: session.endpoint, authorization: session.authorizationHeader };
+}
+
+/**
+ * T3's tools as SDK custom tools, or undefined to fall back to the MCP server
+ * config. Sandboxed and Auto-review runs refuse MCP server calls, so custom
+ * tools are what make T3 tools usable outside full access.
+ */
+const cursorT3CustomTools = (threadId: ThreadId) =>
+  Effect.gen(function* () {
+    const connection = cursorT3McpConnection(threadId);
+    if (connection === undefined) return undefined;
+    const tools = yield* listT3McpTools(connection);
+    return makeCursorT3CustomTools(tools, () => cursorT3McpConnection(threadId));
+  }).pipe(
+    Effect.catch((error) =>
+      Effect.logWarning("orchestration-v2.cursor-t3-tools-unavailable", {
+        threadId,
+        detail: error.message,
+      }).pipe(Effect.as(undefined)),
+    ),
+  );
+
 export function makeCursorAgentOptions(input: {
   readonly apiKey?: string;
   readonly modelSelection: ModelSelection;
   readonly runtimePolicy: ProviderAdapter.ProviderAdapterV2RuntimePolicy;
   readonly threadId: ThreadId;
+  /** Replaces the T3 MCP server config when present. */
+  readonly customTools?: Record<string, SDKCustomTool>;
 }): AgentOptions {
   const policy = cursorRuntimeAgentPolicy(input.runtimePolicy);
-  const mcpServers = cursorMcpServers(input.threadId);
+  const mcpServers = input.customTools === undefined ? cursorMcpServers(input.threadId) : undefined;
   return {
     model: cursorSdkModelSelection(input.modelSelection),
     name: `T3 Code ${input.threadId}`,
@@ -322,6 +358,7 @@ export function makeCursorAgentOptions(input: {
         enabled: policy.sandboxEnabled,
       },
       enableAgentRetries: true,
+      ...(input.customTools === undefined ? {} : { customTools: input.customTools }),
     },
     ...(mcpServers === undefined ? {} : { mcpServers }),
   };
@@ -388,7 +425,11 @@ function cursorToolName(toolCall: ToolCall): string {
   if (toolCall.type !== "mcp") {
     return toolCall.type;
   }
-  const provider = toolCall.args.providerIdentifier ?? "mcp";
+  // T3's tools reach Cursor as SDK custom tools; keep their T3 identity.
+  const provider =
+    toolCall.args.providerIdentifier === CURSOR_CUSTOM_TOOLS_PROVIDER
+      ? "t3-code"
+      : (toolCall.args.providerIdentifier ?? "mcp");
   const tool = toolCall.args.toolName ?? "unknown";
   return `mcp__${provider}__${tool}`;
 }
@@ -838,6 +879,8 @@ interface ActiveCursorTurn {
 interface CursorLiveAgent {
   readonly nativeThreadId: string;
   readonly session: CursorAgentSdk.CursorAgentSdkSession;
+  /** True when T3 tools were registered as custom tools instead of an MCP server. */
+  readonly hasT3CustomTools: boolean;
 }
 
 export interface CursorAdapterV2Options {
@@ -2062,6 +2105,7 @@ export function makeCursorAdapterV2(
             yield* existing.session.close.pipe(Effect.ignore);
             yield* Ref.set(liveAgent, null);
           }
+          const customTools = yield* cursorT3CustomTools(openInput.threadId);
           const sdkSession = yield* runner.open({
             operation: openInput.operation,
             ...(openInput.agentId === undefined ? {} : { agentId: openInput.agentId }),
@@ -2070,6 +2114,7 @@ export function makeCursorAdapterV2(
               modelSelection: openInput.modelSelection,
               runtimePolicy: openInput.runtimePolicy,
               threadId: openInput.threadId,
+              ...(customTools === undefined ? {} : { customTools }),
             }),
             threadId: openInput.threadId,
             providerSessionId: input.providerSessionId,
@@ -2077,6 +2122,7 @@ export function makeCursorAdapterV2(
           const next = {
             nativeThreadId: sdkSession.agentId,
             session: sdkSession,
+            hasT3CustomTools: customTools !== undefined,
           } satisfies CursorLiveAgent;
           yield* Ref.set(liveAgent, next);
           return next;
@@ -2182,7 +2228,9 @@ export function makeCursorAdapterV2(
               runtimePolicy: turnInput.runtimePolicy,
             });
             const message = yield* resolveUserMessage(turnInput);
-            const mcpServers = cursorMcpServers(turnInput.threadId);
+            const mcpServers = agent.hasT3CustomTools
+              ? undefined
+              : cursorMcpServers(turnInput.threadId);
             const pendingUpdates: Array<InteractionUpdate> = [];
             let context: ActiveCursorTurn | null = null;
             const sdkRun = yield* agent.session.send({

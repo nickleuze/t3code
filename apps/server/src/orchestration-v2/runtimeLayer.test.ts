@@ -15,6 +15,7 @@ import {
   RuntimeRequestId,
   TurnItemId,
   type ModelSelection,
+  type OrchestrationV2ProviderCapabilities,
   type OrchestrationV2Run,
   ProjectId,
   ProviderDriverKind,
@@ -1196,7 +1197,7 @@ it.layer(TestLayer)("OrchestrationV2LayerLive", (it) => {
             },
           ],
         });
-        let capabilities = CodexProviderCapabilitiesV2;
+        let capabilities: OrchestrationV2ProviderCapabilities = CodexProviderCapabilitiesV2;
         const sessionSpy = vi.spyOn(sessions, "get").mockImplementation(() =>
           Effect.succeed(
             Option.some({
