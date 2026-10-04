@@ -3,6 +3,7 @@ import * as Clock from "effect/Clock";
 import * as Random from "effect/Random";
 import * as Semaphore from "effect/Semaphore";
 import * as StorageCleanup from "./storageCleanup.ts";
+import * as GoalLoopWorker from "./orchestration-v2/GoalLoopWorker.ts";
 import * as PullRequestSyncReactor from "./orchestration-v2/PullRequestSyncReactor.ts";
 // @effect-diagnostics nodeBuiltinImport:off
 import * as NodeHttp from "node:http";
@@ -520,6 +521,10 @@ const RuntimeCoreDependenciesBaseLive = Layer.mergeAll(
     Layer.provideMerge(PullRequestSyncReactor.layer),
     Layer.provide(PullRequestServiceLive),
     Layer.provide(ProjectionStoreV2.layer),
+  ),
+  GoalLoopWorker.workerLive.pipe(
+    Layer.provide(ProjectionStoreV2.layer),
+    Layer.provide(ProcessRunner.layer),
   ),
   // Subscribes to `account.rate-limits.updated` so usage bars track live
   // telemetry instead of waiting for the next status probe.

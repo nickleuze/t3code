@@ -3,18 +3,24 @@ import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, it } from "@effect/vitest";
 import {
   CommandId,
+  EventId,
   type ModelSelection,
+  type ServerProvider,
   ProjectId,
   ProviderDriverKind,
   ProviderInstanceId,
   ThreadId,
 } from "@t3tools/contracts";
+import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Stream from "effect/Stream";
+import * as ChildProcessSpawner from "effect/unstable/process/ChildProcessSpawner";
 
 import * as CheckpointStore from "../checkpointing/CheckpointStore.ts";
 import * as ServerConfig from "../config.ts";
+import * as ProcessRunner from "../processRunner.ts";
+import * as ProviderRegistry from "../provider/Services/ProviderRegistry.ts";
 import * as McpSessionRegistryTestkit from "../mcp/McpSessionRegistry.testkit.ts";
 import { SqlitePersistenceMemory } from "../persistence/Layers/Sqlite.ts";
 import * as ProjectEnrichmentService from "../project/ProjectEnrichmentService.ts";
@@ -26,8 +32,12 @@ import * as VcsDriverRegistry from "../vcs/VcsDriverRegistry.ts";
 import * as VcsProcess from "../vcs/VcsProcess.ts";
 import * as WorkspacePaths from "../workspace/WorkspacePaths.ts";
 import { CodexProviderCapabilitiesV2 } from "./Adapters/CodexAdapterV2.ts";
+import * as EventSink from "./EventSink.ts";
 import * as EventStore from "./EventStore.ts";
+import * as GoalLoopWorker from "./GoalLoopWorker.ts";
 import * as Orchestrator from "./Orchestrator.ts";
+import * as ProjectionStore from "./ProjectionStore.ts";
+import * as ProjectStore from "./ProjectStore.ts";
 import type { ProviderAdapterV2Shape } from "./ProviderAdapter.ts";
 import {
   OrchestrationV2EventSinkLayerLive,
@@ -44,7 +54,7 @@ const PlatformTestLayer = Layer.merge(
 );
 
 const ServerConfigLayer = ServerConfig.layerTest(process.cwd(), {
-  prefix: "t3-orchestration-v2-goal-commands-",
+  prefix: "t3-orchestration-v2-goal-loop-",
 });
 
 const modelSelection = {
@@ -74,6 +84,8 @@ const TestLayer = Layer.mergeAll(
   OrchestrationV2LayerLive,
   OrchestrationV2EventSinkLayerLive,
   EventStore.layer,
+  ProjectionStore.layer,
+  ProjectStore.layer,
 ).pipe(
   Layer.provideMerge(ProjectServiceLayerLive),
   Layer.provide(
@@ -126,7 +138,10 @@ const TestLayer = Layer.mergeAll(
   Layer.provide(PlatformTestLayer),
 );
 
-const setup = Effect.fn("GoalCommandsTest.setup")(function* (name: string) {
+const setup = Effect.fn("GoalLoopTest.setup")(function* (
+  name: string,
+  goal: { readonly checkCommand?: string; readonly noProgressLimit?: number } = {},
+) {
   const projects = yield* ProjectService.ProjectService;
   const orchestrator = yield* Orchestrator.OrchestratorV2;
   const projectId = ProjectId.make(`project:${name}`);
@@ -157,6 +172,7 @@ const setup = Effect.fn("GoalCommandsTest.setup")(function* (name: string) {
     commandId: goalId,
     threadId,
     objective: "Make every test pass",
+    ...goal,
   });
   return { orchestrator, threadId, goalId };
 });
@@ -282,5 +298,195 @@ it.layer(TestLayer)("goal commands", (it) => {
         /Stale iteration number/,
       );
     }),
+  );
+});
+
+const checkResults: Array<{ readonly code: number; readonly stdout: string }> = [];
+let usageWindows: ServerProvider["usageLimits"] = undefined;
+
+const WorkerDependencies = Layer.mergeAll(
+  Layer.mock(ProviderRegistry.ProviderRegistry)({
+    getProviders: Effect.sync(() => [
+      { instanceId: modelSelection.instanceId, usageLimits: usageWindows } as ServerProvider,
+    ]),
+  }),
+  Layer.mock(ProcessRunner.ProcessRunner)({
+    run: () =>
+      Effect.sync(() => {
+        const result = checkResults.shift() ?? { code: 0, stdout: "" };
+        return {
+          stdout: result.stdout,
+          stderr: "",
+          code: ChildProcessSpawner.ExitCode(result.code),
+          timedOut: false,
+          stdoutTruncated: false,
+          stderrTruncated: false,
+          stdoutInvalidUtf8: false,
+          stderrInvalidUtf8: false,
+        };
+      }),
+  }),
+  Layer.mock(VcsDriverRegistry.VcsDriverRegistry)({ detect: () => Effect.succeed(null) }),
+);
+
+const goalLoop = GoalLoopWorker.make.pipe(Effect.provide(WorkerDependencies));
+
+const readGoal = (threadId: ThreadId) =>
+  Orchestrator.OrchestratorV2.pipe(
+    Effect.flatMap((orchestrator) => orchestrator.getThreadRecords(threadId, ["runs"])),
+    Effect.map((records) => records.thread.goal!),
+  );
+
+/** Marks the current iteration's only child run completed. */
+const completeChildRun = Effect.fn("GoalLoopTest.completeChildRun")(function* (
+  childThreadId: ThreadId,
+) {
+  const orchestrator = yield* Orchestrator.OrchestratorV2;
+  const sink = yield* EventSink.EventSinkV2;
+  const now = yield* DateTime.now;
+  const run = (yield* orchestrator.getThreadRecords(childThreadId, ["runs"])).runs[0]!;
+  yield* sink.write({
+    events: [
+      {
+        id: EventId.make(`event:${run.id}:completed`),
+        type: "run.updated",
+        threadId: childThreadId,
+        runId: run.id,
+        occurredAt: now,
+        payload: { ...run, status: "completed", startedAt: run.startedAt ?? now, completedAt: now },
+      },
+    ],
+  });
+});
+
+const reportFromChild = (
+  threadId: ThreadId,
+  goalId: CommandId,
+  report:
+    | { readonly type: "note"; readonly text: string }
+    | {
+        readonly type: "claim";
+        readonly status: "complete" | "blocked";
+        readonly summary: string;
+      },
+) =>
+  Effect.gen(function* () {
+    const orchestrator = yield* Orchestrator.OrchestratorV2;
+    const goal = yield* readGoal(threadId);
+    yield* orchestrator.dispatch({
+      type: "thread.goal.report",
+      commandId: CommandId.make(`command:report:${goal.iteration}:${report.type}`),
+      threadId,
+      goalId,
+      iteration: goal.iteration,
+      childThreadId: goal.current!.childThreadId,
+      report,
+    });
+  });
+
+it.layer(TestLayer)("goal loop worker", (it) => {
+  it.effect("runs iterations until the agent claims completion", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const { orchestrator, threadId, goalId } = yield* setup("loop-basic");
+        const loop = yield* goalLoop;
+
+        yield* loop.sweep();
+        const first = yield* readGoal(threadId);
+        assert.strictEqual(first.iteration, 1);
+        const firstChild = first.current!.childThreadId;
+        // A second sweep while the child works starts nothing new.
+        yield* loop.sweep();
+        assert.strictEqual((yield* readGoal(threadId)).iteration, 1);
+
+        yield* reportFromChild(threadId, goalId, { type: "note", text: "Fixed the parser" });
+        yield* completeChildRun(firstChild);
+        yield* loop.sweep();
+        const afterFirst = yield* readGoal(threadId);
+        assert.isNull(afterFirst.current);
+        assert.deepInclude(afterFirst.history[0], { iteration: 1, outcome: "continued" });
+        const settledChild = yield* orchestrator.getThreadShell(firstChild);
+        assert.strictEqual(settledChild?.settledOverride, "settled");
+
+        yield* loop.sweep();
+        const second = yield* readGoal(threadId);
+        assert.strictEqual(second.iteration, 2);
+        const secondChild = yield* orchestrator.getThreadRecords(second.current!.childThreadId, [
+          "messages",
+        ]);
+        assert.include(secondChild.messages[0]?.text, "[iteration 1] Fixed the parser");
+
+        yield* reportFromChild(threadId, goalId, {
+          type: "claim",
+          status: "complete",
+          summary: "Every test passes",
+        });
+        yield* completeChildRun(second.current!.childThreadId);
+        yield* loop.sweep();
+        assert.deepInclude(yield* readGoal(threadId), {
+          status: "complete",
+          completedSummary: "Every test passes",
+        });
+      }),
+    ),
+  );
+
+  it.effect("keeps going when the completion check fails", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const { threadId, goalId } = yield* setup("loop-check", { checkCommand: "pnpm test" });
+        const loop = yield* goalLoop;
+        checkResults.push({ code: 1, stdout: "2 failing" });
+
+        yield* loop.sweep();
+        yield* reportFromChild(threadId, goalId, {
+          type: "claim",
+          status: "complete",
+          summary: "Done",
+        });
+        yield* completeChildRun((yield* readGoal(threadId)).current!.childThreadId);
+        yield* loop.sweep();
+        assert.strictEqual((yield* readGoal(threadId)).current?.phase, "checking");
+
+        yield* loop.sweep();
+        yield* loop.awaitChecks;
+        const afterCheck = yield* readGoal(threadId);
+        assert.deepInclude(afterCheck, { status: "active", current: null });
+        assert.deepInclude(afterCheck.lastCheck, { passed: false, exitCode: 1 });
+
+        yield* loop.sweep();
+        const retry = yield* readGoal(threadId);
+        const retryChild = yield* Orchestrator.OrchestratorV2.pipe(
+          Effect.flatMap((orchestrator) =>
+            orchestrator.getThreadRecords(retry.current!.childThreadId, ["messages"]),
+          ),
+        );
+        assert.include(retryChild.messages[0]?.text, "2 failing");
+      }),
+    ),
+  );
+
+  it.effect("pauses when provider usage climbs faster than the burn guard allows", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const { threadId } = yield* setup("loop-burn");
+        const loop = yield* goalLoop;
+        const window = (usedPercent: number) => ({
+          checkedAt: "2026-10-04T12:00:00.000Z",
+          windows: [{ id: "session", kind: "session" as const, label: "5h", usedPercent }],
+        });
+
+        usageWindows = window(10);
+        yield* loop.sweep();
+        yield* loop.sweep();
+        usageWindows = window(45);
+        yield* loop.sweep();
+        assert.deepInclude(yield* readGoal(threadId), {
+          status: "paused",
+          statusReason: "burn_rate",
+        });
+        usageWindows = undefined;
+      }),
+    ),
   );
 });
