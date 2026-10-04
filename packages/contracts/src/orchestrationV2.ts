@@ -353,6 +353,210 @@ export const OrchestrationV2LimitRecoveryUpdate = Schema.Struct({
 );
 export type OrchestrationV2LimitRecoveryUpdate = typeof OrchestrationV2LimitRecoveryUpdate.Type;
 
+/**
+ * Lifecycle of a `/goal` loop. Mirrors the Codex app-server goal vocabulary,
+ * plus `stopped` for a loop the user ended before it finished.
+ */
+export const OrchestrationV2GoalStatus = Schema.Literals([
+  "active",
+  "paused",
+  "blocked",
+  "usageLimited",
+  "complete",
+  "stopped",
+]);
+export type OrchestrationV2GoalStatus = typeof OrchestrationV2GoalStatus.Type;
+
+export const OrchestrationV2GoalStatusReason = Schema.Literals([
+  "user",
+  "agent",
+  "no_progress",
+  "burn_rate",
+  "child_failed",
+  "child_interrupted",
+  "check_error",
+  "safety_cap",
+  "iteration_timeout",
+  "parent_unavailable",
+]);
+export type OrchestrationV2GoalStatusReason = typeof OrchestrationV2GoalStatusReason.Type;
+
+/**
+ * Pause the loop when any subscription usage window of the goal's provider
+ * climbs more than `maxPercentPoints` within the trailing `windowMins`.
+ */
+export const OrchestrationV2GoalBurnGuard = Schema.Struct({
+  maxPercentPoints: Schema.Number.check(Schema.isBetween({ minimum: 1, maximum: 100 })),
+  windowMins: PositiveInt,
+});
+export type OrchestrationV2GoalBurnGuard = typeof OrchestrationV2GoalBurnGuard.Type;
+
+export const OrchestrationV2GoalUsageAccounting = Schema.Literals([
+  "exact",
+  "estimated",
+  "unavailable",
+]);
+export type OrchestrationV2GoalUsageAccounting = typeof OrchestrationV2GoalUsageAccounting.Type;
+
+export const OrchestrationV2GoalProgressNote = Schema.Struct({
+  iteration: PositiveInt,
+  text: TrimmedNonEmptyString,
+  at: IsoDateTime,
+});
+export type OrchestrationV2GoalProgressNote = typeof OrchestrationV2GoalProgressNote.Type;
+
+/** What the iteration agent reported through `t3_goal_complete`. */
+export const OrchestrationV2GoalClaim = Schema.Struct({
+  status: Schema.Literals(["complete", "blocked"]),
+  summary: TrimmedNonEmptyString,
+  at: IsoDateTime,
+});
+export type OrchestrationV2GoalClaim = typeof OrchestrationV2GoalClaim.Type;
+
+/** Same union as `OrchestrationV2RuntimeRequest.kind`, which is declared later. */
+const OrchestrationV2GoalRequestKind = Schema.Union([
+  ProviderRequestKind,
+  Schema.Literals(["dynamic_tool_call", "user_input", "auth_refresh"]),
+]);
+
+export const OrchestrationV2GoalCurrentIteration = Schema.Struct({
+  iteration: PositiveInt,
+  childThreadId: ThreadId,
+  startedAt: IsoDateTime,
+  phase: Schema.Literals(["running", "checking"]),
+  /** Workspace checkpoint captured before the child started; null outside a VCS. */
+  baselineRef: Schema.NullOr(CheckpointRef),
+  notesThisIteration: NonNegativeInt,
+  claim: Schema.NullOr(OrchestrationV2GoalClaim),
+  /** The child is blocked on an approval or question the user must answer. */
+  waitingOnRequest: Schema.NullOr(
+    Schema.Struct({ requestId: RuntimeRequestId, kind: OrchestrationV2GoalRequestKind }),
+  ),
+  /** The child's results, held while the check command runs. */
+  finished: Schema.NullOr(
+    Schema.Struct({
+      tokens: NonNegativeInt,
+      workspaceChanged: Schema.NullOr(Schema.Boolean),
+    }),
+  ),
+});
+export type OrchestrationV2GoalCurrentIteration = typeof OrchestrationV2GoalCurrentIteration.Type;
+
+export const OrchestrationV2GoalCheckResult = Schema.Struct({
+  iteration: PositiveInt,
+  command: TrimmedNonEmptyString,
+  exitCode: Schema.NullOr(Schema.Int),
+  timedOut: Schema.Boolean,
+  passed: Schema.Boolean,
+  /** Last few KB of combined output, fed into the next iteration on failure. */
+  outputTail: Schema.String,
+  at: IsoDateTime,
+});
+export type OrchestrationV2GoalCheckResult = typeof OrchestrationV2GoalCheckResult.Type;
+
+export const OrchestrationV2GoalIterationOutcome = Schema.Literals([
+  "continued",
+  "claimed_complete",
+  "check_failed",
+  "blocked",
+  "failed",
+  "interrupted",
+  "usage_limited",
+]);
+export type OrchestrationV2GoalIterationOutcome = typeof OrchestrationV2GoalIterationOutcome.Type;
+
+export const OrchestrationV2GoalIterationRecord = Schema.Struct({
+  iteration: PositiveInt,
+  childThreadId: ThreadId,
+  outcome: OrchestrationV2GoalIterationOutcome,
+  tokens: NonNegativeInt,
+  workspaceChanged: Schema.NullOr(Schema.Boolean),
+  finishedAt: IsoDateTime,
+});
+export type OrchestrationV2GoalIterationRecord = typeof OrchestrationV2GoalIterationRecord.Type;
+
+/**
+ * A long-horizon goal owned by a thread. Each iteration runs in a fresh
+ * child thread that sees only the objective and accumulated progress; the
+ * server's goal loop starts iterations, checks results, and enforces limits.
+ */
+export const OrchestrationV2ThreadGoal = Schema.Struct({
+  /** Command id of the `thread.goal.set` that created this goal. */
+  id: CommandId,
+  objective: TrimmedNonEmptyString,
+  status: OrchestrationV2GoalStatus,
+  statusReason: Schema.NullOr(OrchestrationV2GoalStatusReason),
+  /** Shell command that must exit 0 before a completion claim is accepted. */
+  checkCommand: Schema.NullOr(TrimmedNonEmptyString),
+  burnGuard: Schema.NullOr(OrchestrationV2GoalBurnGuard),
+  /** Consecutive iterations with no note and no workspace change before pausing. */
+  noProgressLimit: PositiveInt,
+  consecutiveNoProgress: NonNegativeInt,
+  /** Hard ceiling on iterations, independent of the user-facing limits. */
+  safetyCap: PositiveInt,
+  iteration: NonNegativeInt,
+  tokensUsed: NonNegativeInt,
+  usageAccounting: OrchestrationV2GoalUsageAccounting,
+  /** Frozen when the goal is set so later thread changes do not alter iterations. */
+  modelSelection: ModelSelection,
+  runtimeMode: RuntimeMode,
+  progressNotes: Schema.Array(OrchestrationV2GoalProgressNote),
+  current: Schema.NullOr(OrchestrationV2GoalCurrentIteration),
+  lastCheck: Schema.NullOr(OrchestrationV2GoalCheckResult),
+  history: Schema.Array(OrchestrationV2GoalIterationRecord),
+  /** When a usage-limited goal may start its next iteration. */
+  resumeAt: Schema.NullOr(IsoDateTime),
+  completedSummary: Schema.NullOr(Schema.String),
+  createdAt: IsoDateTime,
+  updatedAt: IsoDateTime,
+});
+export type OrchestrationV2ThreadGoal = typeof OrchestrationV2ThreadGoal.Type;
+
+/** The slice of a goal broadcast on every thread shell; keep it small. */
+export const OrchestrationV2ThreadGoalSummary = Schema.Struct({
+  id: CommandId,
+  objective: Schema.String,
+  status: OrchestrationV2GoalStatus,
+  statusReason: Schema.NullOr(OrchestrationV2GoalStatusReason),
+  iteration: NonNegativeInt,
+  tokensUsed: NonNegativeInt,
+  needsInput: Schema.Boolean,
+  currentChildThreadId: Schema.NullOr(ThreadId),
+});
+export type OrchestrationV2ThreadGoalSummary = typeof OrchestrationV2ThreadGoalSummary.Type;
+
+/** Marks a child thread as one iteration of its parent's goal. */
+export const OrchestrationV2GoalIterationMarker = Schema.Struct({
+  parentThreadId: ThreadId,
+  goalId: CommandId,
+  iteration: PositiveInt,
+});
+export type OrchestrationV2GoalIterationMarker = typeof OrchestrationV2GoalIterationMarker.Type;
+
+/** Observations the goal loop records; the server reducer decides what follows. */
+export const OrchestrationV2GoalAdvanceStep = Schema.Union([
+  Schema.Struct({
+    type: Schema.Literal("child_waiting"),
+    requestId: RuntimeRequestId,
+    kind: OrchestrationV2GoalRequestKind,
+  }),
+  Schema.Struct({ type: Schema.Literal("child_resumed") }),
+  Schema.Struct({
+    type: Schema.Literal("iteration_finished"),
+    childOutcome: Schema.Literals(["completed", "failed", "interrupted", "usage_limited"]),
+    tokens: NonNegativeInt,
+    accounting: OrchestrationV2GoalUsageAccounting,
+    workspaceChanged: Schema.NullOr(Schema.Boolean),
+    /** When a usage-limited child's provider resets. */
+    resumeAt: Schema.NullOr(IsoDateTime),
+  }),
+  Schema.Struct({ type: Schema.Literal("check_finished"), result: OrchestrationV2GoalCheckResult }),
+  Schema.Struct({ type: Schema.Literal("paused"), reason: OrchestrationV2GoalStatusReason }),
+  Schema.Struct({ type: Schema.Literal("resumed") }),
+  Schema.Struct({ type: Schema.Literal("stopped"), reason: OrchestrationV2GoalStatusReason }),
+]);
+export type OrchestrationV2GoalAdvanceStep = typeof OrchestrationV2GoalAdvanceStep.Type;
+
 export const OrchestrationV2AppThread = Schema.Struct({
   ...OrchestrationV2CreationFields,
   id: ThreadId,
@@ -397,6 +601,10 @@ export const OrchestrationV2AppThread = Schema.Struct({
   snoozedUntil: Schema.optional(Schema.NullOr(Schema.DateTimeUtc)),
   snoozedAt: Schema.optional(Schema.NullOr(Schema.DateTimeUtc)),
   limitRecovery: Schema.optional(Schema.NullOr(OrchestrationV2LimitRecovery)),
+  /** Long-horizon `/goal` loop owned by this thread; optional for older payloads. */
+  goal: Schema.optional(Schema.NullOr(OrchestrationV2ThreadGoal)),
+  /** Set on child threads that run one iteration of a parent's goal. */
+  goalIteration: Schema.optional(Schema.NullOr(OrchestrationV2GoalIterationMarker)),
   pinnedAt: Schema.optional(Schema.NullOr(Schema.DateTimeUtc)),
   autoSettleDisabledAt: Schema.optional(Schema.NullOr(Schema.DateTimeUtc)),
   // Fractional-index slot in the user-arranged pinned order. Optional so
@@ -1723,6 +1931,9 @@ export const OrchestrationV2ThreadShell = Schema.Struct({
   snoozedUntil: Schema.optional(Schema.NullOr(Schema.DateTimeUtc)),
   snoozedAt: Schema.optional(Schema.NullOr(Schema.DateTimeUtc)),
   limitRecovery: Schema.optional(Schema.NullOr(OrchestrationV2LimitRecovery)),
+  /** Omitted by servers that predate `/goal`. */
+  goal: Schema.optional(Schema.NullOr(OrchestrationV2ThreadGoalSummary)),
+  goalIteration: Schema.optional(Schema.NullOr(OrchestrationV2GoalIterationMarker)),
   /** Omitted by servers that predate thread pinning. */
   pinnedAt: Schema.optional(Schema.NullOr(Schema.DateTimeUtc)),
   autoSettleDisabledAt: Schema.optional(Schema.NullOr(Schema.DateTimeUtc)),
@@ -2619,6 +2830,34 @@ export const OrchestrationV2Command = Schema.Union([
     threadId: ThreadId,
     modelSelection: ModelSelection,
   }),
+  /**
+   * Starts a `/goal` loop on the thread. Rejected while another goal on the
+   * thread is still live; model and runtime mode default to the thread's.
+   */
+  Schema.Struct({
+    type: Schema.Literal("thread.goal.set"),
+    commandId: CommandId,
+    threadId: ThreadId,
+    objective: TrimmedNonEmptyString,
+    checkCommand: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
+    burnGuard: Schema.optional(Schema.NullOr(OrchestrationV2GoalBurnGuard)),
+    noProgressLimit: Schema.optional(PositiveInt),
+    modelSelection: Schema.optional(ModelSelection),
+    runtimeMode: Schema.optional(RuntimeMode),
+  }),
+  /**
+   * `pause` lets the running iteration finish and starts no more; `stop`
+   * interrupts it and ends the goal; `resume` restarts a paused, blocked or
+   * limited goal; `clear` removes a goal that has ended.
+   */
+  Schema.Struct({
+    type: Schema.Literal("thread.goal.control"),
+    commandId: CommandId,
+    threadId: ThreadId,
+    goalId: CommandId,
+    action: Schema.Literals(["pause", "resume", "stop", "clear"]),
+    burnGuard: Schema.optional(Schema.NullOr(OrchestrationV2GoalBurnGuard)),
+  }),
   Schema.Struct({
     type: Schema.Literal("provider-session.detach"),
     commandId: CommandId,
@@ -2856,6 +3095,45 @@ const OrchestrationV2InternalCommand = Schema.Union([
     runId: RunId,
     requestId: RuntimeRequestId,
     questions: Schema.Array(OrchestrationV2UserInputQuestion),
+  }),
+  /**
+   * Creates the child thread for goal iteration `iteration` and starts its
+   * first run. Rejected unless the goal is active with no iteration running.
+   */
+  Schema.Struct({
+    type: Schema.Literal("thread.goal.iteration.start"),
+    commandId: CommandId,
+    threadId: ThreadId,
+    goalId: CommandId,
+    iteration: PositiveInt,
+    baselineRef: Schema.NullOr(CheckpointRef),
+    prompt: TrimmedNonEmptyString,
+  }),
+  /** A progress note or completion claim from the iteration's child agent. */
+  Schema.Struct({
+    type: Schema.Literal("thread.goal.report"),
+    commandId: CommandId,
+    threadId: ThreadId,
+    goalId: CommandId,
+    iteration: PositiveInt,
+    childThreadId: ThreadId,
+    report: Schema.Union([
+      Schema.Struct({ type: Schema.Literal("note"), text: TrimmedNonEmptyString }),
+      Schema.Struct({
+        type: Schema.Literal("claim"),
+        status: OrchestrationV2GoalClaim.fields.status,
+        summary: TrimmedNonEmptyString,
+      }),
+    ]),
+  }),
+  /** Goal loop bookkeeping; every step is validated against `iteration`. */
+  Schema.Struct({
+    type: Schema.Literal("thread.goal.advance"),
+    commandId: CommandId,
+    threadId: ThreadId,
+    goalId: CommandId,
+    iteration: NonNegativeInt,
+    step: OrchestrationV2GoalAdvanceStep,
   }),
 ]);
 export type OrchestrationV2InternalCommand = typeof OrchestrationV2InternalCommand.Type;

@@ -162,6 +162,9 @@ export const ExecutionEnvironmentCapabilities = Schema.Struct({
       shaping and validation when this is absent. */
   serverResolvedCommandContext: Schema.optionalKey(Schema.Boolean),
   threadPullRequests: Schema.optionalKey(Schema.Boolean),
+  /** Server runs `/goal` loops (thread.goal.set / thread.goal.control).
+      Clients hide `/goal` when absent. */
+  threadGoals: Schema.optionalKey(Schema.Boolean),
   pullRequestStackActions: Schema.optionalKey(Schema.Boolean),
   /** The update path clients should offer for this server. Absent on
       servers that must be relaunched manually (dev checkouts, Windows

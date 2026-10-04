@@ -73,6 +73,7 @@ import {
   isThreadHistoryTurnStart,
   THREAD_HISTORY_MAX_RAW_TURNS,
 } from "./threadHistoryPaging.ts";
+import { goalSummary, isLiveGoal } from "./GoalState.ts";
 
 export class ProjectionStoreApplyEventError extends Schema.TaggedError<ProjectionStoreApplyEventError>()(
   "ProjectionStoreApplyEventError",
@@ -350,6 +351,14 @@ export interface ProjectionStoreV2Shape {
    */
   readonly getThreadsWithPullRequests: () => Effect.Effect<
     ReadonlyArray<ProjectionThreadPullRequests>,
+    ProjectionStoreV2Error
+  >;
+  /**
+   * Non-deleted threads whose `/goal` loop needs attention: active or
+   * usage-limited goals, plus any goal with an iteration still in flight.
+   */
+  readonly getGoalThreads: () => Effect.Effect<
+    ReadonlyArray<OrchestrationV2AppThread>,
     ProjectionStoreV2Error
   >;
   readonly getTurnStartContext: (
@@ -1411,6 +1420,8 @@ export function threadShellFromProjection(
     lastVisitedAt: projection.thread.lastVisitedAt,
     titleRegeneration: projection.thread.titleRegeneration ?? null,
     limitRecovery: projection.thread.limitRecovery ?? null,
+    goal: goalSummary(projection.thread.goal),
+    goalIteration: projection.thread.goalIteration ?? null,
     deletedAt: projection.thread.deletedAt,
   };
 }
@@ -1635,6 +1646,8 @@ function shellFromState(input: {
     lastVisitedAt: input.state.thread.lastVisitedAt,
     titleRegeneration: input.state.thread.titleRegeneration ?? null,
     limitRecovery: input.state.thread.limitRecovery ?? null,
+    goal: goalSummary(input.state.thread.goal),
+    goalIteration: input.state.thread.goalIteration ?? null,
     deletedAt: input.state.thread.deletedAt,
   };
 }
@@ -5078,6 +5091,8 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
               AND json_extract(t.payload_json, '$.settledOverride') IS NULL
               AND json_extract(t.payload_json, '$.pinnedAt') IS NULL
               AND json_extract(t.payload_json, '$.autoSettleDisabledAt') IS NULL
+              AND COALESCE(json_extract(t.payload_json, '$.goal.status'), '')
+                NOT IN ('active', 'paused', 'blocked', 'usageLimited')
               AND NOT EXISTS (
                 SELECT 1 FROM orchestration_v2_projection_runs active
                 WHERE active.thread_id = t.thread_id
@@ -5168,6 +5183,21 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
             })),
           ),
         );
+      }).pipe(Effect.mapError((cause) => new ProjectionStoreSetupError({ cause })));
+
+    const getGoalThreads: ProjectionStoreV2Shape["getGoalThreads"] = () =>
+      Effect.gen(function* () {
+        const rows = yield* sql<PayloadRow>`
+          SELECT payload_json
+          FROM orchestration_v2_projection_threads
+          WHERE deleted_at IS NULL
+            AND (
+              json_extract(payload_json, '$.goal.status') IN ('active', 'usageLimited')
+              OR json_type(payload_json, '$.goal.current') = 'object'
+            )
+          ORDER BY updated_at ASC, thread_id ASC
+        `;
+        return yield* Effect.forEach(rows, (row) => decodeThreadPayload(row.payload_json));
       }).pipe(Effect.mapError((cause) => new ProjectionStoreSetupError({ cause })));
 
     const shellThreadStateFromRow = (input: {
@@ -5468,6 +5498,7 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
       getThread,
       getSettlementCandidates,
       getThreadsWithPullRequests,
+      getGoalThreads,
       getThreadProjection,
       getTurnStartContext,
       getTurnStartHistory,
@@ -5587,6 +5618,7 @@ export const layerMemory: Layer.Layer<ProjectionStoreV2> = Layer.effect(
                 thread.settledOverride === null &&
                 thread.pinnedAt == null &&
                 thread.autoSettleDisabledAt == null &&
+                !isLiveGoal(thread.goal) &&
                 !runs.some(isActivityRunForShell) &&
                 !runtimeRequests.some((request) => request.status === "pending"),
             )
@@ -5597,6 +5629,26 @@ export const layerMemory: Layer.Layer<ProjectionStoreV2> = Layer.effect(
                 left.id.localeCompare(right.id),
             );
         }),
+      getGoalThreads: () =>
+        Ref.get(replayState).pipe(
+          Effect.map((state) =>
+            [...state.projections.values()]
+              .map(({ thread }) => thread)
+              .filter(
+                (thread) =>
+                  thread.deletedAt === null &&
+                  thread.goal != null &&
+                  (thread.goal.status === "active" ||
+                    thread.goal.status === "usageLimited" ||
+                    thread.goal.current !== null),
+              )
+              .toSorted(
+                (left, right) =>
+                  DateTime.toEpochMillis(left.updatedAt) -
+                    DateTime.toEpochMillis(right.updatedAt) || left.id.localeCompare(right.id),
+              ),
+          ),
+        ),
       getThreadsWithPullRequests: () =>
         Ref.get(replayState).pipe(
           Effect.map((state) =>

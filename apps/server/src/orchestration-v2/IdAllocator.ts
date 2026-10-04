@@ -134,6 +134,8 @@ export interface IdAllocatorV2DeriveShape {
   readonly delegatedTaskThread: (input: { readonly commandId: CommandId }) => ThreadId;
   readonly delegatedTaskMessage: (input: { readonly commandId: CommandId }) => MessageId;
   readonly delegatedTaskTurnItem: (input: { readonly commandId: CommandId }) => TurnItemId;
+  readonly goalIterationThread: (input: { readonly commandId: CommandId }) => ThreadId;
+  readonly goalIterationMessage: (input: { readonly commandId: CommandId }) => MessageId;
   readonly createdThreadTurnItem: (input: { readonly commandId: CommandId }) => TurnItemId;
   readonly threadFromProviderThread: (input: {
     readonly driver: ProviderDriverKind;
@@ -398,6 +400,10 @@ export const layer: Layer.Layer<IdAllocatorV2> = Layer.succeed(
         MessageId.make(joinId("message", "delegated-task", input.commandId)),
       delegatedTaskTurnItem: (input) =>
         TurnItemId.make(joinId("turn-item", "delegated-task", input.commandId)),
+      goalIterationThread: (input) =>
+        ThreadId.make(joinId("thread", "goal-iteration", input.commandId)),
+      goalIterationMessage: (input) =>
+        MessageId.make(joinId("message", "goal-iteration", input.commandId)),
       createdThreadTurnItem: (input) =>
         TurnItemId.make(joinId("turn-item", "created-thread", input.commandId)),
       threadFromProviderThread: deriveThreadFromProviderThread,

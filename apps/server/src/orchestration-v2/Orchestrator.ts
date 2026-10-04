@@ -16,6 +16,7 @@ import {
   isProviderNativeSubagentThread,
   MessageId,
   type ModelSelection,
+  NodeId,
   OrchestrationV2Command,
   type OrchestrationV2InternalCommand,
   type OrchestrationV2ServerCommand,
@@ -72,6 +73,7 @@ import { isRestartNoteSource } from "./RestartBackgroundNote.ts";
 import { isUndeliveredMailboxSteer } from "./NotificationMailbox.ts";
 import { EventSinkV2 } from "./EventSink.ts";
 import type { OrchestrationEffectRequestV2, PendingOrchestrationEffectV2 } from "./EffectOutbox.ts";
+import { applyGoalCommand, type GoalCommandInput } from "./GoalState.ts";
 import { IdAllocatorV2 } from "./IdAllocator.ts";
 import {
   ThreadCommandExecutor,
@@ -341,6 +343,11 @@ function commandThreadId(command: OrchestrationV2ServerCommand): ThreadId {
     case "thread.runtime-mode.set":
     case "thread.interaction-mode.set":
     case "thread.model-selection.set":
+    case "thread.goal.set":
+    case "thread.goal.control":
+    case "thread.goal.iteration.start":
+    case "thread.goal.report":
+    case "thread.goal.advance":
     case "provider-session.detach":
     case "message.dispatch":
     case "notification.delivery.accept":
@@ -6055,6 +6062,223 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       yield* Ref.update(effects, (existing) => [...existing, pendingEffect]);
     });
 
+  /**
+   * `/goal` bookkeeping: every goal command runs the pure reducer and stores
+   * the result as thread metadata. The thread's own `updatedAt` moves only
+   * when the goal's status changes, so loop chatter does not resort lists.
+   */
+  const dispatchGoalCommand = Effect.fn("orchestrationV2.dispatch.goal")(function* (
+    command: Extract<
+      OrchestrationV2ServerCommand,
+      {
+        readonly type:
+          | "thread.goal.set"
+          | "thread.goal.control"
+          | "thread.goal.report"
+          | "thread.goal.advance";
+      }
+    >,
+    events: Ref.Ref<Array<OrchestrationV2DomainEvent>>,
+  ) {
+    const thread = yield* projectionStore
+      .getThread(command.threadId)
+      .pipe(mapDispatchError(command));
+    const reject = (cause: string) =>
+      new OrchestratorDispatchError({
+        commandId: command.commandId,
+        commandType: command.type,
+        cause,
+      });
+    if (thread.deletedAt !== null) return yield* reject(`Thread ${command.threadId} is deleted.`);
+    const now = yield* DateTime.now;
+    const input: GoalCommandInput = (() => {
+      switch (command.type) {
+        case "thread.goal.set":
+          return {
+            type: "set",
+            commandId: command.commandId,
+            objective: command.objective,
+            checkCommand: command.checkCommand ?? null,
+            burnGuard: command.burnGuard,
+            noProgressLimit: command.noProgressLimit,
+            modelSelection: command.modelSelection ?? thread.modelSelection,
+            runtimeMode: command.runtimeMode ?? thread.runtimeMode,
+          };
+        case "thread.goal.control":
+          return {
+            type: "control",
+            goalId: command.goalId,
+            action: command.action,
+            burnGuard: command.burnGuard,
+          };
+        case "thread.goal.report":
+          return {
+            type: "report",
+            goalId: command.goalId,
+            iteration: command.iteration,
+            childThreadId: command.childThreadId,
+            report: command.report,
+          };
+        case "thread.goal.advance":
+          return {
+            type: "advance",
+            goalId: command.goalId,
+            iteration: command.iteration,
+            step: command.step,
+          };
+      }
+    })();
+    if (input.type === "set") {
+      yield* providerAdapters.get(input.modelSelection.instanceId).pipe(
+        Effect.mapError(
+          (cause) =>
+            new OrchestratorProviderAdapterError({
+              commandId: command.commandId,
+              providerInstanceId: input.modelSelection.instanceId,
+              cause,
+            }),
+        ),
+      );
+    }
+    const result = applyGoalCommand(thread, input, DateTime.formatIso(now));
+    if (!result.ok) return yield* reject(result.reason);
+    const previous = thread.goal ?? null;
+    if (result.goal === previous) return;
+    yield* emit(
+      events,
+      command,
+    )({
+      type: "thread.metadata-updated",
+      threadId: command.threadId,
+      providerInstanceId: thread.providerInstanceId,
+      occurredAt: now,
+      payload: {
+        ...thread,
+        goal: result.goal,
+        updatedAt: result.goal?.status === previous?.status ? thread.updatedAt : now,
+      },
+    });
+  });
+
+  /**
+   * Starts goal iteration `command.iteration` in a fresh child thread. The
+   * child links to the parent through lineage only (`forkedFrom: null`), so
+   * none of the delegated-task completion, wake, or report-back paths touch
+   * the parent agent; the goal loop owns the child's lifecycle instead.
+   */
+  const dispatchGoalIterationStart = Effect.fn("orchestrationV2.dispatch.goalIterationStart")(
+    function* (
+      command: Extract<
+        OrchestrationV2ServerCommand,
+        { readonly type: "thread.goal.iteration.start" }
+      >,
+      events: Ref.Ref<Array<OrchestrationV2DomainEvent>>,
+      effects: Ref.Ref<Array<PendingOrchestrationEffectV2>>,
+    ) {
+      const thread = yield* projectionStore
+        .getThread(command.threadId)
+        .pipe(mapDispatchError(command));
+      const reject = (cause: string) =>
+        new OrchestratorDispatchError({
+          commandId: command.commandId,
+          commandType: command.type,
+          cause,
+        });
+      if (thread.deletedAt !== null) return yield* reject(`Thread ${command.threadId} is deleted.`);
+      const goal = thread.goal;
+      if (goal == null) return yield* reject("The thread has no goal.");
+      const childThreadId = idAllocator.derive.goalIterationThread({
+        commandId: command.commandId,
+      });
+      const now = yield* DateTime.now;
+      const result = applyGoalCommand(
+        thread,
+        {
+          type: "iteration.start",
+          goalId: command.goalId,
+          iteration: command.iteration,
+          childThreadId,
+          baselineRef: command.baselineRef,
+        },
+        DateTime.formatIso(now),
+      );
+      if (!result.ok) return yield* reject(result.reason);
+
+      const targetAdapter = yield* providerAdapters.get(goal.modelSelection.instanceId).pipe(
+        Effect.mapError(
+          (cause) =>
+            new OrchestratorProviderAdapterError({
+              commandId: command.commandId,
+              providerInstanceId: goal.modelSelection.instanceId,
+              cause,
+            }),
+        ),
+      );
+      const emitEvent = emit(events, command);
+      yield* emitEvent({
+        type: "thread.metadata-updated",
+        threadId: command.threadId,
+        providerInstanceId: thread.providerInstanceId,
+        occurredAt: now,
+        payload: { ...thread, goal: result.goal },
+      });
+      const childThread: OrchestrationV2AppThread = {
+        ...makeSubagentChildThread({
+          parentThread: thread,
+          childThreadId,
+          // Unused: forkedFrom is cleared below.
+          parentNodeId: NodeId.make(childThreadId),
+          activeProviderThreadId: null,
+          providerInstanceId: goal.modelSelection.instanceId,
+          modelSelection: goal.modelSelection,
+          title: `Goal iteration ${command.iteration}: ${thread.title}`.slice(0, 120),
+          now,
+          createdBy: "agent",
+          creationSource: "server",
+        }),
+        forkedFrom: null,
+        runtimeMode: goal.runtimeMode,
+        interactionMode: "default",
+        goal: null,
+        goalIteration: {
+          parentThreadId: command.threadId,
+          goalId: goal.id,
+          iteration: command.iteration,
+        },
+        limitRecovery: null,
+        pinnedAt: null,
+        pinOrderKey: null,
+        activeOrderKey: null,
+        titleRegeneration: null,
+      };
+      yield* emitEvent({
+        type: "thread.created",
+        threadId: childThreadId,
+        driver: targetAdapter.driver,
+        providerInstanceId: goal.modelSelection.instanceId,
+        occurredAt: now,
+        payload: childThread,
+      });
+      // No senderThreadId: report-back would otherwise wake the parent agent.
+      yield* dispatchMessage(
+        {
+          type: "message.dispatch",
+          createdBy: "agent",
+          creationSource: "server",
+          commandId: command.commandId,
+          threadId: childThreadId,
+          messageId: idAllocator.derive.goalIterationMessage({ commandId: command.commandId }),
+          text: command.prompt,
+          attachments: [],
+          modelSelection: goal.modelSelection,
+          dispatchMode: { type: "start_immediately" },
+        },
+        events,
+        effects,
+      );
+    },
+  );
+
   const dispatchDelegatedTaskRequest = Effect.fn("orchestrationV2.dispatch.delegatedTaskRequest")(
     function* (
       command: Extract<OrchestrationV2Command, { readonly type: "delegated_task.request" }>,
@@ -9040,6 +9264,15 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         break;
       case "provider-session.detach":
         yield* dispatchProviderSessionDetach(command, events, effects);
+        break;
+      case "thread.goal.set":
+      case "thread.goal.control":
+      case "thread.goal.report":
+      case "thread.goal.advance":
+        yield* dispatchGoalCommand(command, events);
+        break;
+      case "thread.goal.iteration.start":
+        yield* dispatchGoalIterationStart(command, events, effects);
         break;
       case "message.dispatch": {
         // The provider owns a native subagent's conversation, so a sent
