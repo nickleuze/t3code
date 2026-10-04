@@ -1543,6 +1543,7 @@ export default function ChatView(props: ChatViewProps) {
   });
   // The objective the open /goal dialog starts with; null while it is closed.
   const [goalDialogObjective, setGoalDialogObjective] = useState<string | null>(null);
+  const goalSendNoticeShownRef = useRef(new Set<string>());
   const switchGitRef = useAtomCommand(vcsEnvironment.switchRef, { reportFailure: false });
   const setThreadRuntimeMode = useAtomCommand(threadEnvironment.setRuntimeMode, {
     reportFailure: false,
@@ -8137,6 +8138,24 @@ export default function ChatView(props: ChatViewProps) {
         composerRef.current?.resetCursorState();
       }
       return;
+    }
+    // Sending here is allowed while an iteration runs; say once per goal that
+    // both share the workspace.
+    if (
+      activeGoal?.status === "active" &&
+      activeGoal.currentChildThreadId !== null &&
+      !goalSendNoticeShownRef.current.has(activeGoal.id) &&
+      parseComposerGoalCommand(promptRef.current) === null
+    ) {
+      goalSendNoticeShownRef.current.add(activeGoal.id);
+      toastManager.add(
+        stackedThreadToast({
+          type: "info",
+          title: "A goal iteration is also working here",
+          description:
+            "Your message runs alongside it in the same workspace, so their edits can overlap.",
+        }),
+      );
     }
     // `/goal <objective>` opens the goal dialog; the draft stays until the goal starts.
     if (goalCommandAvailable && !directAnnotation && !composerHasNonPromptContent) {

@@ -6250,6 +6250,11 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         pinOrderKey: null,
         activeOrderKey: null,
         titleRegeneration: null,
+        // The goal thread owns these; copies would make every iteration a
+        // pull request sync target.
+        pullRequests: [],
+        linkedPullRequest: null,
+        branchPullRequest: null,
       };
       yield* emitEvent({
         type: "thread.created",

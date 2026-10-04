@@ -210,6 +210,7 @@ it.layer(TestLayer)("goal commands", (it) => {
       assert.strictEqual(child.thread.lineage.parentThreadId, threadId);
       assert.strictEqual(child.thread.lineage.relationshipToParent, "subagent");
       assert.isNull(child.thread.goal);
+      assert.deepEqual(child.thread.pullRequests, []);
       assert.deepEqual(child.thread.goalIteration, {
         parentThreadId: threadId,
         goalId,
