@@ -469,6 +469,45 @@ export const setThreadAutoSettle = Effect.fn("EnvironmentCommands.setThreadAutoS
   });
 });
 
+export type SetThreadGoalInput = Omit<
+  Extract<OrchestrationV2Command, { type: "thread.goal.set" }>,
+  "type" | "commandId"
+> &
+  CommandMetadata;
+export const setThreadGoal = Effect.fn("EnvironmentCommands.setThreadGoal")(function* (
+  input: SetThreadGoalInput,
+) {
+  return yield* dispatch({
+    type: "thread.goal.set",
+    commandId: yield* allocateCommandId(input),
+    threadId: input.threadId,
+    objective: input.objective,
+    ...(input.checkCommand === undefined ? {} : { checkCommand: input.checkCommand }),
+    ...(input.burnGuard === undefined ? {} : { burnGuard: input.burnGuard }),
+    ...(input.noProgressLimit === undefined ? {} : { noProgressLimit: input.noProgressLimit }),
+    ...(input.modelSelection === undefined ? {} : { modelSelection: input.modelSelection }),
+    ...(input.runtimeMode === undefined ? {} : { runtimeMode: input.runtimeMode }),
+  });
+});
+
+export type ControlThreadGoalInput = Omit<
+  Extract<OrchestrationV2Command, { type: "thread.goal.control" }>,
+  "type" | "commandId"
+> &
+  CommandMetadata;
+export const controlThreadGoal = Effect.fn("EnvironmentCommands.controlThreadGoal")(function* (
+  input: ControlThreadGoalInput,
+) {
+  return yield* dispatch({
+    type: "thread.goal.control",
+    commandId: yield* allocateCommandId(input),
+    threadId: input.threadId,
+    goalId: input.goalId,
+    action: input.action,
+    ...(input.burnGuard === undefined ? {} : { burnGuard: input.burnGuard }),
+  });
+});
+
 export const reorderPinnedThread = Effect.fn("EnvironmentCommands.reorderPinnedThread")(function* (
   input: ReorderPinnedThreadInput,
 ) {

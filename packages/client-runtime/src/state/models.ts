@@ -120,6 +120,10 @@ export interface EnvironmentThreadShell {
   readonly snoozedUntil: string | null;
   readonly snoozedAt: string | null;
   readonly limitRecovery?: import("@t3tools/contracts").OrchestrationV2LimitRecovery | null;
+  /** Summary of the thread's `/goal` loop; absent on servers without goals. */
+  readonly goal?: import("@t3tools/contracts").OrchestrationV2ThreadGoalSummary | null;
+  /** Set when this thread runs one iteration of a parent thread's goal. */
+  readonly goalIteration?: import("@t3tools/contracts").OrchestrationV2GoalIterationMarker | null;
   readonly pinnedAt: string | null;
   readonly autoSettleDisabledAt?: string | null;
   /** Slot in the user-arranged pinned order; null for keyless (legacy) pins. */
@@ -255,6 +259,8 @@ export function presentThreadShell(
     snoozedUntil: nullableIso(thread.snoozedUntil ?? null),
     snoozedAt: nullableIso(thread.snoozedAt ?? null),
     limitRecovery: thread.limitRecovery ?? null,
+    goal: thread.goal ?? null,
+    goalIteration: thread.goalIteration ?? null,
     pinnedAt: nullableIso(thread.pinnedAt ?? null),
     autoSettleDisabledAt: nullableIso(thread.autoSettleDisabledAt ?? null),
     pinOrderKey: thread.pinOrderKey ?? null,

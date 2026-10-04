@@ -1,5 +1,8 @@
 import { ChatCanvas } from "./chat/ChatCanvas";
 import { usageLimitRecoveryBannerItem } from "./chat/UsageLimitRecoveryBanner";
+import { goalBannerItem, type GoalControlAction } from "./chat/GoalBanner";
+import { GoalDialog, type GoalDialogSubmission } from "./chat/GoalDialog";
+import { parseComposerGoalCommand } from "./chat/goalPresentation";
 import {
   resolveBackgroundDraftWorkspaceOptions,
   resolveDraftHeroState,
@@ -37,7 +40,7 @@ import { feedbackBannerItem } from "./chat/ComposerFeedback";
 import { usageLimitsBannerItem } from "./chat/ComposerUsageLimits";
 import { getTerminalLabel } from "@t3tools/shared/terminalLabels";
 import * as Schema from "effect/Schema";
-import { Minimize2Icon } from "lucide-react";
+import { Minimize2Icon, TargetIcon } from "lucide-react";
 import {
   questionAttachmentDraftId,
   questionAttachmentDraftPrefix,
@@ -1534,6 +1537,12 @@ export default function ChatView(props: ChatViewProps) {
   const updateThreadMetadata = useAtomCommand(threadEnvironment.updateMetadata, {
     reportFailure: false,
   });
+  const setThreadGoal = useAtomCommand(threadEnvironment.setGoal, { reportFailure: false });
+  const controlThreadGoal = useAtomCommand(threadEnvironment.controlGoal, {
+    reportFailure: false,
+  });
+  // The objective the open /goal dialog starts with; null while it is closed.
+  const [goalDialogObjective, setGoalDialogObjective] = useState<string | null>(null);
   const switchGitRef = useAtomCommand(vcsEnvironment.switchRef, { reportFailure: false });
   const setThreadRuntimeMode = useAtomCommand(threadEnvironment.setRuntimeMode, {
     reportFailure: false,
@@ -2853,6 +2862,11 @@ export default function ChatView(props: ChatViewProps) {
   const modelPickerLockedProvider = supportsProviderSwitchingViaHandoff ? null : lockedProvider;
   const pullRequestsCapabilityKnown = serverConfig !== null;
   const supportsPullRequests = serverConfig?.environment.capabilities.pullRequests === true;
+  // Goals run on existing server threads; iteration threads cannot nest goals.
+  const goalCommandAvailable =
+    isServerThread &&
+    serverConfig?.environment.capabilities.threadGoals === true &&
+    activeThread?.lineage.relationshipToParent !== "subagent";
   const attachmentEnvironmentConfig = environmentById.get(environmentId)?.serverConfig ?? null;
   const attachmentUploadsCapabilityKnown = attachmentEnvironmentConfig !== null;
   const supportsQuestionAttachments =
@@ -7125,8 +7139,52 @@ export default function ChatView(props: ChatViewProps) {
           },
         })
       : null;
+  const openThreadById = (threadId: ThreadId) =>
+    void navigate({
+      to: "/$environmentId/$threadId",
+      params: buildThreadRouteParams(scopeThreadRef(environmentId, threadId)),
+    });
+  const activeGoal = activeThreadShell?.goal ?? null;
+  const goalBanner =
+    activeGoal !== null && activeThreadShell
+      ? goalBannerItem({
+          goal: activeGoal,
+          onControl: async (action: GoalControlAction) => {
+            const result = await controlThreadGoal({
+              environmentId,
+              input: { threadId: activeThreadShell.id, goalId: activeGoal.id, action },
+            });
+            if (result._tag === "Failure") throw squashAtomCommandFailure(result);
+          },
+          onOpenIteration: openThreadById,
+        })
+      : null;
+  const goalIteration = activeThreadShell?.goalIteration ?? null;
+  const goalIterationBanner: ComposerBannerStackItem | null =
+    goalIteration === null
+      ? null
+      : {
+          id: `goal-iteration:${goalIteration.goalId}:${goalIteration.iteration}`,
+          variant: "info",
+          priority: "notice",
+          icon: <TargetIcon />,
+          title: `Goal iteration ${goalIteration.iteration}`,
+          description: "This thread runs one step of a goal; its progress goes to the goal thread.",
+          actions: (
+            <Button
+              size="xs"
+              variant="ghost"
+              onClick={() => openThreadById(goalIteration.parentThreadId)}
+            >
+              Open goal
+            </Button>
+          ),
+        };
   const composerBannerItems = useMemo<ComposerBannerStackItem[]>(() => {
     const limitRecoveryItems = limitRecoveryBanner === null ? [] : [limitRecoveryBanner];
+    const goalItems = [goalBanner, goalIterationBanner].filter(
+      (item): item is ComposerBannerStackItem => item !== null,
+    );
     const backgroundWorkItems = backgroundWorkBannerItem === null ? [] : [backgroundWorkBannerItem];
     const resumeCompactionItems =
       resumeCompactionBannerItem === null ? [] : [resumeCompactionBannerItem];
@@ -7139,6 +7197,7 @@ export default function ChatView(props: ChatViewProps) {
       return [
         ...feedbackBannerItems,
         ...limitRecoveryItems,
+        ...goalItems,
         ...usageLimitsItems,
         ...projectCloneItems,
         ...systemComposerBannerItems,
@@ -7151,6 +7210,7 @@ export default function ChatView(props: ChatViewProps) {
     return [
       ...feedbackBannerItems,
       ...limitRecoveryItems,
+      ...goalItems,
       ...usageLimitsItems,
       ...projectCloneItems,
       ...systemComposerBannerItems,
@@ -7203,6 +7263,8 @@ export default function ChatView(props: ChatViewProps) {
     serverRuntime?.usageLimitResetAt,
     feedbackBannerItems,
     limitRecoveryBanner,
+    goalBanner,
+    goalIterationBanner,
     handleRestoreThreadBranch,
     isRestoringThreadBranch,
     backgroundWorkBannerItem,
@@ -8075,6 +8137,14 @@ export default function ChatView(props: ChatViewProps) {
         composerRef.current?.resetCursorState();
       }
       return;
+    }
+    // `/goal <objective>` opens the goal dialog; the draft stays until the goal starts.
+    if (goalCommandAvailable && !directAnnotation && !composerHasNonPromptContent) {
+      const goalCommand = parseComposerGoalCommand(promptRef.current);
+      if (goalCommand !== null) {
+        setGoalDialogObjective(goalCommand.objective ?? "");
+        return;
+      }
     }
 
     const notifyDirectAnnotationAttached = () => {
@@ -10492,11 +10562,34 @@ export default function ChatView(props: ChatViewProps) {
     addFolders: (folders) => composerRef.current?.addDroppedFolders(folders),
   });
 
+  const startGoal = async (submission: GoalDialogSubmission) => {
+    if (!activeThreadShell) return;
+    const result = await setThreadGoal({
+      environmentId,
+      input: { threadId: activeThreadShell.id, ...submission },
+    });
+    if (result._tag === "Failure") throw squashAtomCommandFailure(result);
+    setGoalDialogObjective(null);
+    if (parseComposerGoalCommand(promptRef.current) !== null) {
+      promptRef.current = "";
+      setComposerDraftPrompt(composerDraftTarget, "");
+      composerRef.current?.resetCursorState();
+    }
+  };
+
   return (
     <div
       ref={workspaceLayoutRef}
       className="relative flex min-h-0 min-w-0 flex-1 overflow-hidden bg-background"
     >
+      {goalDialogObjective !== null && activeThreadShell ? (
+        <GoalDialog
+          initialObjective={goalDialogObjective}
+          runtimeMode={activeThreadShell.runtimeMode}
+          onSubmit={startGoal}
+          onClose={() => setGoalDialogObjective(null)}
+        />
+      ) : null}
       <Dialog
         open={
           deviceSetupThread !== null &&
@@ -10877,6 +10970,9 @@ export default function ChatView(props: ChatViewProps) {
                               bannerItems={composerBannerItems}
                               // With attachments or contexts aboard the pick just inserts the
                               // text, so it sends as a prompt like the typed path would.
+                              onGoalCommand={
+                                goalCommandAvailable ? () => setGoalDialogObjective("") : undefined
+                              }
                               onUsageLimitsCommand={
                                 usageLimitsOffered &&
                                 usageLimitsKey !== null &&

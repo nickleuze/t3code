@@ -923,19 +923,22 @@ export function shouldRecedeSidebarThread(input: {
 
 type SidebarThreadStatusInput = Pick<
   SidebarThreadSummary,
-  "hasPendingApprovals" | "hasPendingUserInput" | "runtime"
+  "hasPendingApprovals" | "hasPendingUserInput" | "runtime" | "goal"
 >;
 
 export function resolveSidebarThreadStatus(thread: SidebarThreadStatusInput): SidebarThreadStatus {
   if (thread.hasPendingApprovals) {
     return "approval";
   }
-  if (thread.hasPendingUserInput) {
+  // A goal's iteration runs in a hidden child thread, so its questions and
+  // activity surface on the goal's own thread.
+  if (thread.hasPendingUserInput || thread.goal?.needsInput) {
     return "input";
   }
   if (
-    thread.runtime !== null &&
-    ["preparing", "queued", "starting", "running", "waiting"].includes(thread.runtime.status)
+    (thread.runtime !== null &&
+      ["preparing", "queued", "starting", "running", "waiting"].includes(thread.runtime.status)) ||
+    thread.goal?.status === "active"
   ) {
     return "working";
   }

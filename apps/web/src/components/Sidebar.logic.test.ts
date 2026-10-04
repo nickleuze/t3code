@@ -58,7 +58,14 @@ import {
 } from "./Sidebar.logic";
 import { threadSearchMatchKey } from "@t3tools/client-runtime/state/thread-search";
 import { sortSettledThreads } from "@t3tools/client-runtime/state/thread-sort";
-import { EnvironmentId, ProjectId, ProviderInstanceId, RunId, ThreadId } from "@t3tools/contracts";
+import {
+  CommandId,
+  EnvironmentId,
+  ProjectId,
+  ProviderInstanceId,
+  RunId,
+  ThreadId,
+} from "@t3tools/contracts";
 
 import {
   DEFAULT_INTERACTION_MODE,
@@ -958,6 +965,26 @@ describe("resolveSidebarThreadStatus", () => {
         runtime,
       }),
     ).toBe("approval");
+  });
+
+  it("shows a goal's hidden iteration work on the goal thread", () => {
+    const goal = {
+      id: CommandId.make("command:goal"),
+      objective: "Ship it",
+      status: "active" as const,
+      statusReason: null,
+      iteration: 2,
+      tokensUsed: 0,
+      needsInput: false,
+      currentChildThreadId: null,
+    };
+    expect(resolveSidebarThreadStatus({ ...idle, goal })).toBe("working");
+    expect(resolveSidebarThreadStatus({ ...idle, goal: { ...goal, needsInput: true } })).toBe(
+      "input",
+    );
+    expect(resolveSidebarThreadStatus({ ...idle, goal: { ...goal, status: "paused" } })).toBe(
+      "ready",
+    );
   });
 
   it("reports working for running and starting runtimes", () => {

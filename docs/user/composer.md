@@ -193,6 +193,28 @@ Provider commands must start the message to run. T3 Code commands such as
 Send `/compact` in an existing conversation to reduce context usage when the
 provider supports it. Web and desktop also offer compaction from the context meter.
 
+## Goals
+
+Send `/goal` followed by what you want done to have the agent keep working until
+it is finished. Each iteration starts in a fresh thread in the same workspace and
+sees only the goal and the notes earlier iterations left, so long tasks don't
+fill up one conversation. The agent says when the goal is complete or blocked.
+
+- **Completion check**: give a command such as `pnpm test`. The goal only
+  completes once it passes; otherwise the failure output goes to the next
+  iteration.
+- **Burn guard**: pauses the goal when one of the provider's usage limits climbs
+  faster than you allow, for example 20% within an hour. It watches the whole
+  account, so other threads count toward it.
+- The goal also pauses after several iterations in a row with no progress, when
+  an iteration fails or runs for more than two hours, and when a usage limit is
+  hit. It resumes by itself after the limit resets.
+
+The banner above the composer shows progress and has **Pause**, **Resume**, and
+**Stop**. When an iteration asks a question, the banner's **Answer** button opens
+that iteration. The thread details panel lists every iteration with its notes and
+check results. Goals start from web and desktop, on threads that already exist.
+
 ## Context in your message
 
 Context you attach lands where your cursor is, as a chip inside your text: a terminal excerpt,
