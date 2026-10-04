@@ -60,6 +60,9 @@ export function makeSubagentChildThread(input: {
     providerInstanceId: input.providerInstanceId,
     modelSelection: input.modelSelection,
     activeProviderThreadId: input.activeProviderThreadId,
+    // A goal belongs to one thread; a copy would run a second loop.
+    goal: null,
+    goalIteration: null,
     lineage: {
       parentThreadId: input.parentThread.id,
       relationshipToParent: "subagent",

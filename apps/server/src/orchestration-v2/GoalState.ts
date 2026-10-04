@@ -118,6 +118,9 @@ export function applyGoalCommand(
     if (isLiveGoal(goal)) {
       return reject("This thread already has a goal. Stop or clear it first.");
     }
+    if (goal?.current != null) {
+      return reject("Wait for the stopped goal's last iteration to finish.");
+    }
     return accept({
       id: command.commandId,
       objective: command.objective,

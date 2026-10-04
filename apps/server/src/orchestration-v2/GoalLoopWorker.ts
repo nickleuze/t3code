@@ -43,6 +43,8 @@ import * as ProjectStore from "./ProjectStore.ts";
 import { delegatedTaskProgress } from "./SubagentProjection.ts";
 
 const ITERATION_TIMEOUT_MS = 2 * 60 * 60 * 1000;
+/** How long to wait when a usage limit reports no reset time (or one already past). */
+const USAGE_LIMIT_FALLBACK_BACKOFF_MS = 15 * 60 * 1000;
 const CHECK_TIMEOUT = "10 minutes";
 const CHECK_MAX_OUTPUT_BYTES = 256 * 1024;
 const GOAL_REFS_PREFIX = "refs/t3/goals";
@@ -152,6 +154,13 @@ export const make = Effect.gen(function* () {
   // Usage samples live in memory: after a restart the guard re-warms over its
   // window instead of judging a rise it did not observe.
   const usageSamples = new Map<CommandId, Array<GoalUsageSample>>();
+  // Every dispatch gets a fresh command id. The goal reducer already rejects
+  // stale steps, while a reused id would replay a stored rejection forever and
+  // wedge the loop after one transient failure.
+  const bootMs = DateTime.toEpochMillis(yield* DateTime.now);
+  let dispatchSequence = 0;
+  const commandId = (thread: OrchestrationV2AppThread, key: string) =>
+    CommandId.make(`goal:${thread.id}:${key}:${bootMs}-${++dispatchSequence}`);
 
   const dispatch = (command: OrchestrationV2ServerCommand) =>
     orchestrator.dispatch(command).pipe(
@@ -173,7 +182,7 @@ export const make = Effect.gen(function* () {
   ) =>
     dispatch({
       type: "thread.goal.advance",
-      commandId: CommandId.make(`goal:${goal.id}:${goal.iteration}:${key}`),
+      commandId: commandId(thread, `${goal.iteration}:${key}`),
       threadId: thread.id,
       goalId: goal.id,
       iteration: goal.iteration,
@@ -244,13 +253,10 @@ export const make = Effect.gen(function* () {
       const cwd = yield* workspaceCwd(thread);
       const startRef = goalRef(goal, iteration, "start");
       const baselineRef = (yield* captureRef(cwd, startRef)) ? startRef : null;
-      // updatedAt changes on every resume, so a start rejected once (say, the
-      // provider was unavailable) can be retried after the user resumes.
-      const attempt = Date.parse(goal.updatedAt);
       yield* orchestrator
         .dispatch({
           type: "thread.goal.iteration.start",
-          commandId: CommandId.make(`goal:${goal.id}:${iteration}:start:${attempt}`),
+          commandId: commandId(thread, `${iteration}:start`),
           threadId: thread.id,
           goalId: goal.id,
           iteration,
@@ -264,7 +270,7 @@ export const make = Effect.gen(function* () {
               cause,
             }).pipe(
               Effect.andThen(
-                advance(thread, goal, `start-failed:${attempt}`, {
+                advance(thread, goal, "start-failed", {
                   type: "paused",
                   reason: "child_failed",
                 }),
@@ -380,11 +386,19 @@ export const make = Effect.gen(function* () {
           Effect.andThen(
             dispatch({
               type: "thread.settle",
-              commandId: CommandId.make(`goal:${goal.id}:${goal.iteration}:settle-child`),
+              commandId: commandId(thread, `${goal.iteration}:settle-child`),
               threadId: current.childThreadId,
             }),
           ),
         );
+      if (Option.isNone(child)) {
+        // Only a child that is really gone ends the iteration; a failed read
+        // retries on the next sweep instead of abandoning a running agent.
+        const childShell = yield* orchestrator
+          .getThreadShell(current.childThreadId)
+          .pipe(Effect.orElseSucceed(() => undefined));
+        if (childShell !== null) return;
+      }
       if (Option.isNone(child) || child.value.thread.deletedAt !== null) {
         return yield* finish({
           childOutcome: "interrupted",
@@ -425,7 +439,7 @@ export const make = Effect.gen(function* () {
             for (const run of liveRuns) {
               yield* dispatch({
                 type: "run.interrupt",
-                commandId: CommandId.make(`goal:${goal.id}:${goal.iteration}:interrupt:${run.id}`),
+                commandId: commandId(thread, `${goal.iteration}:interrupt:${run.id}`),
                 threadId: current.childThreadId,
                 runId: run.id,
                 reason: "Goal loop stopped this iteration.",
@@ -439,7 +453,7 @@ export const make = Effect.gen(function* () {
         } else {
           if (goal.status === "active") {
             if (nowMs - Date.parse(current.startedAt) > ITERATION_TIMEOUT_MS) {
-              return yield* advance(thread, goal, `paused:timeout:${nowMs}`, {
+              return yield* advance(thread, goal, "paused:timeout", {
                 type: "paused",
                 reason: "iteration_timeout",
               });
@@ -450,7 +464,7 @@ export const make = Effect.gen(function* () {
                 threadId: thread.id,
                 ...tripped,
               });
-              return yield* advance(thread, goal, `paused:burn:${nowMs}`, {
+              return yield* advance(thread, goal, "paused:burn", {
                 type: "paused",
                 reason: "burn_rate",
               });
@@ -465,12 +479,20 @@ export const make = Effect.gen(function* () {
         .pipe(Effect.orElseSucceed(() => null));
       const ended = childOutcome(progress.resultRun, shell);
       const usage = childIterationTokens(records.providerTurns);
+      // Without a future reset time, back off rather than relaunching a child
+      // that will hit the same limit on the next sweep.
+      const resumeAt =
+        ended.outcome !== "usage_limited"
+          ? null
+          : ended.resumeAt !== null && Date.parse(ended.resumeAt) > nowMs
+            ? ended.resumeAt
+            : DateTime.formatIso(DateTime.makeUnsafe(nowMs + USAGE_LIMIT_FALLBACK_BACKOFF_MS));
       yield* finish({
         childOutcome: ended.outcome,
         tokens: usage.tokens,
         accounting: usage.accounting,
         workspaceChanged: yield* workspaceChanged(thread, goal, current.baselineRef),
-        resumeAt: ended.resumeAt,
+        resumeAt,
       });
     });
 

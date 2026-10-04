@@ -3,6 +3,7 @@ import { TargetIcon } from "lucide-react";
 import { useState } from "react";
 
 import { Button } from "../ui/button";
+import { stackedThreadToast, toastManager } from "../ui/toast";
 import type { ComposerBannerStackItem } from "./ComposerBannerStack";
 import {
   formatGoalTokens,
@@ -22,7 +23,10 @@ interface GoalBannerProps {
 /** Composer banner for a thread's `/goal` loop, with the controls that apply to its state. */
 export function goalBannerItem(props: GoalBannerProps): ComposerBannerStackItem {
   const { goal } = props;
-  const ended = goal.status === "complete" || goal.status === "stopped";
+  // A stopped goal's last iteration may still be winding down; it can only be
+  // cleared once that child is done.
+  const clearable =
+    (goal.status === "complete" || goal.status === "stopped") && goal.currentChildThreadId === null;
   return {
     id: `goal:${goal.id}`,
     variant: goal.status === "complete" ? "success" : goalNeedsAttention(goal) ? "warning" : "info",
@@ -34,8 +38,20 @@ export function goalBannerItem(props: GoalBannerProps): ComposerBannerStackItem 
         ? `${goal.objective} · ${formatGoalTokens(goal.tokensUsed)}`
         : goal.objective,
     actions: <GoalBannerActions key={`${goal.id}:${goal.status}`} {...props} />,
-    ...(ended
-      ? { dismissLabel: "Clear goal", onDismiss: () => void props.onControl("clear") }
+    ...(clearable
+      ? {
+          dismissLabel: "Clear goal",
+          onDismiss: () =>
+            void props.onControl("clear").catch((cause: unknown) =>
+              toastManager.add(
+                stackedThreadToast({
+                  type: "error",
+                  title: "Could not clear the goal",
+                  description: cause instanceof Error ? cause.message : String(cause),
+                }),
+              ),
+            ),
+        }
       : {}),
   };
 }

@@ -6143,7 +6143,8 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
     const result = applyGoalCommand(thread, input, DateTime.formatIso(now));
     if (!result.ok) return yield* reject(result.reason);
     const previous = thread.goal ?? null;
-    if (result.goal === previous) return;
+    // Unchanged goals still emit: the dispatcher rejects commands without
+    // events, and a repeated Pause should succeed rather than error.
     yield* emit(
       events,
       command,

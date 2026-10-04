@@ -114,6 +114,29 @@ it("keeps a subagent child awake when its parent thread is snoozed", () => {
   });
 });
 
+it("never copies the parent's goal onto a subagent child", () => {
+  const parentThread = {
+    ...makeParentThread(),
+    goal: { id: "command:goal" } as never,
+    goalIteration: { parentThreadId, goalId: "command:goal", iteration: 1 } as never,
+  };
+  const childThread = makeSubagentChildThread({
+    parentThread,
+    childThreadId,
+    parentNodeId: NodeId.make("node:subagent-goal-parent"),
+    activeProviderThreadId: null,
+    providerInstanceId: childProviderInstanceId,
+    modelSelection: childModelSelection,
+    title: "Goal-free child",
+    now: childCreatedAt,
+    createdBy: "agent",
+    creationSource: "provider",
+  });
+
+  assert.isNull(childThread.goal);
+  assert.isNull(childThread.goalIteration);
+});
+
 it("attributes native subagent prompts to their parent thread", () => {
   for (const role of ["user", "assistant"] as const) {
     const artifacts = makeSubagentConversationArtifacts({

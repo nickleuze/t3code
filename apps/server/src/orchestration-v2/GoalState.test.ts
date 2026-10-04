@@ -135,6 +135,22 @@ describe("goal state", () => {
     ).toMatch(/already has a goal/);
   });
 
+  it("waits for a stopped goal's last iteration before starting another", () => {
+    const stopping = control(started(newGoal()), "stop")!;
+    expect(
+      rejection(rootThread(stopping), {
+        type: "set",
+        commandId: CommandId.make("command:next"),
+        objective: "Next goal",
+        checkCommand: null,
+        burnGuard: null,
+        noProgressLimit: undefined,
+        modelSelection: stopping.modelSelection,
+        runtimeMode: stopping.runtimeMode,
+      }),
+    ).toMatch(/last iteration/);
+  });
+
   it("refuses goals on goal iteration threads", () => {
     const thread: GoalThread = {
       ...rootThread(),
