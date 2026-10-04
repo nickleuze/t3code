@@ -391,6 +391,17 @@ Without `runId`, it selects the newest interruptible run. A terminal run is
 returned unchanged, and a thread with no active provider turn returns
 `no_active_run`.
 
+### `t3_goal_update` and `t3_goal_complete`
+
+Only the child thread running a `/goal` loop's current iteration can call
+these; every other caller, including the goal's own thread and children of
+earlier iterations, gets `invalid_request`. `t3_goal_update` records a progress
+note that later iterations receive in their opening prompt. `t3_goal_complete`
+records a `complete` or `blocked` claim. The claim is not final: the goal loop
+acts on it after the child's turn ends, and runs the goal's check command first
+when one is set. Both tools only touch goal bookkeeping, so read-only Claude
+sandboxes pre-approve them.
+
 ## Delegated Task Lifecycle
 
 The MCP server is a command ingress into V2. It does not call provider adapters

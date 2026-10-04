@@ -50,6 +50,8 @@ export type T3McpToolSummaryAction =
   | "project-clone"
   | "environment-read"
   | "environment-update"
+  | "goal-update"
+  | "goal-complete"
   | "attachment-prepare"
   | "attachment-discard"
   | "attachment-send"
@@ -207,6 +209,8 @@ const T3_MCP_TOOLS: Readonly<Record<string, T3McpToolDefinition>> = {
     "device",
   ),
   device_close: tool(["Close", "Closing", "Closed", "a device"], "device", "device"),
+  t3_goal_update: tool(["Record", "Recording", "Recorded", "goal progress"], "goal-update"),
+  t3_goal_complete: tool(["Report", "Reporting", "Reported", "the goal outcome"], "goal-complete"),
   run_scheduled_task_now: tool(
     ["Run", "Running", "Requested a run of", "a scheduled task"],
     "schedule-run",

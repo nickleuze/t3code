@@ -206,6 +206,12 @@ export function summarizeT3ToolCalls(
     case "schedule-run":
       label = phrase("Requested", "request", quantity(selected.length, "scheduled task run"));
       break;
+    case "goal-update":
+      label = phrase("Recorded", "record", quantity(selected.length, "goal progress note"));
+      break;
+    case "goal-complete":
+      label = phrase("Reported", "report", "the goal outcome");
+      break;
     case "thread-configuration":
       label = phrase("Checked", "check", `thread configuration ${times}`);
       break;
