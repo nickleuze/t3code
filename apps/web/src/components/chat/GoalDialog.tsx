@@ -37,7 +37,7 @@ interface GoalDialogProps {
   readonly onClose: () => void;
 }
 
-/** Collects a `/goal` objective and its limits before the loop starts. */
+/** Collects a `/t3-goal` objective and its limits before the loop starts. */
 export function GoalDialog({ initialObjective, runtimeMode, onSubmit, onClose }: GoalDialogProps) {
   const id = useId();
   const [objective, setObjective] = useState(initialObjective);
@@ -92,7 +92,8 @@ export function GoalDialog({ initialObjective, runtimeMode, onSubmit, onClose }:
             <DialogTitle>Start a goal</DialogTitle>
             <DialogDescription>
               The agent works in repeated iterations until the goal is done. Each iteration starts
-              fresh in this workspace and sees only the goal and earlier progress notes.
+              in a fresh top-level thread in this workspace, sees the goal and earlier progress
+              notes, and can delegate work to subagents.
             </DialogDescription>
           </DialogHeader>
           <DialogPanel>

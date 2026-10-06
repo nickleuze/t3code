@@ -6162,10 +6162,9 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
   });
 
   /**
-   * Starts goal iteration `command.iteration` in a fresh child thread. The
-   * child links to the parent through lineage only (`forkedFrom: null`), so
-   * none of the delegated-task completion, wake, or report-back paths touch
-   * the parent agent; the goal loop owns the child's lifecycle instead.
+   * Starts each goal iteration in a fresh top-level thread. Its goal marker
+   * links it to the controlling thread without subagent lineage or report-back;
+   * the goal loop owns the iteration lifecycle.
    */
   const dispatchGoalIterationStart = Effect.fn("orchestrationV2.dispatch.goalIterationStart")(
     function* (
@@ -6238,6 +6237,11 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           creationSource: "server",
         }),
         forkedFrom: null,
+        lineage: {
+          parentThreadId: null,
+          relationshipToParent: null,
+          rootThreadId: childThreadId,
+        },
         runtimeMode: goal.runtimeMode,
         interactionMode: "default",
         goal: null,

@@ -1537,7 +1537,7 @@ export interface ChatComposerProps {
   bannerItems: readonly ComposerBannerStackItem[];
   /** Picking /usage-limits from the menu is the action itself; the draft keeps nothing of it. */
   onUsageLimitsCommand?: (() => void) | undefined;
-  /** Opens the `/goal` dialog; the menu offers `/goal` only when this is set. */
+  /** Opens the `/t3-goal` dialog; the menu offers `/t3-goal` only when this is set. */
   onGoalCommand?: (() => void) | undefined;
   environmentUnavailable: {
     readonly label: string;
@@ -2620,10 +2620,10 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
         ...(goalCommandAvailable && composerTrigger.rangeStart === 0
           ? ([
               {
-                id: "slash:goal",
+                id: "slash:t3-goal",
                 type: "slash-command",
-                command: "goal",
-                label: "/goal",
+                command: "t3-goal",
+                label: "/t3-goal",
                 description: "Keep working in fresh iterations until a goal is done",
               },
             ] as const)
@@ -2657,10 +2657,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
           (skill.scope ? `${skill.scope} skill` : ""),
       }));
       const visibleProviderSlashCommandItems = providerSlashCommandItems.filter(
-        (item) =>
-          (item.command.name !== "compact" || compactSlashCommandAvailable) &&
-          // T3's /goal replaces a provider's own goal command.
-          (item.command.name !== "goal" || !goalCommandAvailable),
+        (item) => item.command.name !== "compact" || compactSlashCommandAvailable,
       );
       const slashCommandItems = slashCommandItemsForPromptPosition(
         [...builtInSlashCommandItems, ...visibleProviderSlashCommandItems, ...skillItems],
@@ -3905,7 +3902,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
         return;
       }
       if (item.type === "slash-command") {
-        if (item.command === "goal") {
+        if (item.command === "t3-goal") {
           const applied = applyPromptReplacement(trigger.rangeStart, trigger.rangeEnd, "", {
             expectedText: snapshot.value.slice(trigger.rangeStart, trigger.rangeEnd),
             focusEditorAfterReplace: false,

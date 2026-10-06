@@ -20,7 +20,7 @@ interface GoalBannerProps {
   readonly onOpenIteration: (childThreadId: ThreadId) => void;
 }
 
-/** Composer banner for a thread's `/goal` loop, with the controls that apply to its state. */
+/** Composer banner for a thread's `/t3-goal` loop, with the controls that apply to its state. */
 export function goalBannerItem(props: GoalBannerProps): ComposerBannerStackItem {
   const { goal } = props;
   // A stopped goal's last iteration may still be winding down; it can only be

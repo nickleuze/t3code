@@ -3,11 +3,11 @@ import type {
   OrchestrationV2ThreadGoalSummary,
 } from "@t3tools/contracts";
 
-/** `/goal` alone or followed by an objective; the objective is null for a bare `/goal`. */
+/** `/t3-goal` alone or followed by an objective; the objective is null for a bare `/t3-goal`. */
 export function parseComposerGoalCommand(
   text: string,
 ): { readonly objective: string | null } | null {
-  const match = /^\/goal(?:\s+([\s\S]*))?$/i.exec(text.trim());
+  const match = /^\/t3-goal(?:\s+([\s\S]*))?$/i.exec(text.trim());
   if (!match) return null;
   const objective = match[1]?.trim() ?? "";
   return { objective: objective.length > 0 ? objective : null };

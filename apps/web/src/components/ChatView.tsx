@@ -1541,7 +1541,7 @@ export default function ChatView(props: ChatViewProps) {
   const controlThreadGoal = useAtomCommand(threadEnvironment.controlGoal, {
     reportFailure: false,
   });
-  // The objective the open /goal dialog starts with; null while it is closed.
+  // The objective the open /t3-goal dialog starts with; null while it is closed.
   const [goalDialogObjective, setGoalDialogObjective] = useState<string | null>(null);
   const goalSendNoticeShownRef = useRef(new Set<string>());
   const switchGitRef = useAtomCommand(vcsEnvironment.switchRef, { reportFailure: false });
@@ -2867,6 +2867,7 @@ export default function ChatView(props: ChatViewProps) {
   const goalCommandAvailable =
     isServerThread &&
     serverConfig?.environment.capabilities.threadGoals === true &&
+    activeThreadShell?.goalIteration == null &&
     activeThread?.lineage.relationshipToParent !== "subagent";
   const attachmentEnvironmentConfig = environmentById.get(environmentId)?.serverConfig ?? null;
   const attachmentUploadsCapabilityKnown = attachmentEnvironmentConfig !== null;
@@ -8157,7 +8158,7 @@ export default function ChatView(props: ChatViewProps) {
         }),
       );
     }
-    // `/goal <objective>` opens the goal dialog; the draft stays until the goal starts.
+    // `/t3-goal <objective>` opens the goal dialog; the draft stays until the goal starts.
     if (goalCommandAvailable && !directAnnotation && !composerHasNonPromptContent) {
       const goalCommand = parseComposerGoalCommand(promptRef.current);
       if (goalCommand !== null) {

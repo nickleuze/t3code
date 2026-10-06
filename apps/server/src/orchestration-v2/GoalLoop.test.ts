@@ -178,7 +178,7 @@ const setup = Effect.fn("GoalLoopTest.setup")(function* (
 });
 
 it.layer(TestLayer)("goal commands", (it) => {
-  it.effect("starts an iteration in an isolated child thread", () =>
+  it.effect("starts an iteration in a fresh top-level thread", () =>
     Effect.gen(function* () {
       const { orchestrator, threadId, goalId } = yield* setup("goal-start");
       const shell = yield* orchestrator.getThreadShell(threadId);
@@ -207,8 +207,11 @@ it.layer(TestLayer)("goal commands", (it) => {
         "messages",
       ]);
       assert.isNull(child.thread.forkedFrom);
-      assert.strictEqual(child.thread.lineage.parentThreadId, threadId);
-      assert.strictEqual(child.thread.lineage.relationshipToParent, "subagent");
+      assert.deepEqual(child.thread.lineage, {
+        parentThreadId: null,
+        relationshipToParent: null,
+        rootThreadId: child.thread.id,
+      });
       assert.isNull(child.thread.goal);
       assert.deepEqual(child.thread.pullRequests, []);
       assert.deepEqual(child.thread.goalIteration, {

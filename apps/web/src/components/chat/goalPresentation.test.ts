@@ -14,14 +14,16 @@ const goal: OrchestrationV2ThreadGoalSummary = {
   currentChildThreadId: null,
 };
 
-describe("/goal composer command", () => {
+describe("/t3-goal composer command", () => {
   it("parses a bare command and one with an objective", () => {
-    expect(parseComposerGoalCommand("/goal")).toEqual({ objective: null });
-    expect(parseComposerGoalCommand("  /GOAL   migrate the api\nwith tests ")).toEqual({
+    expect(parseComposerGoalCommand("/t3-goal")).toEqual({ objective: null });
+    expect(parseComposerGoalCommand("  /T3-GOAL   migrate the api\nwith tests ")).toEqual({
       objective: "migrate the api\nwith tests",
     });
-    expect(parseComposerGoalCommand("/goals")).toBeNull();
-    expect(parseComposerGoalCommand("please /goal x")).toBeNull();
+    expect(parseComposerGoalCommand("/goal")).toBeNull();
+    expect(parseComposerGoalCommand("/goal native objective")).toBeNull();
+    expect(parseComposerGoalCommand("/t3-goals")).toBeNull();
+    expect(parseComposerGoalCommand("please /t3-goal x")).toBeNull();
   });
 });
 

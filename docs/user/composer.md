@@ -195,10 +195,13 @@ provider supports it. Web and desktop also offer compaction from the context met
 
 ## Goals
 
-Send `/goal` followed by what you want done to have the agent keep working until
-it is finished. Each iteration starts in a fresh thread in the same workspace and
-sees only the goal and the notes earlier iterations left, so long tasks don't
-fill up one conversation. The agent says when the goal is complete or blocked.
+T3 Code uses `/t3-goal`; `/goal` remains available for provider-native commands.
+
+Send `/t3-goal` followed by what you want done to have the agent keep working until
+it is finished. Each iteration starts in a fresh top-level thread, visible in the
+sidebar, in the same workspace. It sees only the goal and the notes earlier
+iterations left, so long tasks don't fill up one conversation. Iteration agents
+can delegate work to subagents. The agent says when the goal is complete or blocked.
 
 - **Completion check**: give a command such as `pnpm test`. The goal only
   completes once it passes; otherwise the failure output goes to the next
