@@ -20,6 +20,22 @@ const decodeServerSettingsPatch = Schema.decodeUnknownSync(ServerSettingsPatch);
 const encodeServerSettings = Schema.encodeSync(ServerSettings);
 const decodeClaudeSettings = Schema.decodeUnknownSync(ClaudeSettings);
 
+describe("legacy flat sidebar settings", () => {
+  it("loads last_activity without losing other saved settings", () => {
+    const settings = decodeClientSettings({
+      sidebarFlatThreadSortOrder: "last_activity",
+      timestampFormat: "24-hour",
+    });
+    expect(settings.sidebarFlatThreadSortOrder).toBe("updated_at");
+    expect(settings.timestampFormat).toBe("24-hour");
+    expect(encodeClientSettings(settings).sidebarFlatThreadSortOrder).toBe("updated_at");
+  });
+
+  it("still rejects unknown flat sidebar sort orders", () => {
+    expect(() => decodeClientSettings({ sidebarFlatThreadSortOrder: "unsupported" })).toThrow();
+  });
+});
+
 describe("ServerSettings response streaming", () => {
   it("defaults to paragraph buffering", () => {
     expect(decodeServerSettings({}).responseStreamingMode).toBe("paragraph");
