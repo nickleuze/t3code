@@ -93,6 +93,13 @@ trap 'launchctl remove "$LABEL" 2>/dev/null' EXIT
 log() { printf '[%s] %s\n' "\$(date '+%F %T')" "\$*"; }
 # Fixed-string match: "(Alpha)" in a pgrep pattern is a regex group.
 alpha_running() { ps -axo comm= | grep -qxF "\$APP/Contents/MacOS/T3 Code (Alpha)"; }
+# The app's main process (launched by launchd); its helper workers share the
+# executable but are its children.
+alpha_main_pid() {
+  ps -axo pid=,ppid=,comm= | while read -r pid ppid comm; do
+    [ "\$comm" = "\$APP/Contents/MacOS/T3 Code (Alpha)" ] && [ "\$ppid" = 1 ] && echo "\$pid"
+  done
+}
 active_turns() {
   sqlite3 -readonly "\$DB" "SELECT count(*) FROM orchestration_v2_projection_runs WHERE status IN ('preparing','starting','running','waiting')" 2>/dev/null || echo 0
 }
@@ -109,7 +116,9 @@ if [ "\$(active_turns)" != "0" ] && [ "\$FORCE" != 1 ]; then
   exit 1
 fi
 log "Quitting Alpha"
-osascript -e 'tell application "T3 Code (Alpha)" to quit' || true
+# SIGTERM runs the app's normal shutdown. AppleEvents would need an
+# Automation permission prompt that nobody answers on a headless machine.
+for pid in \$(alpha_main_pid); do kill -TERM "\$pid" 2>/dev/null || true; done
 for i in \$(seq 1 60); do alpha_running || break; sleep 1; done
 if alpha_running; then log "FAILED: Alpha did not quit within 60s; nothing was changed."; exit 1; fi
 mkdir -p "\$BACKUP"

@@ -8,6 +8,9 @@ name: Fork release
 on:
   push:
     branches: [nick/v2]
+    # The update scripts are not part of the app.
+    paths-ignore:
+      - "fork/**"
   workflow_dispatch:
 
 permissions:
