@@ -1,0 +1,87 @@
+name: Fork release
+
+# Builds the macOS arm64 desktop app from every push to the fork's nick/v2
+# and publishes it as a GitHub release. Machines install it with
+# fork/update.sh (or fork/update-all.sh); the builds are ad-hoc signed, so
+# Electron's built-in updater is switched off in them.
+
+on:
+  push:
+    branches: [nick/v2]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: fork-release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    if: github.repository == 'nickleuze/t3code'
+    name: Build and publish macOS arm64
+    runs-on: macos-15
+    timeout-minutes: 75
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          sparse-checkout: |
+            /*
+            !/.repos/
+          sparse-checkout-cone-mode: false
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
+        with:
+          targets: aarch64-apple-darwin
+
+      - name: Setup Vite+
+        uses: voidzero-dev/setup-vp@v1
+        with:
+          node-version-file: package.json
+          cache: true
+          run-install: true
+
+      - name: Ensure Electron runtime is installed
+        run: vp run --filter @t3tools/desktop ensure:electron
+
+      # Each push gets a version above the last, so installed apps can tell
+      # they are behind.
+      - name: Resolve version
+        id: version
+        run: |
+          base="$(node -p "require('./apps/desktop/package.json').version")"
+          echo "version=${base}-nick.${GITHUB_RUN_NUMBER}" >> "$GITHUB_OUTPUT"
+
+      - name: Build
+        env:
+          T3CODE_DESKTOP_VERSION: ${{ steps.version.outputs.version }}
+          # No update feed: Squirrel.Mac cannot install ad-hoc signed builds.
+          GITHUB_REPOSITORY: ""
+          T3CODE_DESKTOP_UPDATE_REPOSITORY: ""
+        run: PATH="$PWD/node_modules/.bin:$PATH" node scripts/build-desktop-artifact.ts --platform mac --target dmg --arch arm64
+
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          zip="T3-Code-${VERSION}-arm64.zip"
+          test -f "release/${zip}"
+          cd release
+          shasum -a 256 "${zip}" > SHA256SUMS
+          sha="$(cut -d' ' -f1 SHA256SUMS)"
+          printf '{"version":"%s","commit":"%s","zip":"%s","sha256":"%s","builtAt":"%s"}\n' \
+            "${VERSION}" "${GITHUB_SHA}" "${zip}" "${sha}" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+            > fork-release.json
+          notes="Built from ${GITHUB_SHA} on nick/v2.
+
+          Install with fork/update.sh, or fork/update-all.sh for every machine."
+          gh release create "fork-v${VERSION}" "${zip}" SHA256SUMS fork-release.json \
+            --repo "${GITHUB_REPOSITORY}" \
+            --target "${GITHUB_SHA}" \
+            --title "Fork ${VERSION}" \
+            --notes "${notes}" \
+            --latest
