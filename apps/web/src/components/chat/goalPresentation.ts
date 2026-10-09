@@ -55,6 +55,22 @@ export function goalNeedsAttention(goal: OrchestrationV2ThreadGoalSummary): bool
   );
 }
 
+/** A goal that has not ended; its thread's composer messages the goal. */
+export function goalIsLive(goal: OrchestrationV2ThreadGoalSummary): boolean {
+  return goal.status !== "complete" && goal.status !== "stopped";
+}
+
+/** Where a message typed in a goal thread will go. */
+export function goalComposerPlaceholder(goal: OrchestrationV2ThreadGoalSummary): string {
+  if (goal.status === "paused" || goal.status === "blocked") {
+    return "Reply to resume the goal; the next iteration gets your message";
+  }
+  if (goal.status === "active" && goal.currentChildThreadId !== null) {
+    return "Message the running goal iteration";
+  }
+  return "Leave a message for the next goal iteration";
+}
+
 export function goalIsRunning(goal: OrchestrationV2ThreadGoalSummary): boolean {
   return goal.status === "active" || goal.status === "usageLimited";
 }

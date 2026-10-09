@@ -175,6 +175,7 @@ import {
   animateSidebarLayoutChanges,
   applySidebarThreadDrop,
   filterSidebarV2VisibleThreads,
+  sidebarGoalStatusLabel,
   buildBulkTitleRegenerationContextMenuItem,
   buildBulkUnpinContextMenuItem,
   deleteSelectedThreadEntries,
@@ -1238,7 +1239,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
   // Status hues follow the system-wide convention set by sidebar v1 and the
   // mobile Live Activity/widgets (amber approval, indigo input, sky working)
   // so a thread reads the same color everywhere it surfaces.
-  const topStatus =
+  const baseTopStatus =
     status === "working"
       ? {
           label: "Working",
@@ -1292,6 +1293,12 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
                         className: "text-success",
                       }
                     : null;
+  // Goal threads name their iteration or why the goal stopped.
+  const goalStatusLabel = sidebarGoalStatusLabel(thread.goal, status);
+  const topStatus =
+    goalStatusLabel !== null && baseTopStatus !== null
+      ? { ...baseTopStatus, label: goalStatusLabel }
+      : baseTopStatus;
   const isWokeStatus = topStatus?.icon === "woke";
 
   const branchMismatch = resolveLocalCheckoutBranchMismatch({

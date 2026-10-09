@@ -515,7 +515,7 @@ export function isSidebarSubagentThread(thread: Pick<SidebarThreadSummary, "line
 }
 
 export function filterSidebarV2VisibleThreads<
-  T extends Pick<SidebarThreadSummary, "archivedAt" | "lineage"> & {
+  T extends Pick<SidebarThreadSummary, "archivedAt" | "lineage" | "goalIteration"> & {
     environmentId: string;
     projectId: string;
   },
@@ -524,6 +524,8 @@ export function filterSidebarV2VisibleThreads<
     (thread) =>
       thread.archivedAt === null &&
       !isSidebarSubagentThread(thread) &&
+      // Goal iterations show through their goal's row, which carries their status.
+      thread.goalIteration == null &&
       (scopedProjectKeys === null ||
         scopedProjectKeys.has(`${thread.environmentId}:${thread.projectId}`)),
   );
@@ -926,13 +928,37 @@ type SidebarThreadStatusInput = Pick<
   "hasPendingApprovals" | "hasPendingUserInput" | "runtime" | "goal"
 >;
 
+/** A goal waiting on the user: a question in its iteration, or a stop only they can lift. */
+function goalWantsUser(goal: NonNullable<SidebarThreadSummary["goal"]>): boolean {
+  return (
+    goal.needsInput ||
+    goal.status === "blocked" ||
+    (goal.status === "paused" && goal.statusReason !== "user")
+  );
+}
+
+/** The sidebar pill text for a goal thread; null keeps the usual status label. */
+export function sidebarGoalStatusLabel(
+  goal: SidebarThreadSummary["goal"],
+  status: SidebarThreadStatus,
+): string | null {
+  if (goal == null || goal.status === "complete" || goal.status === "stopped") return null;
+  if (status === "input") {
+    return goal.needsInput ? "Input" : goal.status === "blocked" ? "Blocked" : "Paused";
+  }
+  if (status === "working" && goal.status === "active") {
+    return goal.iteration === 0 ? "Goal" : `Iteration ${goal.iteration}`;
+  }
+  return null;
+}
+
 export function resolveSidebarThreadStatus(thread: SidebarThreadStatusInput): SidebarThreadStatus {
   if (thread.hasPendingApprovals) {
     return "approval";
   }
-  // A goal's iteration runs in a hidden child thread, so its questions and
-  // activity surface on the goal's own thread.
-  if (thread.hasPendingUserInput || thread.goal?.needsInput) {
+  // A goal's iterations stay out of the roster, so their questions, activity,
+  // and the goal's own stops surface on the goal's thread.
+  if (thread.hasPendingUserInput || (thread.goal != null && goalWantsUser(thread.goal))) {
     return "input";
   }
   if (
@@ -941,6 +967,9 @@ export function resolveSidebarThreadStatus(thread: SidebarThreadStatusInput): Si
     thread.goal?.status === "active"
   ) {
     return "working";
+  }
+  if (thread.goal?.status === "usageLimited") {
+    return "limited";
   }
   if (thread.runtime?.status === "idle") {
     return "waiting";

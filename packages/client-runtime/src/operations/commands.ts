@@ -487,6 +487,29 @@ export const setThreadGoal = Effect.fn("EnvironmentCommands.setThreadGoal")(func
     ...(input.noProgressLimit === undefined ? {} : { noProgressLimit: input.noProgressLimit }),
     ...(input.modelSelection === undefined ? {} : { modelSelection: input.modelSelection }),
     ...(input.runtimeMode === undefined ? {} : { runtimeMode: input.runtimeMode }),
+    ...(input.doneWhen === undefined ? {} : { doneWhen: input.doneWhen }),
+    ...(input.background === undefined ? {} : { background: input.background }),
+    ...(input.permissions === undefined ? {} : { permissions: input.permissions }),
+    ...(input.iterationTimeoutMins === undefined
+      ? {}
+      : { iterationTimeoutMins: input.iterationTimeoutMins }),
+  });
+});
+
+export type MessageThreadGoalInput = Omit<
+  Extract<OrchestrationV2Command, { type: "thread.goal.message" }>,
+  "type" | "commandId"
+> &
+  CommandMetadata;
+export const messageThreadGoal = Effect.fn("EnvironmentCommands.messageThreadGoal")(function* (
+  input: MessageThreadGoalInput,
+) {
+  return yield* dispatch({
+    type: "thread.goal.message",
+    commandId: yield* allocateCommandId(input),
+    threadId: input.threadId,
+    goalId: input.goalId,
+    text: input.text,
   });
 });
 

@@ -198,25 +198,40 @@ provider supports it. Web and desktop also offer compaction from the context met
 T3 Code uses `/t3-goal`; `/goal` remains available for provider-native commands.
 
 Send `/t3-goal` followed by what you want done to have the agent keep working until
-it is finished. Each iteration starts in a fresh top-level thread, visible in the
-sidebar, in the same workspace. It sees only the goal and the notes earlier
-iterations left, so long tasks don't fill up one conversation. Iteration agents
-can delegate work to subagents. The agent says when the goal is complete or blocked.
+it is finished. Each iteration starts in a fresh thread in the same workspace, so
+long tasks don't fill up one conversation, and can delegate work to subagents.
+Iterations don't see the conversation you started the goal from, so the dialog
+asks for:
 
-- **Completion check**: give a command such as `pnpm test`. The goal only
-  completes once it passes; otherwise the failure output goes to the next
-  iteration.
+- **Done when**: what finished looks like. Every iteration works toward it, and
+  the agent says when the goal is complete or blocked.
+- **Background**: filled in from the thread's latest plan or reply. Trim it to
+  what every iteration should know.
+- **Pre-approved actions**: what the agent may do without asking, such as
+  committing and opening pull requests. For anything else it asks and waits.
+- **Completion check**: a command such as `pnpm test`. The goal only completes
+  once it passes; otherwise the failure output goes to the next iteration.
 - **Burn guard**: pauses the goal when one of the provider's usage limits climbs
   faster than you allow, for example 20% within an hour. It watches the whole
   account, so other threads count toward it.
-- The goal also pauses after several iterations in a row with no progress, when
-  an iteration fails or runs for more than two hours, and when a usage limit is
-  hit. It resumes by itself after the limit resets.
+- **Minutes per iteration**: shortly before the limit the agent is asked to wrap
+  up, and at the limit the next iteration takes over from its notes.
 
-The banner above the composer shows progress and has **Pause**, **Resume**, and
-**Stop**. When an iteration asks a question, the banner's **Answer** button opens
-that iteration. The thread details panel lists every iteration with its notes and
-check results. Goals start from web and desktop, on threads that already exist.
+Iterations keep a handoff file in the workspace with the detailed state, so the
+next one can pick up without redoing checks.
+
+While a goal runs, its thread is how you talk to it. A message there reaches the
+running iteration, waits for the next one, or, if the goal is blocked or paused,
+resumes it with your message. The goal also pauses after several iterations in a
+row with no progress and when an iteration fails, and waits out usage limits
+before continuing by itself. You get a notification when it needs you or
+finishes.
+
+Iteration threads stay out of the sidebar; the goal's row shows which iteration
+is running. The banner above the composer has **Pause**, **Resume**, and **Stop**,
+plus **Answer** when an iteration asks a question. The thread details panel lists
+every iteration with its notes and check results. Goals start from web and
+desktop, on threads that already exist.
 
 ## Context in your message
 

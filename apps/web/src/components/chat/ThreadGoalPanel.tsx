@@ -6,6 +6,7 @@ import type {
   ThreadId,
 } from "@t3tools/contracts";
 import { useNavigate } from "@tanstack/react-router";
+import type { ReactNode } from "react";
 
 import { cn } from "../../lib/utils";
 import { useThreadProjection } from "../../state/entities";
@@ -22,6 +23,7 @@ const OUTCOME_LABELS: Record<OrchestrationV2GoalIterationOutcome, string> = {
   failed: "Failed",
   interrupted: "Interrupted",
   usage_limited: "Usage limit",
+  timed_out: "Out of time",
 };
 
 const NOTES_SHOWN = 5;
@@ -56,6 +58,20 @@ export function ThreadGoalPanel(props: {
         <p className="text-2xs text-muted-foreground">{goalFacts(goal)}</p>
         {goal.completedSummary ? (
           <p className="text-xs text-foreground/70">{goal.completedSummary}</p>
+        ) : null}
+        {goal.doneWhen ? <GoalFact label="Done when">{goal.doneWhen}</GoalFact> : null}
+        {goal.permissions ? <GoalFact label="Pre-approved">{goal.permissions}</GoalFact> : null}
+        {goal.handoffPath ? (
+          <GoalFact label="Handoff">
+            <code>{goal.handoffPath}</code>
+          </GoalFact>
+        ) : null}
+        {goal.resumeNote?.userMessage || goal.current?.pendingMessages?.length ? (
+          <GoalFact label="Your message">
+            {goal.current?.pendingMessages?.length
+              ? "Delivering to the running iteration"
+              : "Waiting for the next iteration"}
+          </GoalFact>
         ) : null}
         {goal.lastCheck ? (
           <details className="text-2xs text-muted-foreground">
@@ -116,7 +132,17 @@ function goalFacts(goal: OrchestrationV2ThreadGoal): string {
     goal.burnGuard
       ? `burn guard ${goal.burnGuard.maxPercentPoints}% / ${goal.burnGuard.windowMins}m`
       : "no burn guard",
+    `${goal.iterationTimeoutMins ?? 120} min per iteration`,
   ].join(" · ");
+}
+
+function GoalFact(props: { readonly label: string; readonly children: ReactNode }) {
+  return (
+    <p className="text-xs text-foreground/70">
+      <span className="text-muted-foreground">{props.label}: </span>
+      {props.children}
+    </p>
+  );
 }
 
 function IterationRow(props: {

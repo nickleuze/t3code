@@ -33,6 +33,7 @@ import {
   resolveSidebarThreadSection,
   resolveSidebarRowAccessibility,
   resolveSidebarThreadStatus,
+  sidebarGoalStatusLabel,
   resolveSidebarV2TopStatus,
   resolveThreadLastVisitedAt,
   resolveThreadRowClassName,
@@ -485,10 +486,20 @@ describe("sidebar thread lineage helpers", () => {
       environmentId,
       projectId: ProjectId.make("project-other"),
     });
+    const goalIteration = makeThreadFixture({
+      id: ThreadId.make("thread-goal-iteration"),
+      environmentId,
+      projectId,
+      goalIteration: {
+        parentThreadId: parentId,
+        goalId: CommandId.make("command:goal"),
+        iteration: 2,
+      },
+    });
 
     expect(
       filterSidebarV2VisibleThreads(
-        [root, subagent, fork, archived, otherProject],
+        [root, subagent, fork, archived, otherProject, goalIteration],
         new Set([`${environmentId}:${projectId}`]),
       ).map((thread) => thread.id),
     ).toEqual([parentId, fork.id]);
@@ -982,9 +993,45 @@ describe("resolveSidebarThreadStatus", () => {
     expect(resolveSidebarThreadStatus({ ...idle, goal: { ...goal, needsInput: true } })).toBe(
       "input",
     );
-    expect(resolveSidebarThreadStatus({ ...idle, goal: { ...goal, status: "paused" } })).toBe(
-      "ready",
+    // Only a pause the user chose stays quiet; other stops want them.
+    expect(
+      resolveSidebarThreadStatus({
+        ...idle,
+        goal: { ...goal, status: "paused", statusReason: "user" },
+      }),
+    ).toBe("ready");
+    expect(
+      resolveSidebarThreadStatus({
+        ...idle,
+        goal: { ...goal, status: "paused", statusReason: "no_progress" },
+      }),
+    ).toBe("input");
+    expect(
+      resolveSidebarThreadStatus({
+        ...idle,
+        goal: { ...goal, status: "blocked", statusReason: "agent" },
+      }),
+    ).toBe("input");
+    expect(resolveSidebarThreadStatus({ ...idle, goal: { ...goal, status: "usageLimited" } })).toBe(
+      "limited",
     );
+  });
+
+  it("labels goal threads with their iteration or why they stopped", () => {
+    const goal = {
+      id: CommandId.make("command:goal"),
+      objective: "Ship it",
+      status: "active" as const,
+      statusReason: null,
+      iteration: 4,
+      tokensUsed: 0,
+      needsInput: false,
+      currentChildThreadId: null,
+    };
+    expect(sidebarGoalStatusLabel(goal, "working")).toBe("Iteration 4");
+    expect(sidebarGoalStatusLabel({ ...goal, status: "blocked" }, "input")).toBe("Blocked");
+    expect(sidebarGoalStatusLabel({ ...goal, needsInput: true }, "input")).toBe("Input");
+    expect(sidebarGoalStatusLabel({ ...goal, status: "complete" }, "ready")).toBeNull();
   });
 
   it("reports working for running and starting runtimes", () => {

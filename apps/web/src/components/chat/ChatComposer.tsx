@@ -1539,6 +1539,8 @@ export interface ChatComposerProps {
   onUsageLimitsCommand?: (() => void) | undefined;
   /** Opens the `/t3-goal` dialog; the menu offers `/t3-goal` only when this is set. */
   onGoalCommand?: (() => void) | undefined;
+  /** Replaces the default placeholder while sends go to the thread's goal. */
+  goalPlaceholder?: string | undefined;
   environmentUnavailable: {
     readonly label: string;
     readonly connection: EnvironmentConnectionPresentation;
@@ -7366,7 +7368,8 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                                 ? "Enable a provider in Settings to send a message"
                                 : phase === "disconnected"
                                   ? DISCONNECTED_COMPOSER_PLACEHOLDER
-                                  : "Ask anything, @tag files/folders, $use skills, or / for commands"
+                                  : (props.goalPlaceholder ??
+                                    "Ask anything, @tag files/folders, $use skills, or / for commands")
                     }
                     disabled={
                       isConnecting ||

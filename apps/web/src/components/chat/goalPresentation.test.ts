@@ -1,7 +1,12 @@
 import { CommandId, type OrchestrationV2ThreadGoalSummary } from "@t3tools/contracts";
 import { describe, expect, it } from "vite-plus/test";
 
-import { formatGoalTokens, goalStatusLabel, parseComposerGoalCommand } from "./goalPresentation";
+import {
+  formatGoalTokens,
+  goalComposerPlaceholder,
+  goalStatusLabel,
+  parseComposerGoalCommand,
+} from "./goalPresentation";
 
 const goal: OrchestrationV2ThreadGoalSummary = {
   id: CommandId.make("command:goal"),
@@ -45,5 +50,17 @@ describe("goal status label", () => {
     expect(formatGoalTokens(4_250)).toBe("4.3k tokens");
     expect(formatGoalTokens(48_000)).toBe("48k tokens");
     expect(formatGoalTokens(2_400_000)).toBe("2.4M tokens");
+  });
+});
+
+describe("goal composer placeholder", () => {
+  it("says where a message in the goal thread goes", () => {
+    expect(goalComposerPlaceholder({ ...goal, status: "blocked" })).toMatch(/resume the goal/);
+    expect(
+      goalComposerPlaceholder({ ...goal, currentChildThreadId: "thread:child" as never }),
+    ).toBe("Message the running goal iteration");
+    expect(goalComposerPlaceholder({ ...goal, status: "usageLimited" })).toMatch(
+      /next goal iteration/,
+    );
   });
 });

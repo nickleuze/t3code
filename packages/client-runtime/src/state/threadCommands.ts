@@ -42,6 +42,7 @@ import {
   type ReorderActiveThreadInput,
   type SetThreadAutoSettleInput,
   type SetThreadGoalInput,
+  type MessageThreadGoalInput,
   type ControlThreadGoalInput,
   type SettleThreadInput,
   type SnoozeThreadInput,
@@ -78,6 +79,7 @@ import {
   reorderActiveThread,
   setThreadAutoSettle,
   setThreadGoal,
+  messageThreadGoal,
   controlThreadGoal,
   settleThread,
   snoozeThread,
@@ -240,6 +242,12 @@ export function createThreadEnvironmentAtoms<R, E>(
     setGoal: createEnvironmentCommand(runtime, {
       label: "environment-data:commands:thread:set-goal",
       execute: (input: SetThreadGoalInput) => setThreadGoal(input),
+      scheduler,
+      concurrency,
+    }),
+    messageGoal: createEnvironmentCommand(runtime, {
+      label: "environment-data:commands:thread:message-goal",
+      execute: (input: MessageThreadGoalInput) => messageThreadGoal(input),
       scheduler,
       concurrency,
     }),

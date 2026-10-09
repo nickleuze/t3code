@@ -2,7 +2,11 @@ import { ChatCanvas } from "./chat/ChatCanvas";
 import { usageLimitRecoveryBannerItem } from "./chat/UsageLimitRecoveryBanner";
 import { goalBannerItem, type GoalControlAction } from "./chat/GoalBanner";
 import { GoalDialog, type GoalDialogSubmission } from "./chat/GoalDialog";
-import { parseComposerGoalCommand } from "./chat/goalPresentation";
+import {
+  goalComposerPlaceholder,
+  goalIsLive,
+  parseComposerGoalCommand,
+} from "./chat/goalPresentation";
 import {
   resolveBackgroundDraftWorkspaceOptions,
   resolveDraftHeroState,
@@ -1543,7 +1547,9 @@ export default function ChatView(props: ChatViewProps) {
   });
   // The objective the open /t3-goal dialog starts with; null while it is closed.
   const [goalDialogObjective, setGoalDialogObjective] = useState<string | null>(null);
-  const goalSendNoticeShownRef = useRef(new Set<string>());
+  const messageThreadGoal = useAtomCommand(threadEnvironment.messageGoal, {
+    reportFailure: false,
+  });
   const switchGitRef = useAtomCommand(vcsEnvironment.switchRef, { reportFailure: false });
   const setThreadRuntimeMode = useAtomCommand(threadEnvironment.setRuntimeMode, {
     reportFailure: false,
@@ -8140,23 +8146,48 @@ export default function ChatView(props: ChatViewProps) {
       }
       return;
     }
-    // Sending here is allowed while an iteration runs; say once per goal that
-    // both share the workspace.
+    // While a goal is live this thread is its control channel: a message
+    // resumes a blocked or paused goal, or reaches the running iteration.
     if (
-      activeGoal?.status === "active" &&
-      activeGoal.currentChildThreadId !== null &&
-      !goalSendNoticeShownRef.current.has(activeGoal.id) &&
+      activeGoal !== null &&
+      goalIsLive(activeGoal) &&
+      activeThreadShell &&
+      !directAnnotation &&
       parseComposerGoalCommand(promptRef.current) === null
     ) {
-      goalSendNoticeShownRef.current.add(activeGoal.id);
-      toastManager.add(
-        stackedThreadToast({
-          type: "info",
-          title: "A goal iteration is also working here",
-          description:
-            "Your message runs alongside it in the same workspace, so their edits can overlap.",
-        }),
-      );
+      const text = promptRef.current.trim();
+      if (composerHasNonPromptContent) {
+        toastManager.add(
+          stackedThreadToast({
+            type: "info",
+            title: "Goals take text messages",
+            description: "Remove attachments and context, or send them in the iteration's thread.",
+          }),
+        );
+        return;
+      }
+      if (text.length === 0) return;
+      const result = await messageThreadGoal({
+        environmentId,
+        input: { threadId: activeThreadShell.id, goalId: activeGoal.id, text },
+      });
+      if (result._tag === "Failure") {
+        toastManager.add(
+          stackedThreadToast({
+            type: "error",
+            title: "Could not message the goal",
+            description: (() => {
+              const error = squashAtomCommandFailure(result);
+              return error instanceof Error ? error.message : "An error occurred.";
+            })(),
+          }),
+        );
+        return;
+      }
+      promptRef.current = "";
+      setComposerDraftPrompt(composerDraftTarget, "");
+      composerRef.current?.resetCursorState();
+      return;
     }
     // `/t3-goal <objective>` opens the goal dialog; the draft stays until the goal starts.
     if (goalCommandAvailable && !directAnnotation && !composerHasNonPromptContent) {
@@ -10605,6 +10636,13 @@ export default function ChatView(props: ChatViewProps) {
       {goalDialogObjective !== null && activeThreadShell ? (
         <GoalDialog
           initialObjective={goalDialogObjective}
+          initialBackground={
+            activeProposedPlan?.planMarkdown ??
+            serverProjection?.messages.findLast(
+              (message) => message.role === "assistant" && message.text.trim().length > 0,
+            )?.text ??
+            null
+          }
           runtimeMode={activeThreadShell.runtimeMode}
           onSubmit={startGoal}
           onClose={() => setGoalDialogObjective(null)}
@@ -10990,6 +11028,11 @@ export default function ChatView(props: ChatViewProps) {
                               bannerItems={composerBannerItems}
                               // With attachments or contexts aboard the pick just inserts the
                               // text, so it sends as a prompt like the typed path would.
+                              goalPlaceholder={
+                                activeGoal !== null && goalIsLive(activeGoal)
+                                  ? goalComposerPlaceholder(activeGoal)
+                                  : undefined
+                              }
                               onGoalCommand={
                                 goalCommandAvailable ? () => setGoalDialogObjective("") : undefined
                               }

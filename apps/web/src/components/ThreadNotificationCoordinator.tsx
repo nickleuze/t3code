@@ -106,7 +106,10 @@ function EnvironmentNotifications({
     strict: false,
   });
   const previous = useRef(
-    new Map<ThreadId, { attention: string | null; completion: number | null }>(),
+    new Map<
+      ThreadId,
+      { attention: string | null; completion: number | null; goalCompleted: string | null }
+    >(),
   );
 
   useEffect(() => {
@@ -114,9 +117,14 @@ function EnvironmentNotifications({
       previous.current.clear();
       return;
     }
-    const next = new Map<ThreadId, { attention: string | null; completion: number | null }>();
+    const next = new Map<
+      ThreadId,
+      { attention: string | null; completion: number | null; goalCompleted: string | null }
+    >();
     for (const rawThread of shell.snapshot.value.threads) {
       if (rawThread.lineage.relationshipToParent === "subagent") continue;
+      // Goal iterations report through their goal's thread, not one by one.
+      if (rawThread.goalIteration != null) continue;
       const thread = presentThreadShell(environmentId, rawThread);
       let status = resolveSidebarThreadStatus(thread);
       if (status === "ready" && thread.latestRun?.status === "failed") status = "failed";
@@ -134,25 +142,41 @@ function EnvironmentNotifications({
         settled && thread.latestRun?.status === "completed" && Number.isFinite(completedAt)
           ? completedAt
           : (prior?.completion ?? null);
-      next.set(thread.id, { attention, completion });
+      const goal = thread.goal ?? null;
+      const goalCompleted = goal?.status === "complete" ? goal.id : null;
+      next.set(thread.id, { attention, completion, goalCompleted });
       if (!prior || thread.archivedAt !== null) continue;
+      const finishedGoal = goalCompleted !== null && goalCompleted !== prior.goalCompleted;
       const kind =
         attention && attention !== prior.attention
           ? "input"
-          : completion !== null && (prior.completion === null || completion > prior.completion)
+          : finishedGoal ||
+              (completion !== null && (prior.completion === null || completion > prior.completion))
             ? "completion"
             : null;
       if (!kind) continue;
+      const goalAttentionTitle =
+        goal === null || status !== "input" || thread.hasPendingUserInput
+          ? null
+          : goal.needsInput
+            ? "Goal needs input"
+            : goal.status === "blocked"
+              ? "Goal blocked"
+              : "Goal paused";
       const title =
         kind === "completion"
-          ? "Thread completed"
-          : status === "approval"
-            ? "Approval needed"
-            : status === "limited"
-              ? "Usage limit reached"
-              : status === "failed"
-                ? "Thread failed"
-                : "Input needed";
+          ? finishedGoal
+            ? "Goal complete"
+            : "Thread completed"
+          : goalAttentionTitle !== null
+            ? goalAttentionTitle
+            : status === "approval"
+              ? "Approval needed"
+              : status === "limited"
+                ? "Usage limit reached"
+                : status === "failed"
+                  ? "Thread failed"
+                  : "Input needed";
       if (hasNotificationSound(mode)) {
         void playNotificationSound(kind, () =>
           hasNotificationSound(getClientSettings().notificationMode),

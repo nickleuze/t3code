@@ -33,10 +33,13 @@ export function goalBannerItem(props: GoalBannerProps): ComposerBannerStackItem 
     priority: goalNeedsAttention(goal) ? "urgent" : goalIsRunning(goal) ? "activity" : "notice",
     icon: <TargetIcon />,
     title: goalStatusLabel(goal),
+    // A blocked or finished goal leads with what the agent said; otherwise the objective.
     description:
-      goal.iteration > 0
-        ? `${goal.objective} · ${formatGoalTokens(goal.tokensUsed)}`
-        : goal.objective,
+      (goal.status === "blocked" || goal.status === "complete") && goal.summaryNote
+        ? goal.summaryNote
+        : goal.iteration > 0
+          ? `${goal.objective} · ${formatGoalTokens(goal.tokensUsed)}`
+          : goal.objective,
     actions: <GoalBannerActions key={`${goal.id}:${goal.status}`} {...props} />,
     ...(clearable
       ? {
