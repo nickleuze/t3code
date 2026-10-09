@@ -61,10 +61,23 @@ jobs:
       # No update feed: Squirrel.Mac cannot install ad-hoc signed builds. The
       # build derives the feed from GITHUB_REPOSITORY, which Actions does not
       # let a step override, so it is removed from this command's environment.
+      # T3 Connect sign-in and relay settings are baked into the build (locally
+      # they come from .env). They are the same public values upstream ships;
+      # without them the app cannot connect to other machines.
       - name: Build
         env:
           T3CODE_DESKTOP_VERSION: ${{ steps.version.outputs.version }}
+          T3CODE_CLERK_PUBLISHABLE_KEY: ${{ vars.T3CODE_CLERK_PUBLISHABLE_KEY }}
+          T3CODE_CLERK_JWT_TEMPLATE: ${{ vars.T3CODE_CLERK_JWT_TEMPLATE }}
+          T3CODE_CLERK_CLI_OAUTH_CLIENT_ID: ${{ vars.T3CODE_CLERK_CLI_OAUTH_CLIENT_ID }}
+          T3CODE_RELAY_URL: ${{ vars.T3CODE_RELAY_URL }}
         run: |
+          for name in T3CODE_CLERK_PUBLISHABLE_KEY T3CODE_CLERK_JWT_TEMPLATE T3CODE_CLERK_CLI_OAUTH_CLIENT_ID T3CODE_RELAY_URL; do
+            if [ -z "${!name}" ]; then
+              echo "Repository variable $name is not set; the build could not use T3 Connect." >&2
+              exit 1
+            fi
+          done
           env -u GITHUB_REPOSITORY -u T3CODE_DESKTOP_UPDATE_REPOSITORY \
             PATH="$PWD/node_modules/.bin:$PATH" \
             node scripts/build-desktop-artifact.ts --platform mac --target dmg --arch arm64
