@@ -15,6 +15,7 @@ import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Stream from "effect/Stream";
+import * as TestClock from "effect/testing/TestClock";
 import * as ChildProcessSpawner from "effect/unstable/process/ChildProcessSpawner";
 
 import * as CheckpointStore from "../checkpointing/CheckpointStore.ts";
@@ -140,7 +141,11 @@ const TestLayer = Layer.mergeAll(
 
 const setup = Effect.fn("GoalLoopTest.setup")(function* (
   name: string,
-  goal: { readonly checkCommand?: string; readonly noProgressLimit?: number } = {},
+  goal: {
+    readonly checkCommand?: string;
+    readonly noProgressLimit?: number;
+    readonly iterationTimeoutMins?: number;
+  } = {},
 ) {
   const projects = yield* ProjectService.ProjectService;
   const orchestrator = yield* Orchestrator.OrchestratorV2;
@@ -341,9 +346,10 @@ const readGoal = (threadId: ThreadId) =>
     Effect.map((records) => records.thread.goal!),
   );
 
-/** Marks the current iteration's only child run completed. */
+/** Ends the current iteration's first child run with `status`. */
 const completeChildRun = Effect.fn("GoalLoopTest.completeChildRun")(function* (
   childThreadId: ThreadId,
+  status: "completed" | "interrupted" = "completed",
 ) {
   const orchestrator = yield* Orchestrator.OrchestratorV2;
   const sink = yield* EventSink.EventSinkV2;
@@ -352,12 +358,12 @@ const completeChildRun = Effect.fn("GoalLoopTest.completeChildRun")(function* (
   yield* sink.write({
     events: [
       {
-        id: EventId.make(`event:${run.id}:completed`),
+        id: EventId.make(`event:${run.id}:${status}`),
         type: "run.updated",
         threadId: childThreadId,
         runId: run.id,
         occurredAt: now,
-        payload: { ...run, status: "completed", startedAt: run.startedAt ?? now, completedAt: now },
+        payload: { ...run, status, startedAt: run.startedAt ?? now, completedAt: now },
       },
     ],
   });
@@ -466,6 +472,59 @@ it.layer(TestLayer)("goal loop worker", (it) => {
           ),
         );
         assert.include(retryChild.messages[0]?.text, "2 failing");
+      }),
+    ),
+  );
+
+  it.effect("delivers a reply from the goal thread into the running iteration", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const { orchestrator, threadId, goalId } = yield* setup("loop-reply");
+        const loop = yield* goalLoop;
+        yield* loop.sweep();
+        const childThreadId = (yield* readGoal(threadId)).current!.childThreadId;
+
+        yield* orchestrator.dispatch({
+          type: "thread.goal.message",
+          commandId: CommandId.make("command:loop-reply:message"),
+          threadId,
+          goalId,
+          text: "Use the staging bucket",
+        });
+        assert.lengthOf((yield* readGoal(threadId)).current?.pendingMessages ?? [], 1);
+
+        yield* loop.sweep();
+        assert.lengthOf((yield* readGoal(threadId)).current?.pendingMessages ?? [], 0);
+        const child = yield* orchestrator.getThreadRecords(childThreadId, ["runs"]);
+        assert.lengthOf(child.runs, 2);
+      }),
+    ),
+  );
+
+  it.effect("nudges an iteration to wrap up, stops it at the limit, and moves on", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const { threadId } = yield* setup("loop-timeout", { iterationTimeoutMins: 30 });
+        const loop = yield* goalLoop;
+        yield* loop.sweep();
+        const childThreadId = (yield* readGoal(threadId)).current!.childThreadId;
+
+        yield* TestClock.adjust("23 minutes");
+        yield* loop.sweep();
+        assert.isString((yield* readGoal(threadId)).current?.wrapUpSentAt);
+
+        yield* TestClock.adjust("8 minutes");
+        yield* loop.sweep();
+        assert.isString((yield* readGoal(threadId)).current?.timedOutAt);
+
+        yield* completeChildRun(childThreadId, "interrupted");
+        yield* loop.sweep();
+        const afterTimeout = yield* readGoal(threadId);
+        assert.deepInclude(afterTimeout, { status: "active", current: null });
+        assert.strictEqual(afterTimeout.history.at(-1)?.outcome, "timed_out");
+
+        yield* loop.sweep();
+        assert.strictEqual((yield* readGoal(threadId)).iteration, 2);
       }),
     ),
   );

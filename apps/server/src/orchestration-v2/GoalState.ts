@@ -34,6 +34,9 @@ export const MAX_GOAL_NOTE_CHARS = 2_000;
 export const MAX_GOAL_NOTES_TOTAL_CHARS = 8_000;
 export const MAX_GOAL_HISTORY = 20;
 export const MAX_GOAL_CHECK_OUTPUT_CHARS = 4_000;
+export const DEFAULT_GOAL_ITERATION_TIMEOUT_MINS = 120;
+const MAX_GOAL_USER_MESSAGE_CHARS = 4_000;
+const SHELL_SUMMARY_CHARS = 200;
 const SHELL_OBJECTIVE_CHARS = 120;
 
 const LIVE_STATUSES: ReadonlySet<OrchestrationV2GoalStatus> = new Set([
@@ -58,6 +61,15 @@ export type GoalCommandInput =
       readonly noProgressLimit: number | undefined;
       readonly modelSelection: ModelSelection;
       readonly runtimeMode: RuntimeMode;
+      readonly doneWhen: string | null;
+      readonly background: string | null;
+      readonly permissions: string | null;
+      readonly iterationTimeoutMins: number | undefined;
+    }
+  | {
+      readonly type: "message";
+      readonly goalId: CommandId;
+      readonly text: string;
     }
   | {
       readonly type: "control";
@@ -78,7 +90,11 @@ export type GoalCommandInput =
       readonly iteration: number;
       readonly childThreadId: ThreadId;
       readonly report:
-        | { readonly type: "note"; readonly text: string }
+        | {
+            readonly type: "note";
+            readonly text: string;
+            readonly handoffPath?: string | undefined;
+          }
         | {
             readonly type: "claim";
             readonly status: "complete" | "blocked";
@@ -98,6 +114,19 @@ export type GoalCommandResult =
 
 const reject = (reason: string): GoalCommandResult => ({ ok: false, reason });
 const accept = (goal: OrchestrationV2ThreadGoal | null): GoalCommandResult => ({ ok: true, goal });
+
+/** Iteration threads are named for the goal until their own notes say what they did. */
+export function goalIterationTitle(iteration: number, detail: string): string {
+  const firstLine = detail.split("\n")[0]!.trim();
+  const clipped = firstLine.length > 80 ? `${firstLine.slice(0, 79)}…` : firstLine;
+  return `Goal #${iteration}: ${clipped}`;
+}
+
+export function goalIterationTimeoutMins(
+  goal: Pick<OrchestrationV2ThreadGoal, "iterationTimeoutMins">,
+) {
+  return goal.iterationTimeoutMins ?? DEFAULT_GOAL_ITERATION_TIMEOUT_MINS;
+}
 
 /**
  * Applies one goal command to the thread's current goal. `now` is an ISO
@@ -142,6 +171,12 @@ export function applyGoalCommand(
       history: [],
       resumeAt: null,
       completedSummary: null,
+      doneWhen: command.doneWhen,
+      background: command.background,
+      permissions: command.permissions,
+      iterationTimeoutMins: command.iterationTimeoutMins ?? DEFAULT_GOAL_ITERATION_TIMEOUT_MINS,
+      handoffPath: null,
+      resumeNote: null,
       createdAt: now,
       updatedAt: now,
     });
@@ -155,7 +190,9 @@ export function applyGoalCommand(
 
   switch (command.type) {
     case "control":
-      return applyControl(goal, command, touch);
+      return applyControl(goal, command, now, touch);
+    case "message":
+      return applyMessage(goal, command.text, now, touch);
     case "iteration.start": {
       if (goal.status !== "active") return reject("The goal is not active.");
       if (goal.current !== null) return reject("An iteration is already running.");
@@ -165,6 +202,8 @@ export function applyGoalCommand(
       return touch({
         ...goal,
         iteration: command.iteration,
+        // The iteration's opening prompt carries the note, so it is consumed here.
+        resumeNote: null,
         current: {
           iteration: command.iteration,
           childThreadId: command.childThreadId,
@@ -197,6 +236,9 @@ export function applyGoalCommand(
             text: command.report.text.slice(0, MAX_GOAL_NOTE_CHARS),
             at: now,
           }),
+          ...(command.report.handoffPath === undefined
+            ? {}
+            : { handoffPath: command.report.handoffPath }),
           current: { ...current, notesThisIteration: current.notesThisIteration + 1 },
         });
       }
@@ -217,9 +259,87 @@ export function applyGoalCommand(
   }
 }
 
+/**
+ * The fields a resume changes. A blocked goal's summary moves into the resume
+ * note so the next iteration knows why the last one stopped, and the stale
+ * summary stops showing while the goal works again.
+ */
+function resumedGoal(
+  goal: OrchestrationV2ThreadGoal,
+  userMessage: string | null,
+  now: string,
+): Omit<OrchestrationV2ThreadGoal, "updatedAt"> {
+  return {
+    ...goal,
+    status: "active",
+    statusReason: null,
+    consecutiveNoProgress: 0,
+    resumeAt: null,
+    completedSummary: null,
+    resumeNote: withResumeNote(
+      goal,
+      userMessage,
+      goal.status === "blocked" ? goal.completedSummary : null,
+      now,
+    ),
+    // Resuming past the cap grants another full allowance.
+    safetyCap:
+      goal.iteration >= goal.safetyCap ? goal.iteration + DEFAULT_GOAL_SAFETY_CAP : goal.safetyCap,
+  };
+}
+
+function withResumeNote(
+  goal: OrchestrationV2ThreadGoal,
+  userMessage: string | null,
+  blockedSummary: string | null,
+  now: string,
+): OrchestrationV2ThreadGoal["resumeNote"] {
+  const previous = goal.resumeNote ?? null;
+  const messages = [previous?.userMessage, userMessage].filter(
+    (text): text is string => text != null && text.length > 0,
+  );
+  const combinedMessage =
+    messages.length === 0 ? null : messages.join("\n\n").slice(-MAX_GOAL_USER_MESSAGE_CHARS);
+  const combinedSummary = blockedSummary ?? previous?.blockedSummary ?? null;
+  if (combinedMessage === null && combinedSummary === null) return null;
+  return { userMessage: combinedMessage, blockedSummary: combinedSummary, at: now };
+}
+
+function applyMessage(
+  goal: OrchestrationV2ThreadGoal,
+  text: string,
+  now: string,
+  touch: (next: Omit<OrchestrationV2ThreadGoal, "updatedAt">) => GoalCommandResult,
+): GoalCommandResult {
+  if (!isLiveGoal(goal)) return reject("This goal has ended. Start a new one with /t3-goal.");
+  const current = goal.current;
+  if (
+    goal.status === "active" &&
+    current !== null &&
+    current.phase === "running" &&
+    current.finished === null
+  ) {
+    // The loop delivers it into the running iteration on its next pass.
+    return touch({
+      ...goal,
+      current: {
+        ...current,
+        pendingMessages: [...(current.pendingMessages ?? []), { text, at: now }],
+      },
+    });
+  }
+  if (goal.status === "paused" || goal.status === "blocked") {
+    return touch(resumedGoal(goal, text, now));
+  }
+  // Usage-limited goals resume on their own; between iterations or during a
+  // check, the message waits for the next iteration.
+  return touch({ ...goal, resumeNote: withResumeNote(goal, text, null, now) });
+}
+
 function applyControl(
   goal: OrchestrationV2ThreadGoal,
   command: Extract<GoalCommandInput, { readonly type: "control" }>,
+  now: string,
   touch: (next: Omit<OrchestrationV2ThreadGoal, "updatedAt">) => GoalCommandResult,
 ): GoalCommandResult {
   switch (command.action) {
@@ -233,16 +353,7 @@ function applyControl(
       if (goal.status === "active") return accept(goal);
       if (!isLiveGoal(goal)) return reject("A finished goal cannot be resumed.");
       return touch({
-        ...goal,
-        status: "active",
-        statusReason: null,
-        consecutiveNoProgress: 0,
-        resumeAt: null,
-        // Resuming past the cap grants another full allowance.
-        safetyCap:
-          goal.iteration >= goal.safetyCap
-            ? goal.iteration + DEFAULT_GOAL_SAFETY_CAP
-            : goal.safetyCap,
+        ...resumedGoal(goal, null, now),
         ...(command.burnGuard === undefined ? {} : { burnGuard: command.burnGuard }),
       });
     case "stop":
@@ -279,6 +390,24 @@ function applyAdvance(
     case "resumed":
       if (goal.status !== "usageLimited") return accept(goal);
       return touch({ ...goal, status: "active", statusReason: null, resumeAt: null });
+    case "messages_delivered": {
+      if (current === null) return reject("No iteration is running.");
+      return touch({
+        ...goal,
+        current: { ...current, pendingMessages: (current.pendingMessages ?? []).slice(step.count) },
+      });
+    }
+    case "wrap_up_sent":
+    case "timed_out": {
+      if (current === null || current.finished !== null) return reject("No iteration is running.");
+      return touch({
+        ...goal,
+        current:
+          step.type === "wrap_up_sent"
+            ? { ...current, wrapUpSentAt: current.wrapUpSentAt ?? now }
+            : { ...current, timedOutAt: current.timedOutAt ?? now },
+      });
+    }
     case "child_waiting":
     case "child_resumed": {
       if (current === null) return reject("No iteration is running.");
@@ -357,6 +486,14 @@ function finishIteration(
         settled ? {} : { status: "paused", statusReason: "child_failed" },
       );
     case "interrupted":
+      // Running out of time is routine: the next iteration picks up from the
+      // notes, and only repeated timeouts without progress pause the goal.
+      if (current.timedOutAt != null) {
+        return withNoProgressRule(
+          closeIteration(goal, "timed_out", finished, now, {}),
+          madeProgress(current.notesThisIteration, finished.workspaceChanged),
+        );
+      }
       return closeIteration(
         goal,
         "interrupted",
@@ -420,8 +557,13 @@ function closeIteration(
     workspaceChanged: finished.workspaceChanged,
     finishedAt: now,
   };
+  const undelivered = (current.pendingMessages ?? []).map((message) => message.text);
   const next: OrchestrationV2ThreadGoal = {
     ...goal,
+    resumeNote:
+      undelivered.length === 0
+        ? (goal.resumeNote ?? null)
+        : withResumeNote(goal, undelivered.join("\n\n"), null, now),
     current: null,
     history: [...goal.history, record].slice(-MAX_GOAL_HISTORY),
     ...overrides,
@@ -489,5 +631,11 @@ export function goalSummary(
     tokensUsed: goal.tokensUsed,
     needsInput: goal.current?.waitingOnRequest != null,
     currentChildThreadId: goal.current?.childThreadId ?? null,
+    summaryNote:
+      goal.completedSummary == null
+        ? null
+        : goal.completedSummary.length > SHELL_SUMMARY_CHARS
+          ? `${goal.completedSummary.slice(0, SHELL_SUMMARY_CHARS - 1)}…`
+          : goal.completedSummary,
   };
 }

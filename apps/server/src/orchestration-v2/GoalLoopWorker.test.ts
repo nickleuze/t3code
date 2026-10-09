@@ -1,7 +1,12 @@
 import type { OrchestrationV2ThreadGoal } from "@t3tools/contracts";
 import { describe, expect, it } from "vite-plus/test";
 
-import { burnGuardTripped, childIterationTokens, childOutcome } from "./GoalLoopWorker.ts";
+import {
+  burnGuardTripped,
+  childIterationTokens,
+  childOutcome,
+  iterationDeadlines,
+} from "./GoalLoopWorker.ts";
 import { buildGoalIterationPrompt } from "./GoalPrompt.ts";
 
 const guard = { maxPercentPoints: 20, windowMins: 60 };
@@ -58,6 +63,13 @@ describe("iteration accounting", () => {
   });
 });
 
+describe("iteration deadlines", () => {
+  it("nudges a quarter early on short limits and 15 minutes early on long ones", () => {
+    expect(iterationDeadlines(20)).toEqual({ wrapUpMs: 15 * 60_000, timeoutMs: 20 * 60_000 });
+    expect(iterationDeadlines(120)).toEqual({ wrapUpMs: 105 * 60_000, timeoutMs: 120 * 60_000 });
+  });
+});
+
 describe("iteration prompt", () => {
   const goal = {
     objective: "Ship the importer",
@@ -83,6 +95,36 @@ describe("iteration prompt", () => {
     expect(prompt).toContain("writer.test.ts failed");
     expect(prompt).toContain("t3_goal_update");
     expect(prompt).toContain("`pnpm test`, and the goal only completes if it exits 0");
+  });
+
+  it("carries the brief, permissions, the user's reply, and the handoff file", () => {
+    const prompt = buildGoalIterationPrompt(
+      {
+        ...goal,
+        doneWhen: "All importer tests pass in CI",
+        background: "Plan: parser, then writer",
+        permissions: "Commit and push; ask before merging",
+        handoffPath: "docs/agent-work/importer/HANDOFF.md",
+        iterationTimeoutMins: 90,
+        resumeNote: {
+          userMessage: "Approved, go ahead",
+          blockedSummary: "Needs approval to push",
+          at: "",
+        },
+      },
+      3,
+    );
+    expect(prompt).toContain("## Done when\n\nAll importer tests pass in CI");
+    expect(prompt).toContain("Plan: parser, then writer");
+    expect(prompt).toContain("Commit and push; ask before merging");
+    expect(prompt).toContain("Needs approval to push");
+    expect(prompt).toContain("Approved, go ahead");
+    expect(prompt).toContain("Read `docs/agent-work/importer/HANDOFF.md` first");
+    expect(prompt).toContain("about 90 minutes");
+  });
+
+  it("asks the first iteration to create a handoff file", () => {
+    expect(buildGoalIterationPrompt(goal, 1)).toContain("There is no handoff file yet");
   });
 
   it("omits a passing check", () => {

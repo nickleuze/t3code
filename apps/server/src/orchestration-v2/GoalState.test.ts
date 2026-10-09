@@ -61,6 +61,10 @@ function newGoal(overrides: { checkCommand?: string | null; noProgressLimit?: nu
       model: "gpt-5.5",
     } as OrchestrationV2ThreadGoal["modelSelection"],
     runtimeMode: "full-access",
+    doneWhen: null,
+    background: null,
+    permissions: null,
+    iterationTimeoutMins: undefined,
   })!;
 }
 
@@ -111,6 +115,9 @@ const finished = (
 const control = (goal: OrchestrationV2ThreadGoal, action: "pause" | "resume" | "stop" | "clear") =>
   apply(rootThread(goal), { type: "control", goalId: GOAL_ID, action, burnGuard: undefined });
 
+const message = (goal: OrchestrationV2ThreadGoal, text: string) =>
+  apply(rootThread(goal), { type: "message", goalId: GOAL_ID, text })!;
+
 describe("goal state", () => {
   it("sets an active goal with defaults and refuses a second live goal", () => {
     const goal = newGoal();
@@ -131,6 +138,10 @@ describe("goal state", () => {
         noProgressLimit: undefined,
         modelSelection: goal.modelSelection,
         runtimeMode: goal.runtimeMode,
+        doneWhen: null,
+        background: null,
+        permissions: null,
+        iterationTimeoutMins: undefined,
       }),
     ).toMatch(/already has a goal/);
   });
@@ -147,6 +158,10 @@ describe("goal state", () => {
         noProgressLimit: undefined,
         modelSelection: stopping.modelSelection,
         runtimeMode: stopping.runtimeMode,
+        doneWhen: null,
+        background: null,
+        permissions: null,
+        iterationTimeoutMins: undefined,
       }),
     ).toMatch(/last iteration/);
   });
@@ -170,6 +185,10 @@ describe("goal state", () => {
         noProgressLimit: undefined,
         modelSelection: newGoal().modelSelection,
         runtimeMode: "full-access",
+        doneWhen: null,
+        background: null,
+        permissions: null,
+        iterationTimeoutMins: undefined,
       }),
     ).toMatch(/cannot run their own goal/);
   });
@@ -373,5 +392,90 @@ describe("goal state", () => {
       needsInput: true,
       currentChildThreadId: CHILD,
     });
+  });
+  it("resumes a blocked goal from a reply and tells the next iteration why it stopped", () => {
+    const blocked = advance(
+      report(started(newGoal()), {
+        type: "claim",
+        status: "blocked",
+        summary: "Needs merge approval",
+      }),
+      finished(),
+    );
+    expect(goalSummary(blocked)?.summaryNote).toBe("Needs merge approval");
+
+    const resumed = message(blocked, "Approved, merge it");
+    expect(resumed).toMatchObject({
+      status: "active",
+      completedSummary: null,
+      resumeNote: { userMessage: "Approved, merge it", blockedSummary: "Needs merge approval" },
+    });
+    // The next iteration's prompt carries the note, so starting it consumes the note.
+    expect(started(resumed).resumeNote).toBeNull();
+  });
+
+  it("clears a stale summary when a blocked goal resumes from the banner", () => {
+    const blocked = advance(
+      report(started(newGoal()), { type: "claim", status: "blocked", summary: "Waiting on CI" }),
+      finished(),
+    );
+    expect(control(blocked, "resume")).toMatchObject({
+      completedSummary: null,
+      resumeNote: { userMessage: null, blockedSummary: "Waiting on CI" },
+    });
+  });
+
+  it("queues a reply for the running iteration and carries undelivered ones forward", () => {
+    const running = message(message(started(newGoal()), "Use the staging bucket"), "And skip iOS");
+    expect(running.current?.pendingMessages?.map((entry) => entry.text)).toEqual([
+      "Use the staging bucket",
+      "And skip iOS",
+    ]);
+    const delivered = advance(running, { type: "messages_delivered", count: 1 });
+    expect(delivered.current?.pendingMessages?.map((entry) => entry.text)).toEqual([
+      "And skip iOS",
+    ]);
+    expect(advance(delivered, finished("completed", true)).resumeNote?.userMessage).toBe(
+      "And skip iOS",
+    );
+  });
+
+  it("holds a reply between iterations and refuses one for an ended goal", () => {
+    const between = advance(report(started(newGoal()), { type: "note", text: "n" }), finished());
+    expect(message(between, "Prioritize docs").resumeNote?.userMessage).toBe("Prioritize docs");
+    const complete = advance(
+      report(started(newGoal()), { type: "claim", status: "complete", summary: "done" }),
+      finished(),
+    );
+    expect(
+      rejection(rootThread(complete), { type: "message", goalId: GOAL_ID, text: "more" }),
+    ).toMatch(/has ended/);
+  });
+
+  it("keeps going after an iteration runs out of time", () => {
+    const timing = advance(advance(started(newGoal()), { type: "wrap_up_sent" }), {
+      type: "timed_out",
+    });
+    expect(timing.current).toMatchObject({ wrapUpSentAt: NOW, timedOutAt: NOW });
+    const after = advance(timing, finished("interrupted", true));
+    expect(after).toMatchObject({ status: "active", current: null, consecutiveNoProgress: 0 });
+    expect(after.history.at(-1)?.outcome).toBe("timed_out");
+  });
+
+  it("pauses when timeouts keep coming without progress", () => {
+    let goal = newGoal({ noProgressLimit: 2 });
+    for (let index = 0; index < 2; index += 1) {
+      goal = advance(advance(started(goal), { type: "timed_out" }), finished("interrupted", false));
+    }
+    expect(goal).toMatchObject({ status: "paused", statusReason: "no_progress" });
+  });
+
+  it("records the handoff file from a note", () => {
+    const goal = report(started(newGoal()), {
+      type: "note",
+      text: "Parser done",
+      handoffPath: "docs/agent-work/parser/HANDOFF.md",
+    });
+    expect(goal.handoffPath).toBe("docs/agent-work/parser/HANDOFF.md");
   });
 });

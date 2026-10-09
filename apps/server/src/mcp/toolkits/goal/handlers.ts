@@ -13,7 +13,7 @@ const notAnIteration = () =>
 /** Report into the parent's goal, only from the child running its current iteration. */
 const report = (
   value:
-    | { readonly type: "note"; readonly text: string }
+    | { readonly type: "note"; readonly text: string; readonly handoffPath?: string }
     | { readonly type: "claim"; readonly status: "complete" | "blocked"; readonly summary: string },
 ) =>
   Effect.gen(function* () {
@@ -51,7 +51,14 @@ const report = (
   });
 
 export const GoalHandlersLive = GoalToolkit.toLayer({
-  t3_goal_update: ({ note }) => report({ type: "note", text: note.trim() }),
+  t3_goal_update: ({ note, handoffPath }) =>
+    report({
+      type: "note",
+      text: note.trim(),
+      ...(handoffPath === undefined || handoffPath.trim() === ""
+        ? {}
+        : { handoffPath: handoffPath.trim() }),
+    }),
   t3_goal_complete: ({ status, summary }) =>
     report({ type: "claim", status, summary: summary.trim() }),
 });

@@ -73,7 +73,7 @@ import { isRestartNoteSource } from "./RestartBackgroundNote.ts";
 import { isUndeliveredMailboxSteer } from "./NotificationMailbox.ts";
 import { EventSinkV2 } from "./EventSink.ts";
 import type { OrchestrationEffectRequestV2, PendingOrchestrationEffectV2 } from "./EffectOutbox.ts";
-import { applyGoalCommand, type GoalCommandInput } from "./GoalState.ts";
+import { applyGoalCommand, goalIterationTitle, type GoalCommandInput } from "./GoalState.ts";
 import { IdAllocatorV2 } from "./IdAllocator.ts";
 import {
   ThreadCommandExecutor,
@@ -345,6 +345,7 @@ function commandThreadId(command: OrchestrationV2ServerCommand): ThreadId {
     case "thread.model-selection.set":
     case "thread.goal.set":
     case "thread.goal.control":
+    case "thread.goal.message":
     case "thread.goal.iteration.start":
     case "thread.goal.report":
     case "thread.goal.advance":
@@ -6074,6 +6075,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         readonly type:
           | "thread.goal.set"
           | "thread.goal.control"
+          | "thread.goal.message"
           | "thread.goal.report"
           | "thread.goal.advance";
       }
@@ -6103,7 +6105,13 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
             noProgressLimit: command.noProgressLimit,
             modelSelection: command.modelSelection ?? thread.modelSelection,
             runtimeMode: command.runtimeMode ?? thread.runtimeMode,
+            doneWhen: command.doneWhen ?? null,
+            background: command.background ?? null,
+            permissions: command.permissions ?? null,
+            iterationTimeoutMins: command.iterationTimeoutMins,
           };
+        case "thread.goal.message":
+          return { type: "message", goalId: command.goalId, text: command.text };
         case "thread.goal.control":
           return {
             type: "control",
@@ -6231,7 +6239,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           activeProviderThreadId: null,
           providerInstanceId: goal.modelSelection.instanceId,
           modelSelection: goal.modelSelection,
-          title: `Goal iteration ${command.iteration}: ${thread.title}`.slice(0, 120),
+          title: goalIterationTitle(command.iteration, goal.objective),
           now,
           createdBy: "agent",
           creationSource: "server",
@@ -9277,6 +9285,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         break;
       case "thread.goal.set":
       case "thread.goal.control":
+      case "thread.goal.message":
       case "thread.goal.report":
       case "thread.goal.advance":
         yield* dispatchGoalCommand(command, events);

@@ -11,6 +11,7 @@
 import {
   CheckpointRef,
   CommandId,
+  MessageId,
   type OrchestrationV2AppThread,
   type OrchestrationV2GoalAdvanceStep,
   type OrchestrationV2GoalBurnGuard,
@@ -35,14 +36,20 @@ import * as ProcessRunner from "../processRunner.ts";
 import * as ProviderRegistry from "../provider/Services/ProviderRegistry.ts";
 import * as Scheduler from "../scheduling/Scheduler.ts";
 import * as VcsDriverRegistry from "../vcs/VcsDriverRegistry.ts";
-import { isLiveGoal, MAX_GOAL_CHECK_OUTPUT_CHARS } from "./GoalState.ts";
+import {
+  goalIterationTimeoutMins,
+  goalIterationTitle,
+  isLiveGoal,
+  MAX_GOAL_CHECK_OUTPUT_CHARS,
+} from "./GoalState.ts";
 import { buildGoalIterationPrompt } from "./GoalPrompt.ts";
 import * as Orchestrator from "./Orchestrator.ts";
 import * as ProjectionStore from "./ProjectionStore.ts";
 import * as ProjectStore from "./ProjectStore.ts";
 import { delegatedTaskProgress } from "./SubagentProjection.ts";
 
-const ITERATION_TIMEOUT_MS = 2 * 60 * 60 * 1000;
+/** How long before its time limit an iteration is asked to wrap up (at most a quarter of it). */
+const WRAP_UP_LEAD_MS = 15 * 60 * 1000;
 /** How long to wait when a usage limit reports no reset time (or one already past). */
 const USAGE_LIMIT_FALLBACK_BACKOFF_MS = 15 * 60 * 1000;
 const CHECK_TIMEOUT = "10 minutes";
@@ -54,6 +61,12 @@ const INTERRUPTING_PAUSE_REASONS: ReadonlySet<OrchestrationV2GoalStatusReason> =
   "burn_rate",
   "iteration_timeout",
 ]);
+
+/** When an iteration gets its wrap-up nudge and when it is stopped, in ms after it started. */
+export function iterationDeadlines(timeoutMins: number) {
+  const timeoutMs = timeoutMins * 60_000;
+  return { wrapUpMs: timeoutMs - Math.min(WRAP_UP_LEAD_MS, timeoutMs / 4), timeoutMs };
+}
 
 /**
  * Tokens one iteration's child thread spent. Every provider turn in the
@@ -379,10 +392,22 @@ export const make = Effect.gen(function* () {
           "runtimeRequests",
         ])
         .pipe(Effect.option);
+      // Finished iterations are named for what they did, from their last note.
+      const lastNote = goal.progressNotes.findLast((note) => note.iteration === current.iteration);
       const finish = (
         step: Omit<Extract<OrchestrationV2GoalAdvanceStep, { type: "iteration_finished" }>, "type">,
       ) =>
         advance(thread, goal, "finished", { type: "iteration_finished", ...step }).pipe(
+          Effect.andThen(
+            lastNote === undefined
+              ? Effect.void
+              : dispatch({
+                  type: "thread.metadata.update",
+                  commandId: commandId(thread, `${goal.iteration}:retitle`),
+                  threadId: current.childThreadId,
+                  title: goalIterationTitle(current.iteration, lastNote.text),
+                }),
+          ),
           Effect.andThen(
             dispatch({
               type: "thread.settle",
@@ -429,6 +454,7 @@ export const make = Effect.gen(function* () {
         records.runs.some((run) => run.status === "queued");
       const interrupting =
         goal.status === "stopped" ||
+        current.timedOutAt != null ||
         (goal.status === "paused" &&
           goal.statusReason !== null &&
           INTERRUPTING_PAUSE_REASONS.has(goal.statusReason));
@@ -442,7 +468,10 @@ export const make = Effect.gen(function* () {
                 commandId: commandId(thread, `${goal.iteration}:interrupt:${run.id}`),
                 threadId: current.childThreadId,
                 runId: run.id,
-                reason: "Goal loop stopped this iteration.",
+                reason:
+                  current.timedOutAt != null
+                    ? "This goal iteration reached its time limit."
+                    : "Goal loop stopped this iteration.",
                 holdQueue: true,
               });
             }
@@ -451,12 +480,60 @@ export const make = Effect.gen(function* () {
           // Nothing left to interrupt (only background work remains): close
           // the iteration now rather than waiting on work nobody wants.
         } else {
+          const pendingMessages = current.pendingMessages ?? [];
+          if (pendingMessages.length > 0) {
+            yield* dispatch({
+              type: "message.dispatch",
+              commandId: commandId(thread, `${goal.iteration}:user-message`),
+              messageId: MessageId.make(
+                `goal-message:${current.childThreadId}:${bootMs}-${dispatchSequence}`,
+              ),
+              threadId: current.childThreadId,
+              text: pendingMessages.map((message) => message.text).join("\n\n"),
+              attachments: [],
+              deliveryIntent: "auto",
+              dispatchMode: { type: "start_immediately" },
+              createdBy: "user",
+              creationSource: "server",
+            });
+            yield* advance(thread, goal, "messages-delivered", {
+              type: "messages_delivered",
+              count: pendingMessages.length,
+            });
+          }
           if (goal.status === "active") {
-            if (nowMs - Date.parse(current.startedAt) > ITERATION_TIMEOUT_MS) {
-              return yield* advance(thread, goal, "paused:timeout", {
-                type: "paused",
-                reason: "iteration_timeout",
+            const elapsedMs = nowMs - Date.parse(current.startedAt);
+            const deadlines = iterationDeadlines(goalIterationTimeoutMins(goal));
+            if (elapsedMs > deadlines.timeoutMs) {
+              return yield* advance(thread, goal, "timed-out", { type: "timed_out" });
+            }
+            // Only a live turn can take the nudge; with no turn running it
+            // would start a fresh one.
+            if (
+              elapsedMs > deadlines.wrapUpMs &&
+              current.wrapUpSentAt == null &&
+              liveRuns.length > 0
+            ) {
+              const minutesLeft = Math.max(
+                1,
+                Math.round((deadlines.timeoutMs - elapsedMs) / 60_000),
+              );
+              // Steering only: queued behind the turn it would start a new one.
+              yield* dispatch({
+                type: "message.dispatch",
+                commandId: commandId(thread, `${goal.iteration}:wrap-up`),
+                messageId: MessageId.make(
+                  `goal-wrap-up:${current.childThreadId}:${bootMs}-${dispatchSequence}`,
+                ),
+                threadId: current.childThreadId,
+                text: `Time check from T3 Code: this goal iteration will be stopped in about ${minutesLeft} minutes. Finish or checkpoint the current step, update the handoff file, call t3_goal_update with a short note, and end your turn. The next iteration continues from there.`,
+                attachments: [],
+                deliveryIntent: "steer",
+                dispatchMode: { type: "start_immediately" },
+                createdBy: "agent",
+                creationSource: "server",
               });
+              yield* advance(thread, goal, "wrap-up-sent", { type: "wrap_up_sent" });
             }
             const tripped = yield* burnGuardCheck(goal, nowMs);
             if (tripped !== null) {

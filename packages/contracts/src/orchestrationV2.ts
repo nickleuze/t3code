@@ -439,6 +439,14 @@ export const OrchestrationV2GoalCurrentIteration = Schema.Struct({
       workspaceChanged: Schema.NullOr(Schema.Boolean),
     }),
   ),
+  /** When the loop asked the child to wrap up ahead of its time limit. */
+  wrapUpSentAt: Schema.optional(Schema.NullOr(IsoDateTime)),
+  /** When the child ran past its time limit and the loop stopped it. */
+  timedOutAt: Schema.optional(Schema.NullOr(IsoDateTime)),
+  /** User messages waiting for the loop to deliver into the running child. */
+  pendingMessages: Schema.optional(
+    Schema.Array(Schema.Struct({ text: Schema.String, at: IsoDateTime })),
+  ),
 });
 export type OrchestrationV2GoalCurrentIteration = typeof OrchestrationV2GoalCurrentIteration.Type;
 
@@ -462,6 +470,7 @@ export const OrchestrationV2GoalIterationOutcome = Schema.Literals([
   "failed",
   "interrupted",
   "usage_limited",
+  "timed_out",
 ]);
 export type OrchestrationV2GoalIterationOutcome = typeof OrchestrationV2GoalIterationOutcome.Type;
 
@@ -474,6 +483,13 @@ export const OrchestrationV2GoalIterationRecord = Schema.Struct({
   finishedAt: IsoDateTime,
 });
 export type OrchestrationV2GoalIterationRecord = typeof OrchestrationV2GoalIterationRecord.Type;
+
+export const OrchestrationV2GoalResumeNote = Schema.Struct({
+  userMessage: Schema.NullOr(Schema.String),
+  blockedSummary: Schema.NullOr(Schema.String),
+  at: IsoDateTime,
+});
+export type OrchestrationV2GoalResumeNote = typeof OrchestrationV2GoalResumeNote.Type;
 
 /**
  * A long-horizon goal owned by a thread. Each iteration runs in a fresh
@@ -506,7 +522,20 @@ export const OrchestrationV2ThreadGoal = Schema.Struct({
   history: Schema.Array(OrchestrationV2GoalIterationRecord),
   /** When a usage-limited goal may start its next iteration. */
   resumeAt: Schema.NullOr(IsoDateTime),
+  /** The agent's summary when the goal completed or blocked; cleared on resume. */
   completedSummary: Schema.NullOr(Schema.String),
+  /** What finished looks like; every iteration is told to work toward it. */
+  doneWhen: Schema.optional(Schema.NullOr(Schema.String)),
+  /** Context from the thread the goal started in, such as its plan. */
+  background: Schema.optional(Schema.NullOr(Schema.String)),
+  /** Actions the user pre-approved, so iterations need not stop to ask. */
+  permissions: Schema.optional(Schema.NullOr(Schema.String)),
+  /** Minutes an iteration may run before it is stopped; defaults to 120. */
+  iterationTimeoutMins: Schema.optional(PositiveInt),
+  /** Workspace file iterations keep their detailed handoff in. */
+  handoffPath: Schema.optional(Schema.NullOr(Schema.String)),
+  /** Waiting for the next iteration: the user's message and why the last one stopped. */
+  resumeNote: Schema.optional(Schema.NullOr(OrchestrationV2GoalResumeNote)),
   createdAt: IsoDateTime,
   updatedAt: IsoDateTime,
 });
@@ -522,6 +551,8 @@ export const OrchestrationV2ThreadGoalSummary = Schema.Struct({
   tokensUsed: NonNegativeInt,
   needsInput: Schema.Boolean,
   currentChildThreadId: Schema.NullOr(ThreadId),
+  /** Short form of the completion or blocked summary. */
+  summaryNote: Schema.optional(Schema.NullOr(Schema.String)),
 });
 export type OrchestrationV2ThreadGoalSummary = typeof OrchestrationV2ThreadGoalSummary.Type;
 
@@ -554,6 +585,9 @@ export const OrchestrationV2GoalAdvanceStep = Schema.Union([
   Schema.Struct({ type: Schema.Literal("paused"), reason: OrchestrationV2GoalStatusReason }),
   Schema.Struct({ type: Schema.Literal("resumed") }),
   Schema.Struct({ type: Schema.Literal("stopped"), reason: OrchestrationV2GoalStatusReason }),
+  Schema.Struct({ type: Schema.Literal("wrap_up_sent") }),
+  Schema.Struct({ type: Schema.Literal("messages_delivered"), count: PositiveInt }),
+  Schema.Struct({ type: Schema.Literal("timed_out") }),
 ]);
 export type OrchestrationV2GoalAdvanceStep = typeof OrchestrationV2GoalAdvanceStep.Type;
 
@@ -2844,6 +2878,22 @@ export const OrchestrationV2Command = Schema.Union([
     noProgressLimit: Schema.optional(PositiveInt),
     modelSelection: Schema.optional(ModelSelection),
     runtimeMode: Schema.optional(RuntimeMode),
+    doneWhen: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
+    background: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
+    permissions: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
+    iterationTimeoutMins: Schema.optional(PositiveInt),
+  }),
+  /**
+   * A message from the user to their goal. It resumes a blocked or paused
+   * goal and reaches the next iteration, or goes straight to the iteration
+   * that is running.
+   */
+  Schema.Struct({
+    type: Schema.Literal("thread.goal.message"),
+    commandId: CommandId,
+    threadId: ThreadId,
+    goalId: CommandId,
+    text: TrimmedNonEmptyString,
   }),
   /**
    * `pause` lets the running iteration finish and starts no more; `stop`
@@ -3118,7 +3168,11 @@ const OrchestrationV2InternalCommand = Schema.Union([
     iteration: PositiveInt,
     childThreadId: ThreadId,
     report: Schema.Union([
-      Schema.Struct({ type: Schema.Literal("note"), text: TrimmedNonEmptyString }),
+      Schema.Struct({
+        type: Schema.Literal("note"),
+        text: TrimmedNonEmptyString,
+        handoffPath: Schema.optional(TrimmedNonEmptyString),
+      }),
       Schema.Struct({
         type: Schema.Literal("claim"),
         status: OrchestrationV2GoalClaim.fields.status,

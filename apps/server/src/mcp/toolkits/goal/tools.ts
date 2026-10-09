@@ -20,9 +20,12 @@ const Recorded = Schema.Struct({ iteration: Schema.Number, recorded: Schema.Bool
 const GoalUpdateTool = Tool.make("t3_goal_update", {
   ...shared,
   description:
-    "Record a progress note for the /goal iteration this thread is running. The next iteration starts with a fresh context and sees only these notes, so say what you did, what you learned, and what should happen next. Only works inside a goal iteration thread.",
+    "Record a short progress note for the /t3-goal iteration this thread is running: one or two sentences on what changed. Detailed state belongs in the goal's handoff file; pass handoffPath (relative to the workspace) when you create or move it. Only works inside a goal iteration thread.",
   parameters: Schema.Struct({
     note: Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(2_000)),
+    handoffPath: Schema.optional(
+      Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(500)),
+    ),
   }),
   success: Recorded,
 })
@@ -32,7 +35,7 @@ const GoalUpdateTool = Tool.make("t3_goal_update", {
 const GoalCompleteTool = Tool.make("t3_goal_complete", {
   ...shared,
   description:
-    'End the /goal loop from inside a goal iteration. Use status "complete" when the whole goal is achieved; if the goal has a check command, T3 Code runs it after your turn and keeps iterating if it fails. Use status "blocked" when progress needs the user, and say what you need. Your turn should end soon after calling this.',
+    'End the /t3-goal loop from inside a goal iteration. Use status "complete" when the whole goal is achieved; if the goal has a check command, T3 Code runs it after your turn and keeps iterating if it fails. Use status "blocked" only when work cannot continue for a long time, and say what you need; for a quick decision, ask the user with your question tool instead. Your turn should end soon after calling this.',
   parameters: Schema.Struct({
     status: Schema.Literals(["complete", "blocked"]),
     summary: Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(2_000)),

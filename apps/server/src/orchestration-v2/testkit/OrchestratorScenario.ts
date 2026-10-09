@@ -155,6 +155,7 @@ function commandThreadIds(command: OrchestrationV2Command): ReadonlyArray<Thread
     case "thread.model-selection.set":
     case "thread.goal.set":
     case "thread.goal.control":
+    case "thread.goal.message":
     case "provider-session.detach":
     case "message.dispatch":
     case "notification.delivery.accept":
