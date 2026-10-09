@@ -69,20 +69,6 @@ export const SidebarFlatThreadSortOrder = Schema.Literals([
 export type SidebarFlatThreadSortOrder = typeof SidebarFlatThreadSortOrder.Type;
 const DEFAULT_SIDEBAR_FLAT_THREAD_SORT_ORDER: SidebarFlatThreadSortOrder = "manual";
 
-// Earlier Alpha builds persisted this name for activity ordering.
-const SidebarFlatThreadSortOrderSetting = Schema.Union([
-  SidebarFlatThreadSortOrder,
-  Schema.Literal("last_activity").pipe(
-    Schema.decodeTo(
-      Schema.Literal("updated_at"),
-      SchemaTransformation.transform({
-        decode: () => "updated_at" as const,
-        encode: () => "last_activity" as const,
-      }),
-    ),
-  ),
-]);
-
 export const SidebarProjectGroupingMode = Schema.Literals([
   "repository",
   "repository_path",
@@ -497,7 +483,7 @@ export const ClientSettingsSchema = Schema.Struct({
   sidebarThreadSortOrder: SidebarThreadSortOrder.pipe(
     Schema.withDecodingDefault(Effect.succeed(DEFAULT_SIDEBAR_THREAD_SORT_ORDER)),
   ),
-  sidebarFlatThreadSortOrder: SidebarFlatThreadSortOrderSetting.pipe(
+  sidebarFlatThreadSortOrder: SidebarFlatThreadSortOrder.pipe(
     Schema.withDecodingDefault(Effect.succeed(DEFAULT_SIDEBAR_FLAT_THREAD_SORT_ORDER)),
   ),
   sidebarThreadPreviewCount: SidebarThreadPreviewCount.pipe(
