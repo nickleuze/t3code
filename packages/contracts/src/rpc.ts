@@ -277,6 +277,10 @@ import {
   ServerProviderUpdatedPayload,
   ServerSelfUpdateError,
   ServerSelfUpdateInput,
+  ForkUpdateError,
+  ForkUpdateInstallResult,
+  ForkUpdateStatus,
+  ForkUpdateStatusInput,
   ServerSelfUpdateProgressEvent,
   ServerSelfUpdateResult,
   ServerTraceDiagnosticsResult,
@@ -435,6 +439,8 @@ export const WS_METHODS = {
   serverRefreshProviders: "server.refreshProviders",
   serverUpdateProvider: "server.updateProvider",
   serverUpdateServer: "server.updateServer",
+  serverForkUpdateStatus: "server.forkUpdateStatus",
+  serverInstallForkUpdate: "server.installForkUpdate",
   serverUpdateServerWithProgress: "server.updateServerWithProgress",
   serverCommitDesktopUpdate: "server.commitDesktopUpdate",
   serverUpsertKeybinding: "server.upsertKeybinding",
@@ -676,6 +682,18 @@ const WsProviderInstallRemoveRpc = Rpc.make(WS_METHODS.providerInstallRemove, {
   payload: ProviderSetupInput,
   success: ProviderInstallState,
   error: ProviderSetupRpcError,
+});
+
+const WsServerForkUpdateStatusRpc = Rpc.make(WS_METHODS.serverForkUpdateStatus, {
+  payload: ForkUpdateStatusInput,
+  success: ForkUpdateStatus,
+  error: EnvironmentAuthorizationError,
+});
+
+const WsServerInstallForkUpdateRpc = Rpc.make(WS_METHODS.serverInstallForkUpdate, {
+  payload: Schema.Struct({}),
+  success: ForkUpdateInstallResult,
+  error: Schema.Union([ForkUpdateError, EnvironmentAuthorizationError]),
 });
 
 const WsServerUpdateServerRpc = Rpc.make(WS_METHODS.serverUpdateServer, {
@@ -1703,6 +1721,8 @@ export const WsRpcGroup = RpcGroup.make(
   WsProviderInstallSubscribeRpc,
   WsProviderInstallRemoveRpc,
   WsServerUpdateServerRpc,
+  WsServerForkUpdateStatusRpc,
+  WsServerInstallForkUpdateRpc,
   WsServerUpdateServerWithProgressRpc,
   WsServerCommitDesktopUpdateRpc,
   WsServerUpsertKeybindingRpc,

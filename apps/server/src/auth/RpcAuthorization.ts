@@ -54,6 +54,8 @@ export const RPC_REQUIRED_SCOPES = {
   [WS_METHODS.providerInstallSubscribe]: AuthOrchestrationReadScope,
   [WS_METHODS.providerInstallRemove]: AuthOrchestrationOperateScope,
   [WS_METHODS.serverUpdateServer]: AuthOrchestrationOperateScope,
+  [WS_METHODS.serverForkUpdateStatus]: AuthOrchestrationReadScope,
+  [WS_METHODS.serverInstallForkUpdate]: AuthOrchestrationOperateScope,
   [WS_METHODS.serverUpdateServerWithProgress]: AuthOrchestrationOperateScope,
   [WS_METHODS.serverCommitDesktopUpdate]: AuthOrchestrationOperateScope,
   [WS_METHODS.serverUpsertKeybinding]: AuthOrchestrationOperateScope,
