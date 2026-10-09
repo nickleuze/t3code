@@ -264,6 +264,34 @@ export function resolveSidebarDropVerb(
   return "wake";
 }
 
+/**
+ * Newest activity first: the later of the last user message and the latest
+ * run's completion, so a thread surfaces when the agent finishes a turn too.
+ * Lifecycle writes (pin, settle, snooze) bump updatedAt, so it is not used.
+ */
+export function sortThreadsByLastActivity<
+  T extends {
+    readonly id: string;
+    readonly latestRun?: { readonly completedAt: string | null } | null;
+  } & ThreadSortInput,
+>(threads: readonly T[]): T[] {
+  if (threads.length < 2) return [...threads];
+  return threads
+    .map((thread) => ({
+      thread,
+      timestamp: Math.max(
+        getThreadSortTimestamp(thread, "updated_at"),
+        toSortableTimestamp(thread.latestRun?.completedAt ?? undefined) ?? Number.NEGATIVE_INFINITY,
+      ),
+    }))
+    .sort(
+      (left, right) =>
+        right.timestamp - left.timestamp ||
+        (left.thread.id < right.thread.id ? 1 : left.thread.id > right.thread.id ? -1 : 0),
+    )
+    .map(({ thread }) => thread);
+}
+
 export function planSidebarThreadDrop(input: {
   readonly activeKey: string;
   readonly activeSection: SidebarSection;
