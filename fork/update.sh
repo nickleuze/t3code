@@ -14,6 +14,8 @@
 #   --wait-mins   how long to wait for running turns (default 60)
 #   --version     install this fork version instead of the latest
 set -euo pipefail
+# Shell setups can wrap rm (one on the mini routes it to the Trash, which
+# frees no space); "command rm" below always means the real one.
 
 REPO="${T3_FORK_REPO:-nickleuze/t3code}"
 APP="/Applications/T3 Code (Alpha).app"
@@ -62,6 +64,13 @@ fi
 say "Update available: $installed -> $target (${commit:0:10})"
 [ "$CHECK_ONLY" = 1 ] && exit 0
 
+# The zip and its unpacked copy take about 600 MB until the swap.
+free_kb="$(df -k "$HOME" | awk 'NR == 2 { print $4 }')"
+if [ "${free_kb:-0}" -lt $(( 1536 * 1024 )) ]; then
+  say "Only $(( ${free_kb:-0} / 1024 )) MB free; an update needs about 1.5 GB. Nothing was changed."
+  exit 1
+fi
+
 say "Downloading $zip"
 progress=-sS
 [ -t 1 ] && progress=--progress-bar
@@ -72,10 +81,13 @@ if [ "$actual" != "$sha256" ]; then
   exit 1
 fi
 stage="$WORK/staged-$target"
-rm -rf "$stage" && mkdir -p "$stage"
-ditto -x -k "$WORK/$zip" "$stage"
-[ -d "$stage/T3 Code (Alpha).app" ] || { say "Release archive has no T3 Code (Alpha).app"; exit 1; }
-rm -f "$WORK/$zip"
+command rm -rf "$stage" && mkdir -p "$stage"
+if ! ditto -x -k "$WORK/$zip" "$stage" || [ ! -d "$stage/T3 Code (Alpha).app" ]; then
+  command rm -rf "$stage" "$WORK/$zip"
+  say "Could not unpack $zip; nothing was changed."
+  exit 1
+fi
+command rm -f "$WORK/$zip"
 
 backup="$BACKUPS/fork-update-$(date +%Y%m%d-%H%M%S)-from-$installed"
 installer="$WORK/install-$target.sh"
@@ -141,7 +153,7 @@ mkdir -p "\$BACKUP"
 mv "\$APP" "\$BACKUP/" || { log "FAILED: could not move the current app"; open "\$APP"; exit 1; }
 if ! ditto "\$STAGE/T3 Code (Alpha).app" "\$APP"; then
   log "FAILED: install failed; restoring the previous app"
-  rm -rf "\$APP"; mv "\$BACKUP/T3 Code (Alpha).app" "\$APP"; open "\$APP"; exit 1
+  command rm -rf "\$APP"; mv "\$BACKUP/T3 Code (Alpha).app" "\$APP"; open "\$APP"; exit 1
 fi
 xattr -dr com.apple.quarantine "\$APP" 2>/dev/null || true
 open "\$APP"
@@ -149,12 +161,12 @@ open "\$APP"
 for i in \$(seq 1 120); do alpha_running && break; sleep 1; done
 if alpha_running; then
   log "INSTALLED: fork \$TARGET. Previous app: \$BACKUP"
-  rm -rf "\$STAGE"
+  command rm -rf "\$STAGE"
   # Keep the three most recent fork-update backups.
-  ls -dt "$BACKUPS"/fork-update-* 2>/dev/null | tail -n +4 | while read -r old; do rm -rf "\$old"; done
+  ls -dt "$BACKUPS"/fork-update-* 2>/dev/null | tail -n +4 | while read -r old; do command rm -rf "\$old"; done
 else
   log "FAILED: the new app did not start; restoring the previous app"
-  rm -rf "\$APP"; mv "\$BACKUP/T3 Code (Alpha).app" "\$APP"; open "\$APP"
+  command rm -rf "\$APP"; mv "\$BACKUP/T3 Code (Alpha).app" "\$APP"; open "\$APP"
 fi
 INSTALLER
 chmod +x "$installer"
