@@ -63,6 +63,7 @@ import {
   ArrowRightLeftIcon,
   ArrowUpDownIcon,
   CheckIcon,
+  ChevronRightIcon,
   CircleAlertIcon,
   CircleCheckIcon,
   CircleDashedIcon,
@@ -1397,6 +1398,15 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
     [isRenaming, onStartRename, thread.title, threadRef],
   );
   const [isFileDragOver, setIsFileDragOver] = useState(false);
+  // Parked goal rows keep their iterations folded until asked; an open
+  // iteration keeps its goal unfolded so the route stays visible.
+  const [goalIterationsOpen, setGoalIterationsOpen] = useState(false);
+  const showsActiveIteration = props.goalIterations.some(
+    (iteration) =>
+      props.activeRouteThreadKey ===
+      scopedThreadKey(scopeThreadRef(iteration.environmentId, iteration.id)),
+  );
+  const goalIterationsExpanded = goalIterationsOpen || showsActiveIteration;
   const fileDropHandlers = useMemo(
     () =>
       onFileDropThreads
@@ -1686,6 +1696,26 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
       <TooltipPopup side="top">Unsent draft</TooltipPopup>
     </Tooltip>
   ) : null;
+  const goalIterationsToggle =
+    props.goalIterations.length > 0 ? (
+      <button
+        type="button"
+        aria-expanded={goalIterationsExpanded}
+        aria-label={`${goalIterationsExpanded ? "Hide" : "Show"} ${props.goalIterations.length} goal iterations`}
+        onClick={(event) => {
+          event.stopPropagation();
+          setGoalIterationsOpen(!goalIterationsExpanded);
+        }}
+        onKeyDown={(event) => event.stopPropagation()}
+        className="inline-flex shrink-0 cursor-pointer items-center gap-0.5 rounded-sm text-2xs text-muted-foreground/70 tabular-nums outline-none transition-colors hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring"
+      >
+        <ChevronRightIcon
+          aria-hidden
+          className={cn("size-3 transition-transform", goalIterationsExpanded && "rotate-90")}
+        />
+        {props.goalIterations.length}
+      </button>
+    ) : null;
   const showPin =
     props.isPinned && (!sortable?.isDragging || (props.dragOverPinned && props.dropVerb === null));
   const pinIndicator = showPin ? (
@@ -1759,6 +1789,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
             </span>
             {draftIndicator}
             {title}
+            {goalIterationsToggle}
             {pinIndicator}
             {terminalStatusIcon}
             {isRegeneratingTitle ? (
@@ -1868,8 +1899,15 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
         <SidebarGoalIterations
           goal={thread.goal ?? null}
           iterations={props.goalIterations}
-          // Parked rows stay one line unless an iteration is running.
-          limit={thread.goal?.currentChildThreadId ? 1 : 0}
+          // Parked rows stay one line, apart from a running iteration,
+          // until unfolded.
+          limit={
+            goalIterationsExpanded
+              ? props.goalIterations.length
+              : thread.goal?.currentChildThreadId
+                ? 1
+                : 0
+          }
           activeRouteThreadKey={props.activeRouteThreadKey}
           onOpen={props.onThreadActivate}
           onOpenGoal={() => props.onThreadActivate(threadRef)}
