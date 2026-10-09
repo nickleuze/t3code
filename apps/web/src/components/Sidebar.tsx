@@ -175,6 +175,9 @@ import {
   animateSidebarLayoutChanges,
   applySidebarThreadDrop,
   filterSidebarV2VisibleThreads,
+  groupGoalIterationsByGoalThread,
+  nestedIterationLabel,
+  selectNestedGoalIterations,
   sidebarGoalStatusLabel,
   buildBulkTitleRegenerationContextMenuItem,
   buildBulkUnpinContextMenuItem,
@@ -1064,6 +1067,10 @@ const dropVerbBadge: Record<SidebarDropVerb, ReactNode> = {
 
 const SidebarThreadRow = memo(function SidebarThreadRow(props: {
   thread: SidebarThreadSummary;
+  // A goal thread's iteration threads, newest first; they nest under its row
+  // instead of appearing in the roster.
+  goalIterations: readonly SidebarThreadSummary[];
+  activeRouteThreadKey: string | null;
   variant: "card" | "slim";
   // Slim rows are either settled (action: un-settle) or merely quiet
   // (seen Ready threads — action: settle).
@@ -1858,6 +1865,15 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
           </TooltipTrigger>
           {detailsTooltip}
         </Tooltip>
+        <SidebarGoalIterations
+          goal={thread.goal ?? null}
+          iterations={props.goalIterations}
+          // Parked rows stay one line unless an iteration is running.
+          limit={thread.goal?.currentChildThreadId ? 1 : 0}
+          activeRouteThreadKey={props.activeRouteThreadKey}
+          onOpen={props.onThreadActivate}
+          onOpenGoal={() => props.onThreadActivate(threadRef)}
+        />
       </li>
     );
   }
@@ -2102,9 +2118,92 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
         </TooltipTrigger>
         {detailsTooltip}
       </Tooltip>
+      <SidebarGoalIterations
+        goal={thread.goal ?? null}
+        iterations={props.goalIterations}
+        limit={GOAL_ITERATIONS_SHOWN}
+        activeRouteThreadKey={props.activeRouteThreadKey}
+        onOpen={props.onThreadActivate}
+        onOpenGoal={() => props.onThreadActivate(threadRef)}
+      />
     </li>
   );
 });
+
+const NO_GOAL_ITERATIONS: readonly SidebarThreadSummary[] = [];
+
+/** Iterations nested under a goal card; older ones stay one click away on the goal. */
+const GOAL_ITERATIONS_SHOWN = 3;
+
+/**
+ * A goal thread's iteration threads, indented under its row. The running
+ * iteration always shows; finished ones fill the rest, newest first.
+ */
+function SidebarGoalIterations(props: {
+  goal: SidebarThreadSummary["goal"] | null;
+  iterations: readonly SidebarThreadSummary[];
+  limit: number;
+  activeRouteThreadKey: string | null;
+  onOpen: (threadRef: ScopedThreadRef) => void;
+  onOpenGoal: () => void;
+}) {
+  const runningId = props.goal?.currentChildThreadId ?? null;
+  const shown = selectNestedGoalIterations(props.iterations, runningId, props.limit);
+  if (shown.length === 0) return null;
+  const hidden = props.limit > 1 ? props.iterations.length - shown.length : 0;
+  return (
+    <ul role="presentation" className="m-0 flex list-none flex-col p-0 pl-6">
+      {shown.map((iteration) => {
+        const ref = scopeThreadRef(iteration.environmentId, iteration.id);
+        const isRunning = iteration.id === runningId;
+        const isActive = props.activeRouteThreadKey === scopedThreadKey(ref);
+        return (
+          <li key={iteration.id} role="presentation" className="list-none">
+            <button
+              type="button"
+              onClick={() => props.onOpen(ref)}
+              className={cn(
+                "flex h-7 w-full min-w-0 items-center gap-2 rounded-md border-l border-sidebar-border pr-2.5 pl-2.5 text-left text-xs",
+                isActive
+                  ? "bg-sidebar-row-active text-sidebar-foreground"
+                  : "text-sidebar-muted-foreground/75 hover:bg-sidebar-row-hover hover:text-sidebar-foreground",
+              )}
+            >
+              <span
+                aria-hidden
+                className={cn(
+                  "size-1.5 shrink-0 rounded-full",
+                  isRunning
+                    ? props.goal?.needsInput
+                      ? "bg-warning"
+                      : "bg-info"
+                    : "bg-muted-foreground/40",
+                )}
+              />
+              <span className="min-w-0 flex-1 truncate">{nestedIterationLabel(iteration)}</span>
+              {isRunning ? (
+                <span className="shrink-0 text-2xs text-muted-foreground/70">
+                  {props.goal?.needsInput ? "Input" : "Running"}
+                </span>
+              ) : null}
+            </button>
+          </li>
+        );
+      })}
+      {hidden > 0 ? (
+        <li role="presentation" className="list-none">
+          <button
+            type="button"
+            onClick={props.onOpenGoal}
+            className="flex h-6 w-full items-center border-l border-sidebar-border pl-2.5 text-left text-2xs text-muted-foreground/70 hover:text-sidebar-foreground"
+          >
+            {hidden} earlier {hidden === 1 ? "iteration" : "iterations"}
+          </button>
+        </li>
+      ) : null}
+    </ul>
+  );
+}
 
 function latestRunDiff(
   thread: SidebarThreadSummary,
@@ -2274,6 +2373,11 @@ export default function Sidebar() {
   const projects = useProjects();
   const projectOrder = useUiStateStore((store) => store.projectOrder);
   const threads = useThreadShells();
+  // Iterations leave the roster and nest under their goal's row instead.
+  const goalIterationsByGoalThread = useMemo(
+    () => groupGoalIterationsByGoalThread(threads),
+    [threads],
+  );
   const router = useRouter();
   const { isMobile, setOpenMobile } = useSidebar();
   const keybindings = useAtomValue(primaryServerKeybindingsAtom);
@@ -4905,12 +5009,19 @@ export default function Sidebar() {
                         // not from the sidebar second-guessing what still matters.
                         const isCard = section === "active" || section === "pinned";
                         const rowVariant = isCard ? "card" : "slim";
+                        const goalIterations =
+                          goalIterationsByGoalThread.get(`${thread.environmentId}:${thread.id}`) ??
+                          NO_GOAL_ITERATIONS;
                         return (
                           <SidebarThreadRow
                             // Fade between card and compact rows while the outer
                             // sortable wrapper keeps its identity during a drag.
                             key={`${threadKey}:${rowVariant}`}
                             thread={thread}
+                            goalIterations={goalIterations}
+                            // Only goal rows track the route, so navigating
+                            // does not re-render every row.
+                            activeRouteThreadKey={goalIterations.length > 0 ? routeThreadKey : null}
                             variant={rowVariant}
                             // Snoozed rows wake, settled rows un-settle, and cards settle.
                             variantAction={

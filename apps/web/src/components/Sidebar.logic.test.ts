@@ -13,6 +13,9 @@ import {
   deleteSelectedThreadEntries,
   filterSidebarProjectScopeItems,
   filterSidebarV2VisibleThreads,
+  groupGoalIterationsByGoalThread,
+  nestedIterationLabel,
+  selectNestedGoalIterations,
   formatWorkingDurationLabel,
   getFallbackThreadIdAfterDelete,
   getProjectSortTimestamp,
@@ -543,6 +546,32 @@ describe("sidebar thread lineage helpers", () => {
         new Set([`${environmentId}:${projectId}`]),
       ).map((thread) => thread.id),
     ).toEqual([parentId, fork.id]);
+  });
+
+  it("nests goal iterations under their goal thread, running one first", () => {
+    const goalThreadId = ThreadId.make("thread-goal");
+    const iteration = (number: number) =>
+      makeThreadFixture({
+        id: ThreadId.make(`thread-iteration-${number}`),
+        title: number === 2 ? "Goal iteration 2: Ship it" : `Goal #${number}: Step ${number}`,
+        goalIteration: {
+          parentThreadId: goalThreadId,
+          goalId: CommandId.make("command:goal"),
+          iteration: number,
+        },
+      });
+    const [first, second, third] = [iteration(1), iteration(2), iteration(3)];
+    const groups = groupGoalIterationsByGoalThread([first, makeThreadFixture(), third, second]);
+    const group = groups.get(`${third.environmentId}:${goalThreadId}`) ?? [];
+    expect(group.map((thread) => thread.id)).toEqual([third.id, second.id, first.id]);
+    expect(groups.size).toBe(1);
+
+    expect(selectNestedGoalIterations(group, first.id, 2).map((thread) => thread.id)).toEqual([
+      first.id,
+      third.id,
+    ]);
+    expect(nestedIterationLabel(third)).toBe("#3 Step 3");
+    expect(nestedIterationLabel(second)).toBe("#2 Ship it");
   });
 
   it("identifies subagent threads so the sidebar can hide them", () => {

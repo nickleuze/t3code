@@ -227,8 +227,8 @@ row with no progress and when an iteration fails, and waits out usage limits
 before continuing by itself. You get a notification when it needs you or
 finishes.
 
-Iteration threads stay out of the sidebar; the goal's row shows which iteration
-is running. The banner above the composer has **Pause**, **Resume**, and **Stop**,
+Iterations nest under the goal's row in the sidebar: the running one first, then
+the most recent. The goal's row shows which iteration is running. The banner above the composer has **Pause**, **Resume**, and **Stop**,
 plus **Answer** when an iteration asks a question. The thread details panel lists
 every iteration with its notes and check results. Goals start from web and
 desktop, on threads that already exist.

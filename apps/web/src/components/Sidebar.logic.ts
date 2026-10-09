@@ -559,6 +559,52 @@ export function filterSidebarV2VisibleThreads<
   );
 }
 
+/**
+ * Goal iteration threads grouped under their goal thread, newest first, keyed
+ * like `${environmentId}:${goalThreadId}`.
+ */
+export function groupGoalIterationsByGoalThread<
+  T extends Pick<SidebarThreadSummary, "environmentId" | "goalIteration" | "archivedAt">,
+>(threads: readonly T[]): ReadonlyMap<string, readonly T[]> {
+  const groups = new Map<string, T[]>();
+  for (const thread of threads) {
+    const marker = thread.goalIteration;
+    if (marker == null || thread.archivedAt !== null) continue;
+    const key = `${thread.environmentId}:${marker.parentThreadId}`;
+    groups.set(key, [...(groups.get(key) ?? []), thread]);
+  }
+  for (const [key, group] of groups) {
+    groups.set(
+      key,
+      group.toSorted(
+        (left, right) =>
+          (right.goalIteration?.iteration ?? 0) - (left.goalIteration?.iteration ?? 0),
+      ),
+    );
+  }
+  return groups;
+}
+
+/** The running iteration first, then the newest finished ones, up to `limit`. */
+export function selectNestedGoalIterations<T extends Pick<SidebarThreadSummary, "id">>(
+  iterations: readonly T[],
+  runningId: string | null,
+  limit: number,
+): T[] {
+  const running = iterations.find((iteration) => iteration.id === runningId);
+  const rest = iterations.filter((iteration) => iteration.id !== runningId);
+  return [...(running ? [running] : []), ...rest].slice(0, limit);
+}
+
+/** "#3 Fixed the parser" from "Goal #3: Fixed the parser" or "Goal iteration 3: …". */
+export function nestedIterationLabel(
+  thread: Pick<SidebarThreadSummary, "title" | "goalIteration">,
+): string {
+  const iteration = thread.goalIteration?.iteration;
+  const detail = thread.title.replace(/^Goal (?:#|iteration )\d+:\s*/, "");
+  return iteration === undefined ? detail : `#${iteration} ${detail}`;
+}
+
 export function getSidebarForkParentThreadId(
   thread: Pick<SidebarThreadSummary, "forkedFrom" | "lineage">,
 ) {
