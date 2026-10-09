@@ -63,7 +63,9 @@ say "Update available: $installed -> $target (${commit:0:10})"
 [ "$CHECK_ONLY" = 1 ] && exit 0
 
 say "Downloading $zip"
-curl -fL --connect-timeout 20 --progress-bar "https://github.com/$REPO/releases/download/fork-v$target/$zip" -o "$WORK/$zip"
+progress=-sS
+[ -t 1 ] && progress=--progress-bar
+curl -fL --connect-timeout 20 "$progress" "https://github.com/$REPO/releases/download/fork-v$target/$zip" -o "$WORK/$zip"
 actual="$(shasum -a 256 "$WORK/$zip" | cut -d' ' -f1)"
 if [ "$actual" != "$sha256" ]; then
   say "Checksum mismatch for $zip; nothing was changed."
@@ -100,6 +102,11 @@ alpha_main_pid() {
     [ "\$comm" = "\$APP/Contents/MacOS/T3 Code (Alpha)" ] && [ "\$ppid" = 1 ] && echo "\$pid"
   done
 }
+descendants() {
+  for child in \$(ps -axo pid=,ppid= | awk -v parent="\$1" '\$2 == parent { print \$1 }'); do
+    echo "\$child"; descendants "\$child"
+  done
+}
 active_turns() {
   sqlite3 -readonly "\$DB" "SELECT count(*) FROM orchestration_v2_projection_runs WHERE status IN ('preparing','starting','running','waiting')" 2>/dev/null || echo 0
 }
@@ -120,7 +127,16 @@ log "Quitting Alpha"
 # Automation permission prompt that nobody answers on a headless machine.
 for pid in \$(alpha_main_pid); do kill -TERM "\$pid" 2>/dev/null || true; done
 for i in \$(seq 1 60); do alpha_running || break; sleep 1; done
-if alpha_running; then log "FAILED: Alpha did not quit within 60s; nothing was changed."; exit 1; fi
+if alpha_running; then
+  # A shutdown that stalls leaves the app ignoring further quit requests. No
+  # turn is running at this point, so stopping its processes loses no work.
+  log "Shutdown did not finish within 60s; force-quitting Alpha"
+  for pid in \$(alpha_main_pid); do
+    kill -KILL \$(descendants "\$pid") "\$pid" 2>/dev/null || true
+  done
+  for i in \$(seq 1 15); do alpha_running || break; sleep 1; done
+fi
+if alpha_running; then log "FAILED: Alpha is still running; nothing was changed."; exit 1; fi
 mkdir -p "\$BACKUP"
 mv "\$APP" "\$BACKUP/" || { log "FAILED: could not move the current app"; open "\$APP"; exit 1; }
 if ! ditto "\$STAGE/T3 Code (Alpha).app" "\$APP"; then
