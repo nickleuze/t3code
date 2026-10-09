@@ -24,6 +24,7 @@ import * as DesktopLinuxUrlHandler from "./DesktopLinuxUrlHandler.ts";
 import * as DesktopObservability from "./DesktopObservability.ts";
 import * as DesktopPreReadyPlatform from "./DesktopPreReadyPlatform.ts";
 import * as DesktopShutdown from "./DesktopShutdown.ts";
+import { configureShutdownLog, shutdownBreadcrumb, traceTeardown } from "./DesktopShutdownLog.ts";
 import * as DesktopServerExposure from "../backend/DesktopServerExposure.ts";
 import * as DesktopAppSettings from "../settings/DesktopAppSettings.ts";
 import * as DesktopShellEnvironment from "../shell/DesktopShellEnvironment.ts";
@@ -308,8 +309,9 @@ const startup = Effect.gen(function* () {
   }
 
   yield* appIdentity.configure;
-  yield* lifecycle.register;
-  yield* clerk.configure;
+  configureShutdownLog(environment.logDir);
+  yield* traceTeardown("lifecycle listeners", lifecycle.register);
+  yield* traceTeardown("clerk", clerk.configure);
 
   yield* electronApp.whenReady.pipe(
     Effect.withSpan("desktop.electron.whenReady"),
@@ -324,10 +326,13 @@ const startup = Effect.gen(function* () {
   }
   yield* appIdentity.configure;
   yield* applicationMenu.configure;
-  yield* updates.configure;
-  yield* DesktopRemoteUpdates.listen;
+  yield* traceTeardown("desktop updates", updates.configure);
+  yield* traceTeardown("remote updates", DesktopRemoteUpdates.listen);
   yield* linuxUrlHandler.register;
-  yield* bootstrap.pipe(Effect.catchCause((cause) => fatalStartupCause("bootstrap", cause)));
+  yield* traceTeardown(
+    "bootstrap",
+    bootstrap.pipe(Effect.catchCause((cause) => fatalStartupCause("bootstrap", cause))),
+  );
 }).pipe(Effect.withSpan("desktop.startup"));
 
 const scopedProgram = Effect.scoped(
@@ -344,12 +349,45 @@ const scopedProgram = Effect.scoped(
       // cascade, so leaving the WSL instance for its parent scope
       // finalizer means it gets hard-killed by the OS instead of
       // receiving SIGTERM + grace.
-      stopAllPoolInstances().pipe(Effect.ensuring(shutdown.markComplete)),
+      Effect.sync(() => shutdownBreadcrumb("stopping backends")).pipe(
+        Effect.andThen(stopAllPoolInstances()),
+        Effect.ensuring(
+          Effect.sync(() => shutdownBreadcrumb("backends stopped; shutdown complete")).pipe(
+            Effect.andThen(shutdown.markComplete),
+          ),
+        ),
+      ),
     );
 
     yield* startup;
     yield* shutdown.awaitRequest;
+    shutdownBreadcrumb("shutdown requested; releasing app resources");
+    yield* shutdownWatchdog.pipe(Effect.forkDetach);
   }),
 );
+
+/**
+ * A quit must not depend on every resource releasing cleanly: on a headless
+ * host one teardown stalled indefinitely, so updates never completed. If the
+ * normal shutdown has not finished in time, stop the backends directly and
+ * let the quit continue; exit outright if even that does not end the app.
+ */
+const SHUTDOWN_STALL_TIMEOUT = Duration.seconds(20);
+const QUIT_EXIT_TIMEOUT = Duration.seconds(10);
+
+const shutdownWatchdog = Effect.gen(function* () {
+  const shutdown = yield* DesktopShutdown.DesktopShutdown;
+  const electronApp = yield* ElectronApp.ElectronApp;
+  yield* Effect.sleep(SHUTDOWN_STALL_TIMEOUT);
+  if (!(yield* shutdown.isComplete)) {
+    shutdownBreadcrumb("shutdown stalled; stopping backends directly");
+    yield* stopAllPoolInstances();
+    shutdownBreadcrumb("backends stopped by the watchdog");
+    yield* shutdown.markComplete;
+  }
+  yield* Effect.sleep(QUIT_EXIT_TIMEOUT);
+  shutdownBreadcrumb("app did not exit after shutdown; exiting");
+  yield* electronApp.exit(0);
+}).pipe(Effect.withSpan("desktop.app.shutdownWatchdog"));
 
 export const program = scopedProgram.pipe(Effect.withSpan("desktop.app"));
