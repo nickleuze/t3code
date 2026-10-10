@@ -2,12 +2,15 @@ import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 
 import * as DesktopShutdown from "./DesktopShutdown.ts";
-import { shutdownBreadcrumb } from "./DesktopShutdownLog.ts";
+import { makeComponentLogger } from "./DesktopObservability.ts";
 import * as ElectronApp from "../electron/ElectronApp.ts";
 
+const { logWarning } = makeComponentLogger("desktop-shutdown-watchdog");
+
 /**
- * Teardown can stall before its finalizer stops the backends. The independent
- * exit deadline must also survive a stalled emergency backend stop.
+ * Bounds a requested shutdown. Teardown can stall before its finalizer stops
+ * the backends, so after 20s the watchdog stops them itself and completes the
+ * shutdown; an independent 30s deadline exits even if that stop stalls too.
  * The callback belongs to the app, which owns the complete backend pool.
  */
 export const watchShutdown = Effect.fn("desktop.app.shutdownWatchdog")(function* <R>(
@@ -18,15 +21,15 @@ export const watchShutdown = Effect.fn("desktop.app.shutdownWatchdog")(function*
   const recover = Effect.gen(function* () {
     yield* Effect.sleep(Duration.seconds(20));
     if (yield* shutdown.isComplete) return;
-    shutdownBreadcrumb("shutdown stalled; stopping backends directly");
+    yield* logWarning("shutdown stalled; stopping backends directly");
     yield* stopBackends();
-    shutdownBreadcrumb("backends stopped by the watchdog");
     yield* shutdown.markComplete;
   });
   const exit = Effect.gen(function* () {
     yield* Effect.sleep(Duration.seconds(30));
-    shutdownBreadcrumb("app did not exit after shutdown; exiting");
-    yield* electronApp.exit(0);
+    yield* logWarning("app did not exit after shutdown; exiting");
+    // Non-zero, so a supervisor sees that the quit had to be forced.
+    yield* electronApp.exit(1);
   });
   // In the real app exit terminates the process. In tests it completes the
   // deadline and interrupts any still-stalled recovery fiber.

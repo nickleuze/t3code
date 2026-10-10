@@ -10,7 +10,6 @@ import type * as Electron from "electron";
 import * as DesktopEnvironment from "./DesktopEnvironment.ts";
 import { makeComponentLogger } from "./DesktopObservability.ts";
 import * as DesktopShutdown from "./DesktopShutdown.ts";
-import { shutdownBreadcrumb } from "./DesktopShutdownLog.ts";
 import * as ElectronApp from "../electron/ElectronApp.ts";
 import * as ElectronTheme from "../electron/ElectronTheme.ts";
 import * as ElectronWindow from "../electron/ElectronWindow.ts";
@@ -103,7 +102,6 @@ function handleBeforeQuit(
   allowQuit: () => boolean,
   markQuitAllowed: () => void,
 ): void {
-  shutdownBreadcrumb(`before-quit (${allowQuit() ? "quit allowed" : "shutting down first"})`);
   if (allowQuit()) {
     void runEffect(
       Effect.gen(function* () {
@@ -153,7 +151,6 @@ function quitFromSignal(
       const electronApp = yield* ElectronApp.ElectronApp;
       const state = yield* DesktopState.DesktopState;
       const wasQuitting = yield* Ref.getAndSet(state.quitting, true);
-      shutdownBreadcrumb(`${signal} received${wasQuitting ? " while already quitting" : ""}`);
       if (wasQuitting) return;
       yield* logLifecycleInfo("process signal received", { signal });
       yield* requestDesktopShutdownAndWait();
