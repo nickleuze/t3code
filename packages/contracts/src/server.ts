@@ -1010,3 +1010,50 @@ export class ServerSelfUpdateError extends Schema.TaggedError<ServerSelfUpdateEr
     return `Server update failed: ${this.reason}`;
   }
 }
+
+/**
+ * Fork-only: updates published as GitHub releases of the fork, installed by
+ * the release's own installer script instead of Electron's updater (the fork
+ * builds are not Developer ID signed).
+ */
+export const ForkUpdateRelease = Schema.Struct({
+  version: TrimmedNonEmptyString,
+  commit: TrimmedNonEmptyString,
+  builtAt: Schema.String,
+});
+export type ForkUpdateRelease = typeof ForkUpdateRelease.Type;
+
+export const ForkUpdateStatus = Schema.Struct({
+  /** False on servers that are not a fork desktop build (dev, CLI, other OS). */
+  supported: Schema.Boolean,
+  installedVersion: Schema.NullOr(Schema.String),
+  latest: Schema.NullOr(ForkUpdateRelease),
+  updateAvailable: Schema.Boolean,
+  checkedAt: Schema.NullOr(Schema.String),
+  /** Set while an install waits for running turns and the app to restart. */
+  installingVersion: Schema.NullOr(Schema.String),
+  error: Schema.NullOr(Schema.String),
+});
+export type ForkUpdateStatus = typeof ForkUpdateStatus.Type;
+
+export const ForkUpdateStatusInput = Schema.Struct({
+  /** Check the release feed now instead of returning the cached status. */
+  refresh: Schema.optionalKey(Schema.Boolean),
+});
+export type ForkUpdateStatusInput = typeof ForkUpdateStatusInput.Type;
+
+export const ForkUpdateInstallResult = Schema.Struct({
+  version: TrimmedNonEmptyString,
+  /** Goals paused until the app restarts on the new version. */
+  pausedGoals: NonNegativeInt,
+  message: Schema.String,
+});
+export type ForkUpdateInstallResult = typeof ForkUpdateInstallResult.Type;
+
+export class ForkUpdateError extends Schema.TaggedError<ForkUpdateError>()("ForkUpdateError", {
+  reason: TrimmedNonEmptyString,
+}) {
+  override get message(): string {
+    return `Fork update failed: ${this.reason}`;
+  }
+}

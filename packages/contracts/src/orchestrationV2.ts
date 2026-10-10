@@ -508,6 +508,8 @@ export const OrchestrationV2ThreadGoal = Schema.Struct({
   /** Command id of the `thread.goal.set` that created this goal. */
   id: CommandId,
   objective: TrimmedNonEmptyString,
+  /** Last explicit control/reply; worker progress leaves this identity intact. */
+  lastControlCommandId: Schema.optionalKey(CommandId),
   status: OrchestrationV2GoalStatus,
   statusReason: Schema.NullOr(OrchestrationV2GoalStatusReason),
   /** Shell command that must exit 0 before a completion claim is accepted. */
@@ -3143,6 +3145,8 @@ export const OrchestrationV2Command = Schema.Union([
     threadId: ThreadId,
     goalId: CommandId,
     action: Schema.Literals(["pause", "resume", "stop", "clear"]),
+    /** Administrative recovery must not overwrite a subsequent user control. */
+    expectedControlCommandId: Schema.optionalKey(CommandId),
     burnGuard: Schema.optional(Schema.NullOr(OrchestrationV2GoalBurnGuard)),
   }),
   /** Discards the goal the thread's agent proposed. */

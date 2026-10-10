@@ -6543,6 +6543,13 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
     if (thread.deletedAt !== null && command.type !== "thread.goal.advance") {
       return yield* reject(`Thread ${command.threadId} is deleted.`);
     }
+    if (
+      command.type === "thread.goal.control" &&
+      command.expectedControlCommandId !== undefined &&
+      thread.goal?.lastControlCommandId !== command.expectedControlCommandId
+    ) {
+      return yield* reject("The goal was controlled after this update pause.");
+    }
     const now = yield* DateTime.now;
     const input: GoalCommandInput = (() => {
       switch (command.type) {
@@ -6614,7 +6621,10 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       occurredAt: now,
       payload: {
         ...thread,
-        goal: result.goal,
+        goal:
+          result.goal !== null && (input.type === "control" || input.type === "message")
+            ? { ...result.goal, lastControlCommandId: command.commandId }
+            : result.goal,
         // Starting a goal takes the place of whatever the agent proposed.
         goalProposal: input.type === "set" ? null : (thread.goalProposal ?? null),
         updatedAt: result.goal?.status === previous?.status ? thread.updatedAt : now,

@@ -92,6 +92,73 @@ const setup = Effect.fn("GoalLoopTest.setup")(function* (
 });
 
 it.layer(TestLayer)("goal commands", (it) => {
+  it.effect("rejects stale update recovery after a subsequent user pause", () =>
+    Effect.gen(function* () {
+      const { orchestrator, threadId, goalId } = yield* setup("update-pause-identity");
+      const pauseId = CommandId.make("update:pause");
+      yield* orchestrator.dispatch({
+        type: "thread.goal.control",
+        commandId: pauseId,
+        threadId,
+        goalId,
+        action: "pause",
+      });
+      assert.strictEqual(
+        (yield* orchestrator.getThreadRecords(threadId, [])).thread.goal?.lastControlCommandId,
+        pauseId,
+      );
+      // A repeated user Pause must invalidate automatic recovery even with the same clock.
+      yield* orchestrator.dispatch({
+        type: "thread.goal.control",
+        commandId: CommandId.make("user:pause"),
+        threadId,
+        goalId,
+        action: "pause",
+      });
+      const stale = yield* orchestrator
+        .dispatch({
+          type: "thread.goal.control",
+          commandId: CommandId.make("update:resume:stale"),
+          threadId,
+          goalId,
+          action: "resume",
+          expectedControlCommandId: pauseId,
+        })
+        .pipe(Effect.result);
+      assert.strictEqual(stale._tag, "Failure");
+      assert.strictEqual(
+        (yield* orchestrator.getThreadRecords(threadId, [])).thread.goal?.status,
+        "paused",
+      );
+      yield* orchestrator.dispatch({
+        type: "thread.goal.control",
+        commandId: CommandId.make("user:resume"),
+        threadId,
+        goalId,
+        action: "resume",
+      });
+      yield* orchestrator.dispatch({
+        type: "thread.goal.control",
+        commandId: CommandId.make("update:pause:2"),
+        threadId,
+        goalId,
+        action: "pause",
+      });
+      yield* orchestrator.dispatch({
+        type: "thread.goal.control",
+        commandId: CommandId.make("update:resume:2"),
+        threadId,
+        goalId,
+        action: "resume",
+        expectedControlCommandId: CommandId.make("update:pause:2"),
+      });
+      assert.strictEqual(
+        (yield* orchestrator.getThreadRecords(threadId, [])).thread.goal?.status,
+        "active",
+      );
+    }),
+  );
+
   it.effect(
     "rejects automatic settlement of a live goal even with a matching snapshot timestamp",
     () =>
