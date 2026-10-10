@@ -17,9 +17,10 @@ const fixture = vi.hoisted(() => ({
   set: vi.fn(),
   control: vi.fn(),
   dismiss: vi.fn(),
+  update: vi.fn(),
   navigate: vi.fn(),
 }));
-vi.mock("@effect/atom-react", () => ({ useAtomValue: () => fixture.canMutate }));
+vi.mock("../../state/session", () => ({ useEnvironmentScope: () => fixture.canMutate }));
 vi.mock("@react-navigation/native", () => ({
   useNavigation: () => ({ navigate: fixture.navigate }),
 }));
@@ -76,14 +77,21 @@ vi.mock("./RequestActionButton", () => ({
 }));
 vi.mock("../../state/threads", () => ({
   threadEnvironment: {
-    setGoal: { permissionAtom: () => null },
+    setGoal: "set",
     controlGoal: "control",
+    updateGoal: "update",
     dismissGoalProposal: "dismiss",
   },
 }));
 vi.mock("../../state/use-atom-command", () => ({
   useAtomCommand: (command: unknown) =>
-    command === "control" ? fixture.control : command === "dismiss" ? fixture.dismiss : fixture.set,
+    command === "control"
+      ? fixture.control
+      : command === "dismiss"
+        ? fixture.dismiss
+        : command === "update"
+          ? fixture.update
+          : fixture.set,
 }));
 vi.mock("../../state/use-thread-detail", () => ({ useThreadProjection: () => fixture.projection }));
 vi.mock("../../lib/uuid", () => ({ uuidv4: () => "command" }));
@@ -124,6 +132,7 @@ beforeEach(() => {
   fixture.set.mockReset().mockResolvedValue({ _tag: "Success" });
   fixture.control.mockReset().mockResolvedValue({ _tag: "Success" });
   fixture.dismiss.mockReset().mockResolvedValue({ _tag: "Success" });
+  fixture.update.mockReset().mockResolvedValue({ _tag: "Success" });
   fixture.navigate.mockReset();
   container = document.createElement("div");
   root = createRoot(container);
@@ -264,25 +273,28 @@ it("edits a proposal without starting, validates limits and submits the edited b
   expect(fixture.set).not.toHaveBeenCalled();
   await change("Objective", "Edited objective");
   await change("Done when", "All local checks pass");
-  await change("Minutes per iteration (15–480)", "0");
+  expect(container.querySelector('[aria-label="Minutes per iteration (45–480)"]')).toBeNull();
+  await act(async () => button("Advanced").click());
+  await change("Minutes per iteration (45–480)", "30");
   const start = () =>
     Array.from(container.querySelectorAll<HTMLButtonElement>('[role="dialog"] button')).find(
       (node) => node.textContent === "Start goal",
     )!;
   expect(start().disabled).toBe(true);
-  await change("Minutes per iteration (15–480)", "45");
-  await change("Max usage rise (%)", "15");
-  await change("Burn guard window (minutes)", "30");
-  await change("Idle iterations before pausing (1–20)", "4");
+  await change("Minutes per iteration (45–480)", "45");
+  await change("Pre-approved actions", "Merge after CI passes");
   await act(async () => start().click());
   expect(fixture.set).toHaveBeenCalledTimes(1);
-  expect(fixture.set.mock.calls[0]![0].input).toMatchObject({
+  const sent = fixture.set.mock.calls[0]![0].input;
+  expect(sent).toMatchObject({
     objective: "Edited objective",
     doneWhen: "All local checks pass",
+    permissions: "Merge after CI passes",
     iterationTimeoutMins: 45,
-    burnGuard: { maxPercentPoints: 15, windowMins: 30 },
-    noProgressLimit: 4,
   });
+  // Limits the editor does not show keep their server defaults.
+  expect(sent).not.toHaveProperty("burnGuard");
+  expect(sent).not.toHaveProperty("noProgressLimit");
 });
 it("exposes historical iterations and progress without starting provider work", async () => {
   fixture.projection = {
@@ -303,11 +315,64 @@ it("exposes historical iterations and progress without starting provider work", 
   await act(async () => button("Goal details").click());
   expect(container.textContent).toContain("The check failed");
   expect(container.textContent).toContain("Assertion failed");
-  expect(container.textContent).toContain("Token usage not reported");
+  expect(container.textContent).toContain("token usage not reported");
   await act(async () => button("Iteration 2: Check failed").click());
   expect(fixture.navigate).toHaveBeenCalledWith("Thread", {
     environmentId: "remote-host",
     threadId: "old-iteration",
   });
+  expect(fixture.set).not.toHaveBeenCalled();
+});
+it("edits a paused goal's brief without resuming it, and only while paused or blocked", async () => {
+  const paused = {
+    ...goal,
+    status: "paused" as const,
+    needsInput: false,
+    currentChildThreadId: null,
+  };
+  fixture.projection = {
+    projection: {
+      thread: {
+        goal: {
+          ...paused,
+          doneWhen: "Checks pass",
+          background: "Old context",
+          permissions: "Local edits",
+          iterationTimeoutMins: 20,
+          usageAccounting: "exact",
+          burnGuard: { maxPercentPoints: 20, windowMins: 60 },
+          usageSample: { at: "now", windows: [{ id: "5h", usedPercent: 41.4 }], risePoints: 3.2 },
+          progressNotes: [],
+          history: [],
+          current: null,
+        },
+      },
+    },
+  };
+  await render({ ...shell, goalProposal: null, t3Goal: { ...paused, status: "active" } });
+  expect(container.textContent).not.toContain("Edit");
+  await render({ ...shell, goalProposal: null, t3Goal: paused });
+  await act(async () => button("Goal details").click());
+  expect(container.textContent).toContain("45 min per iteration");
+  expect(container.textContent).toContain("burn guard 20% / 60m, now +3 (highest window 41%)");
+  await act(async () => button("Edit").click());
+  // The update command edits the brief only; the time limit and check stay put.
+  expect(container.querySelector('[aria-label="Minutes per iteration (45–480)"]')).toBeNull();
+  await change("Pre-approved actions", "Local edits, push and merge after CI");
+  await act(async () => button("Save changes").click());
+  expect(fixture.update).toHaveBeenCalledWith({
+    environmentId: shell.environmentId,
+    input: {
+      type: "thread.goal.update",
+      commandId: "command",
+      threadId: "owner",
+      goalId: "goal",
+      objective: "Ship",
+      doneWhen: "Checks pass",
+      background: "Old context",
+      permissions: "Local edits, push and merge after CI",
+    },
+  });
+  expect(fixture.control).not.toHaveBeenCalled();
   expect(fixture.set).not.toHaveBeenCalled();
 });

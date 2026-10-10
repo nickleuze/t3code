@@ -1524,6 +1524,16 @@ it("accepts user goal controls while keeping worker and agent bookkeeping off th
       action: "pause",
     }).type,
   ).toBe("thread.goal.control");
+  expect(
+    decode({
+      type: "thread.goal.update",
+      commandId: "goal:edit",
+      threadId: "thread:goal",
+      goalId: "goal:set",
+      doneWhen: null,
+      permissions: "Merge once CI is green",
+    }),
+  ).toMatchObject({ type: "thread.goal.update", doneWhen: null });
   for (const type of [
     "thread.user-input.request",
     "thread.goal.propose",

@@ -1,6 +1,7 @@
 import { resolveThreadWorkingStartedAt } from "@t3tools/client-runtime/state/models";
 import { backgroundWorkHoldsCompletion } from "@t3tools/shared/orchestrationV2PendingBackgroundWork";
 import { threadPullRequestSearchTerms } from "@t3tools/shared/threadPullRequests";
+import { t3GoalAttention } from "@t3tools/shared/agentAwareness";
 import * as React from "react";
 import {
   isAtomCommandInterrupted,
@@ -568,81 +569,18 @@ export function isSidebarSubagentThread(thread: Pick<SidebarThreadSummary, "line
 }
 
 export function filterSidebarV2VisibleThreads<
-  T extends Pick<SidebarThreadSummary, "archivedAt" | "lineage"> &
-    Partial<Pick<SidebarThreadSummary, "id" | "goalIteration">> & {
-      environmentId: string;
-      projectId: string;
-    },
+  T extends Pick<SidebarThreadSummary, "archivedAt" | "lineage"> & {
+    environmentId: string;
+    projectId: string;
+  },
 >(threads: readonly T[], scopedProjectKeys: ReadonlySet<string> | null): T[] {
-  const owners = new Set(
-    threads
-      .filter(
-        (thread) =>
-          thread.archivedAt === null &&
-          !isSidebarSubagentThread(thread) &&
-          thread.goalIteration == null &&
-          (scopedProjectKeys === null ||
-            scopedProjectKeys.has(`${thread.environmentId}:${thread.projectId}`)),
-      )
-      .map((thread) => `${thread.environmentId}:${thread.id}`),
-  );
   return threads.filter(
     (thread) =>
       thread.archivedAt === null &&
       !isSidebarSubagentThread(thread) &&
-      (thread.goalIteration == null ||
-        !owners.has(`${thread.environmentId}:${thread.goalIteration.parentThreadId}`)) &&
       (scopedProjectKeys === null ||
         scopedProjectKeys.has(`${thread.environmentId}:${thread.projectId}`)),
   );
-}
-
-/**
- * Goal iteration threads grouped under their goal thread, newest first, keyed
- * like `${environmentId}:${goalThreadId}`.
- */
-export function groupGoalIterationsByGoalThread<
-  T extends Pick<SidebarThreadSummary, "environmentId" | "goalIteration" | "archivedAt">,
->(threads: readonly T[]): ReadonlyMap<string, readonly T[]> {
-  const groups = new Map<string, T[]>();
-  for (const thread of threads) {
-    const marker = thread.goalIteration;
-    if (marker == null || thread.archivedAt !== null) continue;
-    const key = `${thread.environmentId}:${marker.parentThreadId}`;
-    const group = groups.get(key);
-    if (group) group.push(thread);
-    else groups.set(key, [thread]);
-  }
-  for (const [key, group] of groups) {
-    groups.set(
-      key,
-      group.toSorted(
-        (left, right) =>
-          (right.goalIteration?.iteration ?? 0) - (left.goalIteration?.iteration ?? 0),
-      ),
-    );
-  }
-  return groups;
-}
-
-/** The running iteration first, then the newest finished ones, up to `limit`. */
-export function selectNestedGoalIterations<T extends Pick<SidebarThreadSummary, "id">>(
-  iterations: readonly T[],
-  runningId: string | null,
-  limit: number,
-): T[] {
-  const running = iterations.find((iteration) => iteration.id === runningId);
-  const rest = iterations.filter((iteration) => iteration.id !== runningId);
-  return [...(running ? [running] : []), ...rest].slice(0, limit);
-}
-
-/** "#3 Fixed the parser" from "Goal #3: Fixed the parser" or "Goal iteration 3: …". */
-export function nestedIterationLabel(
-  thread: Pick<SidebarThreadSummary, "title" | "goalIteration">,
-): string {
-  const iteration = thread.goalIteration?.iteration;
-  const detail = thread.title.replace(/^Goal (?:#|iteration )\d+:\s*/, "");
-  return iteration === undefined ? detail : `#${iteration} ${detail}`;
 }
 
 export function getSidebarForkParentThreadId(
@@ -1044,45 +982,23 @@ type SidebarThreadStatusInput = Pick<
 > &
   Partial<Pick<SidebarThreadSummary, "t3Goal">>;
 
-/** A goal waiting on the user: a question in its iteration, or a stop only they can lift. */
-function goalWantsUser(goal: NonNullable<SidebarThreadSummary["t3Goal"]>): boolean {
-  return (
-    goal.needsInput ||
-    goal.status === "blocked" ||
-    (goal.status === "paused" && goal.statusReason !== "user")
-  );
-}
-
-/** The sidebar pill text for a goal thread; null keeps the usual status label. */
-export function sidebarGoalStatusLabel(
-  goal: SidebarThreadSummary["t3Goal"],
-  status: SidebarThreadStatus,
-): string | null {
-  if (goal == null || goal.status === "complete" || goal.status === "stopped") return null;
-  if (status === "input") {
-    return goal.needsInput ? "Input" : goal.status === "blocked" ? "Blocked" : "Paused";
-  }
-  if (status === "working" && goal.status === "active") {
-    return goal.iteration === 0 ? "Goal" : `Iteration ${goal.iteration}`;
-  }
-  return null;
-}
-
 export function resolveSidebarThreadStatus(thread: SidebarThreadStatusInput): SidebarThreadStatus {
   if (thread.hasPendingApprovals) {
     return "approval";
   }
-  if (thread.hasPendingUserInput || (thread.t3Goal != null && goalWantsUser(thread.t3Goal))) {
+  // A T3 goal's owner thread runs no turns itself; its goal says what it needs.
+  const goalAttention = thread.t3Goal == null ? null : t3GoalAttention(thread.t3Goal);
+  if (thread.hasPendingUserInput || goalAttention === "input") {
     return "input";
   }
   if (
     (thread.runtime !== null &&
       ["preparing", "queued", "starting", "running", "waiting"].includes(thread.runtime.status)) ||
-    thread.t3Goal?.status === "active"
+    goalAttention === "working"
   ) {
     return "working";
   }
-  if (thread.t3Goal?.status === "usageLimited") return "limited";
+  if (goalAttention === "limited") return "limited";
   if (thread.runtime?.status === "idle") {
     return "waiting";
   }
@@ -1529,23 +1445,4 @@ export function sortScopedProjectsForSidebar<
       left.environmentId.localeCompare(right.environmentId) ||
       left.id.localeCompare(right.id),
   );
-}
-
-export function resolveSidebarRouteOwnerKey(
-  threads: readonly Pick<
-    SidebarThreadSummary,
-    "id" | "environmentId" | "archivedAt" | "goalIteration"
-  >[],
-  routeKey: string | null,
-): string | null {
-  const markerThread = threads.find(
-    (thread) => `${thread.environmentId}:${thread.id}` === routeKey,
-  );
-  if (markerThread?.goalIteration == null) return routeKey;
-  const ownerKey = `${markerThread.environmentId}:${markerThread.goalIteration.parentThreadId}`;
-  return threads.some(
-    (thread) => `${thread.environmentId}:${thread.id}` === ownerKey && thread.archivedAt === null,
-  )
-    ? ownerKey
-    : routeKey;
 }

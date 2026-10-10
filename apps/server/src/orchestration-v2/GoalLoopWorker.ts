@@ -1,22 +1,26 @@
 /**
  * Drives `/t3-goal` loops. A scheduler sweep reconciles every thread whose goal
  * needs attention: it starts the next iteration in a fresh child thread,
- * watches the child, records its outcome, runs the completion check, and
- * enforces the burn guard and iteration timeout. All decisions about what a
- * finished iteration means live in `GoalState.ts`; this worker only observes
- * and reports, so restarts resume from durable state.
+ * continues the child in place while its context has room, records its
+ * outcome, runs the completion check, and enforces the burn guard and
+ * iteration timeout. All decisions about what a finished iteration means live
+ * in `GoalState.ts`; this worker only observes and reports, so restarts resume
+ * from durable state.
  *
  * @module GoalLoopWorker
  */
 import {
   CheckpointRef,
   CommandId,
+  goalIterationTimeoutMins,
   MessageId,
   type OrchestrationV2AppThread,
   type OrchestrationV2GoalAdvanceStep,
   type OrchestrationV2GoalBurnGuard,
   type OrchestrationV2GoalStatusReason,
   type OrchestrationV2GoalUsageAccounting,
+  type OrchestrationV2GoalUsageSample,
+  type OrchestrationV2ProviderThread,
   type OrchestrationV2ProviderTurn,
   type OrchestrationV2Run,
   type OrchestrationV2ServerCommand,
@@ -37,20 +41,17 @@ import * as ProcessRunner from "../processRunner.ts";
 import * as ProviderRegistry from "../provider/ProviderRegistry.ts";
 import * as Scheduler from "../scheduling/Scheduler.ts";
 import * as VcsDriverRegistry from "../vcs/VcsDriverRegistry.ts";
-import {
-  goalIterationTimeoutMins,
-  goalIterationTitle,
-  isLiveGoal,
-  MAX_GOAL_CHECK_OUTPUT_CHARS,
-} from "./GoalState.ts";
+import { goalIterationTitle, isLiveGoal, MAX_GOAL_CHECK_OUTPUT_CHARS } from "./GoalState.ts";
 import { buildGoalIterationPrompt } from "./GoalPrompt.ts";
 import * as Orchestrator from "./Orchestrator.ts";
 import * as ProjectionStore from "./ProjectionStore.ts";
 import * as ProjectStore from "./ProjectStore.ts";
 import { delegatedTaskProgress } from "@t3tools/provider-core/server/subagentProjection";
 
-/** How long before its time limit an iteration is asked to wrap up (at most a quarter of it). */
-const WRAP_UP_LEAD_MS = 15 * 60 * 1000;
+/** The share of its time limit an iteration has left when it is asked to wrap up. */
+const WRAP_UP_LEAD_FRACTION = 0.1;
+/** Past this share of its context window, a finished turn hands over to a fresh iteration. */
+const CONTEXT_ROLLOVER_FRACTION = 0.6;
 /** How long to wait when a usage limit reports no reset time (or one already past). */
 const USAGE_LIMIT_FALLBACK_BACKOFF_MS = 15 * 60 * 1000;
 const CHECK_TIMEOUT = "10 minutes";
@@ -66,17 +67,24 @@ const INTERRUPTING_PAUSE_REASONS: ReadonlySet<OrchestrationV2GoalStatusReason> =
 /** When an iteration gets its wrap-up nudge and when it is stopped, in ms after it started. */
 export function iterationDeadlines(timeoutMins: number) {
   const timeoutMs = timeoutMins * 60_000;
-  return { wrapUpMs: timeoutMs - Math.min(WRAP_UP_LEAD_MS, timeoutMs / 4), timeoutMs };
+  return { wrapUpMs: Math.round(timeoutMs * (1 - WRAP_UP_LEAD_FRACTION)), timeoutMs };
 }
 
 /**
  * Tokens one iteration's child thread spent. Every provider turn in the
- * child belongs to the iteration because the child starts empty.
+ * child belongs to the iteration because the child starts empty. `tokens`
+ * counts context volume (cache reads at full weight); `uncachedTokens` drops
+ * cache reads, which is closer to what the turn cost.
  */
 export function childIterationTokens(
   providerTurns: ReadonlyArray<Pick<OrchestrationV2ProviderTurn, "turnTokenUsage">>,
-): { readonly tokens: number; readonly accounting: OrchestrationV2GoalUsageAccounting } {
+): {
+  readonly tokens: number;
+  readonly uncachedTokens: number;
+  readonly accounting: OrchestrationV2GoalUsageAccounting;
+} {
   let tokens = 0;
+  let uncachedTokens = 0;
   let reported = 0;
   let complete = true;
   for (const turn of providerTurns) {
@@ -89,11 +97,31 @@ export function childIterationTokens(
       continue;
     }
     reported += 1;
-    tokens += (usage.inputTokens ?? 0) + (usage.outputTokens ?? 0);
+    const input = usage.inputTokens ?? 0;
+    const output = usage.outputTokens ?? 0;
+    tokens += input + output;
+    uncachedTokens += Math.max(0, input - (usage.cachedInputTokens ?? 0)) + output;
     if (usage.usageStatus !== "complete") complete = false;
   }
-  if (reported === 0) return { tokens: 0, accounting: "unavailable" };
-  return { tokens, accounting: complete ? "exact" : "estimated" };
+  if (reported === 0) return { tokens: 0, uncachedTokens: 0, accounting: "unavailable" };
+  return { tokens, uncachedTokens, accounting: complete ? "exact" : "estimated" };
+}
+
+/**
+ * How full the child's context window is, from the reports the composer's
+ * context meter reads: the latest turn's live usage, else the provider
+ * thread's last snapshot. Null when the provider gives no window size.
+ */
+export function childContextFraction(
+  providerTurns: ReadonlyArray<Pick<OrchestrationV2ProviderTurn, "tokenUsage">>,
+  providerThread: Pick<OrchestrationV2ProviderThread, "contextUsage"> | undefined,
+): number | null {
+  const threadUsage = providerThread?.contextUsage ?? null;
+  const usage = providerTurns.findLast((turn) => turn.tokenUsage !== undefined)?.tokenUsage;
+  const usedTokens = usage?.usedTokens ?? threadUsage?.usedTokens;
+  const maxTokens = usage?.maxTokens ?? threadUsage?.maxTokens;
+  if (usedTokens === undefined || maxTokens == null || maxTokens <= 0) return null;
+  return usedTokens / maxTokens;
 }
 
 export interface GoalUsageSample {
@@ -102,16 +130,16 @@ export interface GoalUsageSample {
 }
 
 /**
- * The first usage window that rose more than the guard allows across the
- * samples, which callers keep trimmed to the guard's trailing window. A drop
- * between samples is a provider reset and restarts that window's baseline.
+ * The usage window that rose most across the samples, which callers keep
+ * trimmed to the guard's trailing window. A drop between samples is a
+ * provider reset and restarts that window's baseline.
  */
-export function burnGuardTripped(
+export function largestUsageRise(
   samples: ReadonlyArray<GoalUsageSample>,
-  guard: OrchestrationV2GoalBurnGuard,
 ): { readonly windowId: string; readonly risePoints: number } | null {
   const latest = samples.at(-1);
   if (latest === undefined) return null;
+  let largest: { readonly windowId: string; readonly risePoints: number } | null = null;
   for (const window of latest.windows) {
     let low: number | null = null;
     let previous: number | null = null;
@@ -123,9 +151,35 @@ export function burnGuardTripped(
       previous = value;
     }
     const risePoints = low === null ? 0 : window.usedPercent - low;
-    if (risePoints > guard.maxPercentPoints) return { windowId: window.id, risePoints };
+    if (largest === null || risePoints > largest.risePoints) {
+      largest = { windowId: window.id, risePoints };
+    }
   }
-  return null;
+  return largest;
+}
+
+export function burnGuardTripped(
+  samples: ReadonlyArray<GoalUsageSample>,
+  guard: OrchestrationV2GoalBurnGuard,
+): { readonly windowId: string; readonly risePoints: number } | null {
+  const rise = largestUsageRise(samples);
+  return rise !== null && rise.risePoints > guard.maxPercentPoints ? rise : null;
+}
+
+/** Whether a reading differs enough from the stored one to be worth persisting. */
+function usageSampleChanged(
+  stored: OrchestrationV2GoalUsageSample | null | undefined,
+  next: OrchestrationV2GoalUsageSample,
+): boolean {
+  if (stored == null || stored.windows.length !== next.windows.length) return true;
+  if (Math.round(stored.risePoints) !== Math.round(next.risePoints)) return true;
+  return next.windows.some((window, index) => {
+    const previous = stored.windows[index]!;
+    return (
+      previous.id !== window.id ||
+      Math.round(previous.usedPercent) !== Math.round(window.usedPercent)
+    );
+  });
 }
 
 /** How a finished child ended, as the goal reducer understands it. */
@@ -324,23 +378,134 @@ export const make = Effect.gen(function* () {
       });
     });
 
-  const burnGuardCheck = (goal: OrchestrationV2ThreadGoal, nowMs: number) =>
+  const burnGuardCheck = (
+    thread: OrchestrationV2AppThread,
+    goal: OrchestrationV2ThreadGoal,
+    nowMs: number,
+  ) =>
     Effect.gen(function* () {
       const guard = goal.burnGuard;
       if (guard === null) return null;
       const provider = (yield* providers.getProviders).find(
         (candidate) => candidate.instanceId === goal.modelSelection.instanceId,
       );
-      const windows = provider?.usageLimits?.windows ?? [];
-      if (windows.length === 0) return null;
+      const windows = (provider?.usageLimits?.windows ?? []).map(({ id, usedPercent }) => ({
+        id,
+        usedPercent,
+      }));
+      if (windows.length === 0) {
+        yield* Effect.logDebug("orchestration-v2.goal-loop.usage-unavailable", {
+          threadId: thread.id,
+          instanceId: goal.modelSelection.instanceId,
+        });
+        return null;
+      }
       const cutoff = nowMs - guard.windowMins * 60_000;
       const samples = (usageSamples.get(goal.id) ?? []).filter((sample) => sample.atMs >= cutoff);
-      samples.push({
-        atMs: nowMs,
-        windows: windows.map(({ id, usedPercent }) => ({ id, usedPercent })),
-      });
+      samples.push({ atMs: nowMs, windows });
       usageSamples.set(goal.id, samples);
+      const rise = largestUsageRise(samples);
+      const sample: OrchestrationV2GoalUsageSample = {
+        at: DateTime.formatIso(DateTime.makeUnsafe(nowMs)),
+        windows,
+        risePoints: rise?.risePoints ?? 0,
+      };
+      yield* Effect.logDebug("orchestration-v2.goal-loop.usage-sample", {
+        threadId: thread.id,
+        samples: samples.length,
+        ...sample,
+      });
+      if (usageSampleChanged(goal.usageSample, sample)) {
+        yield* advance(thread, goal, "usage-sampled", { type: "usage_sampled", sample });
+      }
       return burnGuardTripped(samples, guard);
+    });
+
+  /**
+   * Starts another turn in the iteration's thread when its last turn ended
+   * cleanly, recorded progress, and left both time and context to spare, so
+   * the agent keeps its context instead of re-orienting in a fresh thread.
+   * Returns false when the iteration should end; unknown context size keeps
+   * the fresh-thread behaviour.
+   */
+  const continueInPlace = (
+    thread: OrchestrationV2AppThread,
+    goal: OrchestrationV2ThreadGoal,
+    records: ProjectionStore.ProjectionRecords<"runs" | "providerThreads" | "providerTurns">,
+    progress: ReturnType<typeof delegatedTaskProgress>,
+    nowMs: number,
+  ) =>
+    Effect.gen(function* () {
+      const current = goal.current!;
+      const endedRun = progress.resultRun;
+      if (
+        goal.status !== "active" ||
+        current.claim !== null ||
+        current.wrapUpSentAt != null ||
+        endedRun?.status !== "completed" ||
+        endedRun.startedAt === null ||
+        nowMs - Date.parse(current.startedAt) >
+          iterationDeadlines(goalIterationTimeoutMins(goal)).wrapUpMs
+      ) {
+        return false;
+      }
+      // A turn that left no note is not obviously progressing; let a fresh
+      // iteration take over rather than prompting it again.
+      const turnStartedMs = DateTime.toEpochMillis(endedRun.startedAt);
+      if (
+        !goal.progressNotes.some(
+          (note) => note.iteration === current.iteration && Date.parse(note.at) >= turnStartedMs,
+        )
+      ) {
+        return false;
+      }
+      const fraction = childContextFraction(
+        records.providerTurns,
+        records.providerThreads.find(
+          (providerThread) => providerThread.id === records.thread.activeProviderThreadId,
+        ),
+      );
+      if (fraction === null || fraction >= CONTEXT_ROLLOVER_FRACTION) return false;
+      const pendingMessages = current.pendingMessages ?? [];
+      const sent = yield* dispatch({
+        type: "message.dispatch",
+        commandId: commandId(thread, `${goal.iteration}:continue`),
+        messageId: MessageId.make(
+          `goal-continue:${current.childThreadId}:${bootId}-${dispatchSequence}`,
+        ),
+        threadId: current.childThreadId,
+        text: [
+          ...pendingMessages.map((message) => message.text),
+          "Continue from T3 Code: this goal iteration still has time and context to spare, so keep working toward the goal in this thread. If the goal is achieved, call t3_goal_complete. Otherwise rewrite the handoff file and call t3_goal_update before your turn ends.",
+        ].join("\n\n"),
+        attachments: [],
+        deliveryIntent: "auto",
+        dispatchMode: { type: "start_immediately" },
+        createdBy: "agent",
+        creationSource: "server",
+      }).pipe(
+        Effect.as(true),
+        Effect.catchCause((cause) =>
+          Effect.logWarning("orchestration-v2.goal-loop.continue-failed", {
+            threadId: thread.id,
+            cause,
+          }).pipe(Effect.as(false)),
+        ),
+      );
+      if (!sent) return false;
+      yield* Effect.logDebug("orchestration-v2.goal-loop.continued", {
+        threadId: thread.id,
+        iteration: goal.iteration,
+        contextFraction: fraction,
+      });
+      if (pendingMessages.length > 0) {
+        yield* advance(thread, goal, "messages-delivered", {
+          type: "messages_delivered",
+          count: pendingMessages.length,
+        });
+      }
+      yield* advance(thread, goal, "continued", { type: "turn_continued" });
+      return true;
     });
 
   const reconcileRunning = (
@@ -534,7 +699,7 @@ export const make = Effect.gen(function* () {
                   `goal-wrap-up:${current.childThreadId}:${bootId}-${dispatchSequence}`,
                 ),
                 threadId: current.childThreadId,
-                text: `Time check from T3 Code: this goal iteration will be stopped in about ${minutesLeft} minutes. Finish or checkpoint the current step, update the handoff file, call t3_goal_update with a short note, and end your turn. The next iteration continues from there.`,
+                text: `Time check from T3 Code: this goal iteration will be stopped in about ${minutesLeft} minutes. Finish or checkpoint the current step, rewrite the handoff file, call t3_goal_update with a short note, and end your turn. The next iteration continues from there.`,
                 attachments: [],
                 deliveryIntent: "steer",
                 dispatchMode: { type: "start_immediately" },
@@ -543,10 +708,12 @@ export const make = Effect.gen(function* () {
               });
               yield* advance(thread, goal, "wrap-up-sent", { type: "wrap_up_sent" });
             }
-            const tripped = yield* burnGuardCheck(goal, nowMs);
+            const tripped = yield* burnGuardCheck(thread, goal, nowMs);
             if (tripped !== null) {
               yield* Effect.logInfo("orchestration-v2.goal-loop.burn-guard-tripped", {
                 threadId: thread.id,
+                maxPercentPoints: goal.burnGuard?.maxPercentPoints,
+                windowMins: goal.burnGuard?.windowMins,
                 ...tripped,
               });
               return yield* advance(thread, goal, "paused:burn", {
@@ -558,6 +725,8 @@ export const make = Effect.gen(function* () {
           return;
         }
       }
+
+      if (!interrupting && (yield* continueInPlace(thread, goal, records, progress, nowMs))) return;
 
       const shell = yield* orchestrator
         .getThreadShell(current.childThreadId)
@@ -575,6 +744,7 @@ export const make = Effect.gen(function* () {
       yield* finish({
         childOutcome: ended.outcome,
         tokens: usage.tokens,
+        uncachedTokens: usage.uncachedTokens,
         accounting: usage.accounting,
         workspaceChanged: yield* workspaceChanged(thread, goal, current.baselineRef),
         resumeAt,

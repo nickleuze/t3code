@@ -1,6 +1,4 @@
-import type { OrchestrationV2ThreadGoal } from "@t3tools/contracts";
-
-import { goalIterationTimeoutMins } from "./GoalState.ts";
+import { goalIterationTimeoutMins, type OrchestrationV2ThreadGoal } from "@t3tools/contracts";
 
 /**
  * The opening message of goal iteration `iteration`. Each iteration starts
@@ -34,8 +32,8 @@ export function buildGoalIterationPrompt(
   }
   sections.push(
     goal.handoffPath
-      ? `## Handoff file\n\nRead \`${goal.handoffPath}\` first: it holds the detailed state earlier iterations left. Treat what it records as verified unless something shows it changed, rather than re-checking it. Update it before you finish.`
-      : "## Handoff file\n\nThere is no handoff file yet. Create one in the workspace (for example `docs/agent-work/<short-goal-name>/HANDOFF.md`) with what a fresh iteration needs: current state, decisions, what is verified, and next steps. Pass its path to `t3_goal_update` as `handoffPath`.",
+      ? `## Handoff file\n\nRead \`${goal.handoffPath}\` first: it holds the current state earlier iterations left. Checks it records as passing are verified; do not re-run them unless you changed what they cover or something shows they no longer hold. These instructions take precedence over any rule in the handoff that asks you to re-check.`
+      : "## Handoff file\n\nThere is no handoff file yet. Create one in the workspace (for example `docs/agent-work/<short-goal-name>/HANDOFF.md`) and pass its path to `t3_goal_update` as `handoffPath`.",
   );
   if (goal.progressNotes.length > 0) {
     sections.push(
@@ -61,9 +59,11 @@ export function buildGoalIterationPrompt(
     [
       "## How to work",
       "",
-      `- Make concrete progress toward the goal, then end your turn. You have about ${goalIterationTimeoutMins(goal)} minutes; T3 Code tells you when to wrap up.`,
-      "- Before you finish, update the handoff file and call `t3_goal_update` with one or two sentences on what changed. Details belong in the handoff file, not the note.",
-      `- When the whole goal is achieved, call \`t3_goal_complete\` with status "complete" and a summary.${completion}`,
+      `- Keep working through the goal, step after step, for the whole iteration; do not end your turn after one step to leave the rest to a later iteration. You have about ${goalIterationTimeoutMins(goal)} minutes, and T3 Code tells you when to wrap up. If your turn ends while this thread still has context to spare, T3 Code asks you to continue here.`,
+      "- Keep the handoff file a current-state document for a fresh agent: current state, decisions, what is verified (and by which command), and next steps. Rewrite it each time instead of appending, keep it under about 15 KB, and keep its change log to at most 10 dated lines.",
+      "- Do not save command output, logs or other evidence files per step unless the goal asks for them. Record each result as one line in the handoff.",
+      "- Before your turn ends, rewrite the handoff and call `t3_goal_update` with one or two sentences on what changed. Details belong in the handoff file, not the note.",
+      `- As soon as the goal is achieved${goal.doneWhen ? ' and the "Done when" conditions hold' : ""}, call \`t3_goal_complete\` with status "complete" and a summary. Do not add checks, reviews or approvals the goal does not ask for.${completion}`,
       '- If you need a decision or approval from the user, ask with your question tool (or `t3_ask_user_question`) and wait for the answer; the user is notified. Use `t3_goal_complete` with status "blocked" only when work cannot continue for a long time, and say what you need.',
     ].join("\n"),
   );
