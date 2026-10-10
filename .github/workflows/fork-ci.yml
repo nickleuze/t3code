@@ -1,3 +1,5 @@
+# Generated from ci.yml by fork/sync-ci.mjs; do not edit by hand.
+# After an upstream sync, run: node fork/sync-ci.mjs
 name: Fork CI
 
 on:
@@ -6,10 +8,6 @@ on:
   pull_request:
   workflow_dispatch:
   workflow_call:
-    outputs:
-      checked-sha:
-        description: Exact commit that passed every required check
-        value: ${{ jobs.check.outputs.checked-sha }}
 
 permissions:
   contents: read
@@ -23,7 +21,6 @@ jobs:
   # side instead of one after another. The `Check` job at the end of this file
   # passes only when every other job does.
   lint:
-    if: github.repository == 'nickleuze/t3code'
     name: Lint
     runs-on: ubuntu-24.04
     timeout-minutes: 30
@@ -31,7 +28,6 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v6
         with:
-          ref: ${{ github.sha }}
           sparse-checkout: |
             /*
             !/.repos/
@@ -56,17 +52,16 @@ jobs:
         run: vp run --filter @t3tools/desktop ensure:electron
 
       # Files/dependencies are repo-wide; export checks cover clean workspaces only.
-      - name: Test fork maintenance and release gates
-        run: node --test fork/*.test.mjs
-
       - name: Check unused code
         run: vp run knip:check
+
+      - name: Test fork scripts
+        run: node --test fork/*.test.mjs
 
       - name: Check
         run: vp check
 
   typecheck:
-    if: github.repository == 'nickleuze/t3code'
     name: Typecheck
     runs-on: ubuntu-24.04
     timeout-minutes: 30
@@ -74,7 +69,6 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v6
         with:
-          ref: ${{ github.sha }}
           sparse-checkout: |
             /*
             !/.repos/
@@ -94,7 +88,6 @@ jobs:
         run: vpr typecheck
 
   build:
-    if: github.repository == 'nickleuze/t3code'
     name: Build
     runs-on: ubuntu-24.04
     timeout-minutes: 30
@@ -102,7 +95,6 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v6
         with:
-          ref: ${{ github.sha }}
           sparse-checkout: |
             /*
             !/.repos/
@@ -147,7 +139,6 @@ jobs:
   # dependency layers. The concurrency limit stays at the default 4 so peak load
   # per runner is unchanged.
   test:
-    if: github.repository == 'nickleuze/t3code'
     name: Test
     runs-on: ubuntu-24.04
     timeout-minutes: 30
@@ -155,7 +146,6 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v6
         with:
-          ref: ${{ github.sha }}
           sparse-checkout: |
             /*
             !/.repos/
@@ -210,7 +200,6 @@ jobs:
   # The web suite is the largest outside the server. In the shared Test job it
   # started last and ran alone for about 40s after everything else finished.
   test_web:
-    if: github.repository == 'nickleuze/t3code'
     name: Test Web
     runs-on: ubuntu-24.04
     timeout-minutes: 30
@@ -218,7 +207,6 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v6
         with:
-          ref: ${{ github.sha }}
           sparse-checkout: |
             /*
             !/.repos/
@@ -241,7 +229,6 @@ jobs:
   # about 1.5 cores busy, so 4 vCPU runners lose nothing against 8. The shards
   # split files by recorded duration (apps/server/src/testUtils/weightedShardSequencer.ts).
   test_server:
-    if: github.repository == 'nickleuze/t3code'
     name: Test Server ${{ matrix.shard }}
     runs-on: ubuntu-24.04
     timeout-minutes: 30
@@ -253,7 +240,6 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v6
         with:
-          ref: ${{ github.sha }}
           sparse-checkout: |
             /*
             !/.repos/
@@ -311,7 +297,6 @@ jobs:
           retention-days: 30
 
   transfer-report:
-    if: github.repository == 'nickleuze/t3code'
     name: Transfer report artifact
     needs: test_server
     # On Blacksmith like every other job here: the GitHub-hosted queue is shared
@@ -329,7 +314,6 @@ jobs:
   # Split out of Check and Test: both paid ~7-9s to install a Rust toolchain
   # for checks that take under 3s, on the critical path of every PR.
   rust:
-    if: github.repository == 'nickleuze/t3code'
     name: Rust
     runs-on: ubuntu-24.04
     timeout-minutes: 30
@@ -337,7 +321,6 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v6
         with:
-          ref: ${{ github.sha }}
           sparse-checkout: |
             /*
             !/.repos/
@@ -365,7 +348,6 @@ jobs:
   # for it on every push. Detection is API-only (no checkout) and fails open: if
   # the diff cannot be resolved, the lint runs.
   mobile_native_changes:
-    if: github.repository == 'nickleuze/t3code'
     name: Mobile Native Changes
     runs-on: ubuntu-24.04
     timeout-minutes: 5
@@ -444,14 +426,13 @@ jobs:
     needs: mobile_native_changes
     # Skip only on an explicit "no": a gate job that failed or errored leaves the
     # output empty, and that must run the lint rather than silently skip it.
-    if: ${{ github.repository == 'nickleuze/t3code' && !cancelled() && needs.mobile_native_changes.outputs.changed != 'false' }}
+    if: ${{ !cancelled() && needs.mobile_native_changes.outputs.changed != 'false' }}
     runs-on: macos-15
     timeout-minutes: 30
     steps:
       - name: Checkout
         uses: actions/checkout@v6
         with:
-          ref: ${{ github.sha }}
           sparse-checkout: |
             /*
             !/.repos/
@@ -473,7 +454,6 @@ jobs:
         run: vp run lint:mobile
 
   release_smoke:
-    if: github.repository == 'nickleuze/t3code'
     name: Release Smoke
     runs-on: ubuntu-24.04
     timeout-minutes: 30
@@ -481,7 +461,6 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v6
         with:
-          ref: ${{ github.sha }}
           sparse-checkout: |
             /*
             !/.repos/
@@ -499,10 +478,14 @@ jobs:
       - name: Exercise release-only workflow steps
         run: node scripts/release-smoke.ts
 
-  # Always aggregate: failure, cancellation and accidental skips fail closed.
+  # Branch protection requires this job by its name, `Check`. It fails when any
+  # other job fails, is cancelled, or is skipped without a reason, so splitting
+  # or resharding jobs needs no ruleset change. Add every new job to `needs`.
+  # `always()` rather than `!cancelled()`: a skipped job reports success to
+  # branch protection, so a cancelled run must still produce a failing check.
   check:
-    name: Fork Check
-    if: ${{ always() && github.repository == 'nickleuze/t3code' }}
+    name: Check
+    if: ${{ always() }}
     needs:
       [
         lint,
@@ -519,17 +502,13 @@ jobs:
       ]
     runs-on: ubuntu-24.04
     timeout-minutes: 5
-    outputs:
-      checked-sha: ${{ steps.gate.outputs.checked-sha }}
     steps:
-      - uses: actions/checkout@v6
-        with:
-          ref: ${{ github.sha }}
-      - uses: actions/setup-node@v6
-        with:
-          node-version-file: package.json
-      - name: Require every job to pass for this commit
-        id: gate
+      - name: Require every job to pass
         env:
           RESULTS: ${{ toJSON(needs) }}
-        run: node fork/release-gate.mjs ci
+        run: |
+          echo "$RESULTS" | jq -r 'to_entries[] | "\(.key): \(.value.result)"'
+          # Only the macOS lint skips on purpose, when no native mobile code changed.
+          echo "$RESULTS" | jq -e 'all(to_entries[];
+            .value.result == "success"
+            or (.key == "mobile_native_static_analysis" and .value.result == "skipped"))' > /dev/null
