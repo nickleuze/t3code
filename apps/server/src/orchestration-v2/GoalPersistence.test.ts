@@ -149,3 +149,60 @@ it.effect(
 it.effect("preserves the same goal replay and settlement behavior in memory", () =>
   persistenceBehavior.pipe(Effect.provide(ProjectionStore.layerMemory)),
 );
+
+const discoveryBehavior = Effect.gen(function* () {
+  const store = yield* ProjectionStore.ProjectionStoreV2;
+  yield* store.apply(created);
+  for (const status of [
+    "active",
+    "usageLimited",
+    "paused",
+    "blocked",
+    "complete",
+    "stopped",
+  ] as const) {
+    yield* store.apply({
+      ...created,
+      type: "thread.metadata-updated",
+      payload: { ...thread, goal: { ...t3Goal, status } },
+    });
+    assert.equal(
+      (yield* store.getGoalThreads()).length,
+      status === "active" || status === "usageLimited" ? 1 : 0,
+    );
+  }
+  const current = {
+    iteration: 1,
+    childThreadId: ThreadId.make("iteration:pending"),
+    startedAt: DateTime.formatIso(now),
+    phase: "checking" as const,
+    baselineRef: null,
+    notesThisIteration: 0,
+    claim: null,
+    waitingOnRequest: null,
+    finished: null,
+  };
+  for (const status of ["active", "paused", "stopped"] as const) {
+    yield* store.apply({
+      ...created,
+      type: "thread.metadata-updated",
+      payload: { ...thread, archivedAt: now, goal: { ...t3Goal, status, current } },
+    });
+    // Archived/stopped owners with unfinished work still need reconciliation.
+    assert.equal((yield* store.getGoalThreads()).length, 1);
+  }
+  yield* store.apply({
+    ...created,
+    type: "thread.metadata-updated",
+    payload: { ...thread, deletedAt: now, goal: { ...t3Goal, current } },
+  });
+  assert.deepEqual(yield* store.getGoalThreads(), []);
+});
+it.effect("discovers only due goals and unfinished work in SQLite", () =>
+  discoveryBehavior.pipe(
+    Effect.provide(ProjectionStore.layer.pipe(Layer.provide(SqlitePersistence.layerMemory))),
+  ),
+);
+it.effect("discovers the same due goals in memory", () =>
+  discoveryBehavior.pipe(Effect.provide(ProjectionStore.layerMemory)),
+);

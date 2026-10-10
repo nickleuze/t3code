@@ -3099,6 +3099,57 @@ export const OrchestrationV2Command = Schema.Union([
     threadId: ThreadId,
     modelSelection: ModelSelection,
   }),
+  /**
+   * Starts a `/t3-goal` loop on the thread. Rejected while another goal on the
+   * thread is still live; model and runtime mode default to the thread's.
+   */
+  Schema.Struct({
+    type: Schema.Literal("thread.goal.set"),
+    commandId: CommandId,
+    threadId: ThreadId,
+    objective: TrimmedNonEmptyString,
+    checkCommand: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
+    burnGuard: Schema.optional(Schema.NullOr(OrchestrationV2GoalBurnGuard)),
+    noProgressLimit: Schema.optional(PositiveInt),
+    modelSelection: Schema.optional(ModelSelection),
+    runtimeMode: Schema.optional(RuntimeMode),
+    doneWhen: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
+    background: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
+    permissions: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
+    iterationTimeoutMins: Schema.optional(PositiveInt),
+  }),
+  /**
+   * A message from the user to their goal. It resumes a blocked or paused
+   * goal and reaches the next iteration, or goes straight to the iteration
+   * that is running.
+   */
+  Schema.Struct({
+    type: Schema.Literal("thread.goal.message"),
+    commandId: CommandId,
+    threadId: ThreadId,
+    goalId: CommandId,
+    text: TrimmedNonEmptyString,
+  }),
+  /**
+   * `pause` lets the running iteration finish and starts no more; `stop`
+   * interrupts it and ends the goal; `resume` restarts a paused, blocked or
+   * limited goal; `clear` removes a goal that has ended.
+   */
+  Schema.Struct({
+    type: Schema.Literal("thread.goal.control"),
+    commandId: CommandId,
+    threadId: ThreadId,
+    goalId: CommandId,
+    action: Schema.Literals(["pause", "resume", "stop", "clear"]),
+    burnGuard: Schema.optional(Schema.NullOr(OrchestrationV2GoalBurnGuard)),
+  }),
+  /** Discards the goal the thread's agent proposed. */
+  Schema.Struct({
+    type: Schema.Literal("thread.goal.proposal.dismiss"),
+    commandId: CommandId,
+    threadId: ThreadId,
+    proposalId: CommandId,
+  }),
   Schema.Struct({
     type: Schema.Literal("provider-session.detach"),
     commandId: CommandId,
@@ -3332,6 +3383,62 @@ export type OrchestrationV2Command = typeof OrchestrationV2Command.Type;
  * send them.
  */
 const OrchestrationV2InternalCommand = Schema.Union([
+  /** The thread's agent drafts a goal; it replaces any earlier proposal. */
+  Schema.Struct({
+    type: Schema.Literal("thread.goal.propose"),
+    commandId: CommandId,
+    threadId: ThreadId,
+    objective: TrimmedNonEmptyString,
+    doneWhen: TrimmedNonEmptyString,
+    background: Schema.NullOr(TrimmedNonEmptyString),
+    checkCommand: Schema.NullOr(TrimmedNonEmptyString),
+    permissions: Schema.NullOr(TrimmedNonEmptyString),
+    iterationTimeoutMins: Schema.NullOr(PositiveInt),
+    reason: Schema.NullOr(TrimmedNonEmptyString),
+  }),
+  /**
+   * Creates the child thread for goal iteration `iteration` and starts its
+   * first run. Rejected unless the goal is active with no iteration running.
+   */
+  Schema.Struct({
+    type: Schema.Literal("thread.goal.iteration.start"),
+    commandId: CommandId,
+    threadId: ThreadId,
+    goalId: CommandId,
+    iteration: PositiveInt,
+    baselineRef: Schema.NullOr(CheckpointRef),
+    prompt: TrimmedNonEmptyString,
+  }),
+  /** A progress note or completion claim from the iteration's child agent. */
+  Schema.Struct({
+    type: Schema.Literal("thread.goal.report"),
+    commandId: CommandId,
+    threadId: ThreadId,
+    goalId: CommandId,
+    iteration: PositiveInt,
+    childThreadId: ThreadId,
+    report: Schema.Union([
+      Schema.Struct({
+        type: Schema.Literal("note"),
+        text: TrimmedNonEmptyString,
+        handoffPath: Schema.optional(TrimmedNonEmptyString),
+      }),
+      Schema.Struct({
+        type: Schema.Literal("claim"),
+        status: OrchestrationV2GoalClaim.fields.status,
+        summary: TrimmedNonEmptyString,
+      }),
+    ]),
+  }),
+  /** Goal loop bookkeeping; every step is validated against `iteration`. */
+  Schema.Struct({
+    type: Schema.Literal("thread.goal.advance"),
+    commandId: CommandId,
+    threadId: ThreadId,
+    goalId: CommandId,
+    iteration: NonNegativeInt,
+    step: OrchestrationV2GoalAdvanceStep,
+  }),
   /**
    * Records what a pull request watch saw, and wakes the agent in the same transaction when
    * `wake` is set. Rejected once the watch started at `startedAt` has ended, and a wake is

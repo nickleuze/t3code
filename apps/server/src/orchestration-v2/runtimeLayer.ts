@@ -1,3 +1,5 @@
+import * as ProcessRunner from "../processRunner.ts";
+import * as GoalLoopWorker from "./GoalLoopWorker.ts";
 import * as ThreadReportBack from "./ThreadReportBack.ts";
 import * as UsageLimitRecoveryWorker from "./UsageLimitRecoveryWorker.ts";
 import * as Scheduler from "../scheduling/Scheduler.ts";
@@ -350,6 +352,16 @@ export const layerProduction = Layer.mergeAll(
   layerThreadLifecycleProvided,
   layerScheduledTaskProvided,
   layerSecretRequestsProvided,
+  GoalLoopWorker.layer.pipe(
+    Layer.provide(
+      Layer.mergeAll(
+        layerOrchestratorProvided,
+        ProjectionStore.layer,
+        ProjectStore.layer,
+        ProcessRunner.layer,
+      ),
+    ),
+  ),
   UsageLimitRecoveryWorker.layer.pipe(
     Layer.provide(Layer.mergeAll(ProjectionStore.layer, layerThreadManagementProvided)),
   ),

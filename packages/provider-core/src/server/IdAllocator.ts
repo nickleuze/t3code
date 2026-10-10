@@ -131,6 +131,8 @@ export interface IdAllocatorV2Derive {
     readonly providerInstanceId: ProviderInstanceId;
   }) => ProviderSessionId;
   readonly delegatedTaskNode: (input: { readonly commandId: CommandId }) => NodeId;
+  readonly goalIterationThread: (input: { readonly commandId: CommandId }) => ThreadId;
+  readonly goalIterationMessage: (input: { readonly commandId: CommandId }) => MessageId;
   readonly delegatedTaskThread: (input: { readonly commandId: CommandId }) => ThreadId;
   readonly delegatedTaskMessage: (input: { readonly commandId: CommandId }) => MessageId;
   readonly delegatedTaskTurnItem: (input: { readonly commandId: CommandId }) => TurnItemId;
@@ -258,6 +260,10 @@ export const derive: IdAllocatorV2Derive = {
       joinId("provider-session", "provider-instance", input.providerInstanceId, "shared"),
     ),
   delegatedTaskNode: (input) => NodeId.make(joinId("node", "delegated-task", input.commandId)),
+  goalIterationThread: (input) =>
+    ThreadId.make(joinId("thread", "goal-iteration", input.commandId)),
+  goalIterationMessage: (input) =>
+    MessageId.make(joinId("message", "goal-iteration", input.commandId)),
   delegatedTaskThread: (input) =>
     ThreadId.make(joinId("thread", "delegated-task", input.commandId)),
   delegatedTaskMessage: (input) =>

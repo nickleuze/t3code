@@ -1,0 +1,738 @@
+import { assert, it } from "@effect/vitest";
+import {
+  CommandId,
+  EventId,
+  type ModelSelection,
+  type ServerProvider,
+  ProjectId,
+  ProviderDriverKind,
+  ProviderInstanceId,
+  ThreadId,
+  TurnItemId,
+} from "@t3tools/contracts";
+import * as DateTime from "effect/DateTime";
+import * as Effect from "effect/Effect";
+import * as Layer from "effect/Layer";
+import * as TestClock from "effect/testing/TestClock";
+import * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
+import * as SqlitePersistence from "../persistence/Sqlite.ts";
+import * as ProcessRunner from "../processRunner.ts";
+import * as ProviderRegistry from "../provider/ProviderRegistry.ts";
+import * as VcsDriverRegistry from "../vcs/VcsDriverRegistry.ts";
+import { CodexProviderCapabilitiesV2 } from "./Adapters/CodexAdapterV2.ts";
+import * as EventSink from "./EventSink.ts";
+import * as GoalLoopWorker from "./GoalLoopWorker.ts";
+import * as Orchestrator from "./Orchestrator.ts";
+import * as ProjectionStore from "./ProjectionStore.ts";
+import * as ProjectStore from "./ProjectStore.ts";
+import * as ProviderAdapterRegistry from "./ProviderAdapterRegistry.ts";
+import * as ProviderReplayHarness from "./testkit/ProviderReplayHarness.ts";
+import type * as ProviderAdapter from "@t3tools/provider-core/server/ProviderAdapter";
+
+const modelSelection = {
+  instanceId: ProviderInstanceId.make("codex"),
+  model: "gpt-5.4",
+} satisfies ModelSelection;
+const adapter = {
+  instanceId: modelSelection.instanceId,
+  driver: ProviderDriverKind.make("codex"),
+  getCapabilities: () => Effect.succeed(CodexProviderCapabilitiesV2),
+  planSelectionTransition: () => Effect.succeed({ type: "apply_on_next_turn" as const }),
+  openSession: () => Effect.die("No provider process needed for goal command tests"),
+} as ProviderAdapter.ProviderAdapterV2["Service"];
+const layerDatabase = SqlitePersistence.layerMemory;
+const TestLayer = Layer.mergeAll(
+  layerDatabase,
+  ProjectionStore.layer.pipe(Layer.provide(layerDatabase)),
+  ProjectStore.layer.pipe(Layer.provide(layerDatabase)),
+  ProviderReplayHarness.layerWithRegistry(
+    { name: "goal-loop" },
+    ProviderAdapterRegistry.layerFromAdapters([adapter]),
+    { databaseLayer: layerDatabase, runEffectWorker: false },
+  ),
+);
+
+const setup = Effect.fn("GoalLoopTest.setup")(function* (
+  name: string,
+  goal: {
+    readonly checkCommand?: string;
+    readonly noProgressLimit?: number;
+    readonly iterationTimeoutMins?: number;
+  } = {},
+) {
+  const orchestrator = yield* Orchestrator.OrchestratorV2;
+  const projectId = ProjectId.make(`project:${name}`);
+  const threadId = ThreadId.make(`thread:${name}`);
+  yield* orchestrator.dispatch({
+    type: "thread.create",
+    createdBy: "user",
+    creationSource: "web",
+    commandId: CommandId.make(`command:create:${threadId}`),
+    threadId,
+    projectId,
+    title: "Goal owner",
+    modelSelection,
+    runtimeMode: "full-access",
+    interactionMode: "default",
+    branch: null,
+    worktreePath: null,
+  });
+  const goalId = CommandId.make(`command:${name}:goal`);
+  yield* orchestrator.dispatch({
+    type: "thread.goal.set",
+    commandId: goalId,
+    threadId,
+    objective: "Make every test pass",
+    ...goal,
+  });
+  return { orchestrator, threadId, goalId };
+});
+
+it.layer(TestLayer)("goal commands", (it) => {
+  it.effect(
+    "rejects automatic settlement of a live goal even with a matching snapshot timestamp",
+    () =>
+      Effect.gen(function* () {
+        const { orchestrator, threadId } = yield* setup("goal-settlement");
+        const thread = (yield* orchestrator.getThreadRecords(threadId, [])).thread;
+        const result = yield* orchestrator
+          .dispatch({
+            type: "thread.auto-settle",
+            commandId: CommandId.make("goal:auto-settle"),
+            threadId,
+            snapshotAt: thread.updatedAt,
+          })
+          .pipe(Effect.result);
+        assert.strictEqual(result._tag, "Failure");
+        assert.isNull((yield* orchestrator.getThreadShell(threadId))?.settledOverride);
+      }),
+  );
+
+  it.effect("starts an iteration in a fresh top-level thread", () =>
+    Effect.gen(function* () {
+      const { orchestrator, threadId, goalId } = yield* setup("goal-start");
+      const shell = yield* orchestrator.getThreadShell(threadId);
+      assert.deepInclude(shell?.t3Goal, { id: goalId, status: "active", iteration: 0 });
+
+      yield* orchestrator.dispatch({
+        type: "thread.goal.iteration.start",
+        commandId: CommandId.make(`goal:${goalId}:1:start`),
+        threadId,
+        goalId,
+        iteration: 1,
+        baselineRef: null,
+        prompt: "Iteration 1: make every test pass.",
+      });
+
+      const parent = yield* orchestrator.getThreadRecords(threadId, ["runs", "messages"]);
+      const current = parent.thread.goal?.current;
+      assert.isDefined(current);
+      assert.strictEqual(current?.iteration, 1);
+      // The parent agent is never woken: no run or message lands on the parent.
+      assert.lengthOf(parent.runs, 0);
+      assert.lengthOf(parent.messages, 0);
+
+      const child = yield* orchestrator.getThreadRecords(current!.childThreadId, [
+        "runs",
+        "messages",
+      ]);
+      assert.isNull(child.thread.forkedFrom);
+      assert.deepEqual(child.thread.lineage, {
+        parentThreadId: null,
+        relationshipToParent: null,
+        rootThreadId: child.thread.id,
+      });
+      assert.isNull(child.thread.goal);
+      assert.deepEqual(child.thread.pullRequests, []);
+      assert.deepEqual(child.thread.goalIteration, {
+        parentThreadId: threadId,
+        goalId,
+        iteration: 1,
+      });
+      assert.lengthOf(child.runs, 1);
+      assert.strictEqual(child.messages[0]?.text, "Iteration 1: make every test pass.");
+      assert.isUndefined(child.messages[0]?.senderThreadId);
+    }),
+  );
+
+  it.effect("records child reports and closes the iteration", () =>
+    Effect.gen(function* () {
+      const { orchestrator, threadId, goalId } = yield* setup("goal-report");
+      yield* orchestrator.dispatch({
+        type: "thread.goal.iteration.start",
+        commandId: CommandId.make(`goal:${goalId}:1:start`),
+        threadId,
+        goalId,
+        iteration: 1,
+        baselineRef: null,
+        prompt: "Iteration 1.",
+      });
+      const childThreadId = (yield* orchestrator.getThreadRecords(threadId, ["runs"])).thread.goal!
+        .current!.childThreadId;
+      yield* orchestrator.dispatch({
+        type: "thread.goal.report",
+        commandId: CommandId.make("command:goal-report:note"),
+        threadId,
+        goalId,
+        iteration: 1,
+        childThreadId,
+        report: { type: "claim", status: "complete", summary: "All tests pass" },
+      });
+      yield* orchestrator.dispatch({
+        type: "thread.goal.advance",
+        commandId: CommandId.make("command:goal-report:finish"),
+        threadId,
+        goalId,
+        iteration: 1,
+        step: {
+          type: "iteration_finished",
+          childOutcome: "completed",
+          tokens: 4_200,
+          accounting: "exact",
+          workspaceChanged: true,
+          resumeAt: null,
+        },
+      });
+      const goal = (yield* orchestrator.getThreadRecords(threadId, ["runs"])).thread.goal;
+      assert.deepInclude(goal, {
+        status: "complete",
+        completedSummary: "All tests pass",
+        tokensUsed: 4_200,
+        current: null,
+      });
+
+      yield* orchestrator.dispatch({
+        type: "thread.goal.control",
+        commandId: CommandId.make("command:goal-report:clear"),
+        threadId,
+        goalId,
+        action: "clear",
+      });
+      assert.isNull((yield* orchestrator.getThreadShell(threadId))?.t3Goal);
+    }),
+  );
+
+  it.effect("holds an agent's goal proposal until a goal starts", () =>
+    Effect.gen(function* () {
+      const { orchestrator, threadId, goalId } = yield* setup("goal-proposal");
+      const propose = (suffix: string) =>
+        orchestrator.dispatch({
+          type: "thread.goal.propose",
+          commandId: CommandId.make(`command:goal-proposal:${suffix}`),
+          threadId,
+          objective: "Migrate every package to the new API",
+          doneWhen: "No package imports the old API",
+          background: "The new API lives in packages/api.",
+          checkCommand: null,
+          permissions: null,
+          iterationTimeoutMins: null,
+          reason: null,
+        });
+
+      // A thread that already runs a goal cannot propose another.
+      const rejected = yield* propose("live").pipe(Effect.result);
+      assert.strictEqual(rejected._tag, "Failure");
+
+      yield* orchestrator.dispatch({
+        type: "thread.goal.control",
+        commandId: CommandId.make("command:goal-proposal:stop"),
+        threadId,
+        goalId,
+        action: "stop",
+      });
+      yield* propose("first");
+      assert.deepInclude((yield* orchestrator.getThreadShell(threadId))?.goalProposal, {
+        id: CommandId.make("command:goal-proposal:first"),
+        objective: "Migrate every package to the new API",
+        doneWhen: "No package imports the old API",
+      });
+
+      yield* orchestrator.dispatch({
+        type: "thread.goal.proposal.dismiss",
+        commandId: CommandId.make("command:goal-proposal:dismiss"),
+        threadId,
+        proposalId: CommandId.make("command:goal-proposal:first"),
+      });
+      assert.isNull((yield* orchestrator.getThreadShell(threadId))?.goalProposal);
+
+      yield* propose("second");
+      yield* orchestrator.dispatch({
+        type: "thread.goal.control",
+        commandId: CommandId.make("command:goal-proposal:clear"),
+        threadId,
+        goalId,
+        action: "clear",
+      });
+      yield* orchestrator.dispatch({
+        type: "thread.goal.set",
+        commandId: CommandId.make("command:goal-proposal:start"),
+        threadId,
+        objective: "Migrate every package to the new API",
+        doneWhen: "No package imports the old API",
+      });
+      const shell = yield* orchestrator.getThreadShell(threadId);
+      assert.isNull(shell?.goalProposal);
+      assert.strictEqual(shell?.t3Goal?.status, "active");
+    }),
+  );
+
+  it.effect("rejects a stale iteration start", () =>
+    Effect.gen(function* () {
+      const { orchestrator, threadId, goalId } = yield* setup("goal-stale");
+      const result = yield* orchestrator
+        .dispatch({
+          type: "thread.goal.iteration.start",
+          commandId: CommandId.make(`goal:${goalId}:2:start`),
+          threadId,
+          goalId,
+          iteration: 2,
+          baselineRef: null,
+          prompt: "Iteration 2.",
+        })
+        .pipe(Effect.flip);
+      assert.strictEqual(result._tag, "OrchestratorDispatchError");
+      assert.match(
+        String((result as { readonly cause?: unknown }).cause),
+        /Stale iteration number/,
+      );
+    }),
+  );
+});
+
+const checkResults: Array<{ readonly code: number; readonly stdout: string }> = [];
+let usageWindows: ServerProvider["usageLimits"] = undefined;
+
+const WorkerDependencies = Layer.mergeAll(
+  Layer.mock(ProviderRegistry.ProviderRegistry)({
+    getProviders: Effect.sync(() => [
+      { instanceId: modelSelection.instanceId, usageLimits: usageWindows } as ServerProvider,
+    ]),
+  }),
+  Layer.mock(ProcessRunner.ProcessRunner)({
+    run: () =>
+      Effect.sync(() => {
+        const result = checkResults.shift() ?? { code: 0, stdout: "" };
+        return {
+          stdout: result.stdout,
+          stderr: "",
+          code: ChildProcessSpawner.ExitCode(result.code),
+          timedOut: false,
+          stdoutTruncated: false,
+          stderrTruncated: false,
+          stdoutInvalidUtf8: false,
+          stderrInvalidUtf8: false,
+        };
+      }),
+  }),
+  Layer.mock(VcsDriverRegistry.VcsDriverRegistry)({ detect: () => Effect.succeed(null) }),
+);
+
+const goalLoop = GoalLoopWorker.make.pipe(Effect.provide(WorkerDependencies));
+
+const readGoal = (threadId: ThreadId) =>
+  Orchestrator.OrchestratorV2.pipe(
+    Effect.flatMap((orchestrator) => orchestrator.getThreadRecords(threadId, ["runs"])),
+    Effect.map((records) => records.thread.goal!),
+  );
+
+/** Ends the current iteration's first child run with `status`. */
+const completeChildRun = Effect.fn("GoalLoopTest.completeChildRun")(function* (
+  childThreadId: ThreadId,
+  status: "completed" | "interrupted" = "completed",
+) {
+  const orchestrator = yield* Orchestrator.OrchestratorV2;
+  const sink = yield* EventSink.EventSinkV2;
+  const now = yield* DateTime.now;
+  const run = (yield* orchestrator.getThreadRecords(childThreadId, ["runs"])).runs[0]!;
+  yield* sink.write({
+    events: [
+      {
+        id: EventId.make(`event:${run.id}:${status}`),
+        type: "run.updated",
+        threadId: childThreadId,
+        runId: run.id,
+        occurredAt: now,
+        payload: { ...run, status, startedAt: run.startedAt ?? now, completedAt: now },
+      },
+    ],
+  });
+});
+
+const reportFromChild = (
+  threadId: ThreadId,
+  goalId: CommandId,
+  report:
+    | { readonly type: "note"; readonly text: string }
+    | {
+        readonly type: "claim";
+        readonly status: "complete" | "blocked";
+        readonly summary: string;
+      },
+) =>
+  Effect.gen(function* () {
+    const orchestrator = yield* Orchestrator.OrchestratorV2;
+    const goal = yield* readGoal(threadId);
+    yield* orchestrator.dispatch({
+      type: "thread.goal.report",
+      commandId: CommandId.make(`command:report:${threadId}:${goal.iteration}:${report.type}`),
+      threadId,
+      goalId,
+      iteration: goal.iteration,
+      childThreadId: goal.current!.childThreadId,
+      report,
+    });
+  });
+
+it.layer(TestLayer)("goal loop worker", (it) => {
+  it.effect(
+    "backs off a limited iteration across reconstruction and resumes through the owner only",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const { orchestrator, threadId } = yield* setup("loop-usage-limit");
+          const loop = yield* goalLoop;
+          yield* loop.sweep();
+          const childThreadId = (yield* readGoal(threadId)).current!.childThreadId;
+          const run = (yield* orchestrator.getThreadRecords(childThreadId, ["runs"])).runs[0]!;
+          const now = yield* DateTime.now;
+          const resetAt = DateTime.formatIso(
+            DateTime.makeUnsafe(DateTime.toEpochMillis(now) + 60_000),
+          );
+          const sink = yield* EventSink.EventSinkV2;
+          yield* sink.write({
+            events: [
+              {
+                id: EventId.make("limit:run"),
+                type: "run.updated",
+                threadId: childThreadId,
+                occurredAt: now,
+                payload: { ...run, status: "failed", startedAt: now, completedAt: now },
+              },
+              {
+                id: EventId.make("limit:error"),
+                type: "turn-item.updated",
+                threadId: childThreadId,
+                occurredAt: now,
+                payload: {
+                  id: TurnItemId.make("limit:error"),
+                  type: "error",
+                  threadId: childThreadId,
+                  runId: run.id,
+                  nodeId: run.rootNodeId,
+                  providerThreadId: null,
+                  providerTurnId: null,
+                  nativeItemRef: null,
+                  parentItemId: null,
+                  ordinal: 2,
+                  status: "failed",
+                  title: "Usage limit",
+                  startedAt: now,
+                  completedAt: now,
+                  updatedAt: now,
+                  failure: {
+                    class: "usage_limit",
+                    message: "Plan limit",
+                    code: "usageLimitExceeded",
+                    retryable: null,
+                    resetAt,
+                  },
+                },
+              },
+            ],
+          });
+          const projections = yield* ProjectionStore.ProjectionStoreV2;
+          assert.deepEqual(
+            yield* projections.getLimitRecoveryCandidates({ now, autoResume: true, snooze: true }),
+            [],
+          );
+          yield* loop.sweep();
+          assert.deepInclude(yield* readGoal(threadId), {
+            status: "usageLimited",
+            resumeAt: resetAt,
+            current: null,
+          });
+          const restartedWorker = yield* goalLoop;
+          yield* restartedWorker.sweep();
+          assert.strictEqual((yield* readGoal(threadId)).iteration, 1);
+          yield* TestClock.adjust("1 minute");
+          yield* restartedWorker.sweep();
+          assert.strictEqual((yield* readGoal(threadId)).status, "active");
+          yield* restartedWorker.sweep();
+          assert.strictEqual((yield* readGoal(threadId)).iteration, 2);
+        }),
+      ),
+  );
+
+  it.effect(
+    "resumes from persisted iteration state in a fresh worker without reusing receipts",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const { threadId, goalId } = yield* setup("loop-restart");
+          const firstWorker = yield* goalLoop;
+          yield* firstWorker.sweep();
+          const firstChild = (yield* readGoal(threadId)).current!.childThreadId;
+          yield* reportFromChild(threadId, goalId, {
+            type: "note",
+            text: "Checkpointed the parser",
+          });
+          yield* completeChildRun(firstChild);
+          const restartedWorker = yield* goalLoop;
+          yield* restartedWorker.sweep();
+          assert.isNull((yield* readGoal(threadId)).current);
+          yield* restartedWorker.sweep();
+          const goal = yield* readGoal(threadId);
+          assert.strictEqual(goal.iteration, 2);
+          assert.notEqual(goal.current!.childThreadId, firstChild);
+          yield* restartedWorker.sweep();
+          assert.strictEqual((yield* readGoal(threadId)).iteration, 2);
+        }),
+      ),
+  );
+
+  it.effect("restarts a pending completion check and completes only after a passing result", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const { threadId, goalId } = yield* setup("loop-check-restart", {
+          checkCommand: "candidate-check",
+        });
+        const firstWorker = yield* goalLoop;
+        yield* firstWorker.sweep();
+        yield* reportFromChild(threadId, goalId, {
+          type: "claim",
+          status: "complete",
+          summary: "Candidate ready",
+        });
+        yield* completeChildRun((yield* readGoal(threadId)).current!.childThreadId);
+        yield* firstWorker.sweep();
+        assert.strictEqual((yield* readGoal(threadId)).current?.phase, "checking");
+        assert.strictEqual((yield* readGoal(threadId)).status, "active");
+        const restartedWorker = yield* goalLoop;
+        checkResults.push({ code: 0, stdout: "passed" });
+        yield* restartedWorker.sweep();
+        yield* restartedWorker.awaitChecks;
+        assert.deepInclude(yield* readGoal(threadId), { status: "complete", current: null });
+        assert.strictEqual((yield* readGoal(threadId)).lastCheck?.passed, true);
+      }),
+    ),
+  );
+
+  it.effect("honors a paused owner across worker reconstruction and starts once on resume", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const { orchestrator, threadId, goalId } = yield* setup("loop-pause-restart");
+        for (const suffix of ["first", "again"]) {
+          yield* orchestrator.dispatch({
+            type: "thread.goal.control",
+            commandId: CommandId.make(`pause:${suffix}`),
+            threadId,
+            goalId,
+            action: "pause",
+          });
+        }
+        const restartedWorker = yield* goalLoop;
+        yield* restartedWorker.sweep();
+        assert.strictEqual((yield* readGoal(threadId)).iteration, 0);
+        yield* orchestrator.dispatch({
+          type: "thread.goal.control",
+          commandId: CommandId.make("resume:once"),
+          threadId,
+          goalId,
+          action: "resume",
+        });
+        yield* restartedWorker.sweep();
+        yield* restartedWorker.sweep();
+        assert.strictEqual((yield* readGoal(threadId)).iteration, 1);
+      }),
+    ),
+  );
+
+  it.effect("stops a queued iteration and never launches another", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const { orchestrator, threadId, goalId } = yield* setup("loop-stop");
+        const loop = yield* goalLoop;
+        yield* loop.sweep();
+        const childThreadId = (yield* readGoal(threadId)).current!.childThreadId;
+        yield* orchestrator.dispatch({
+          type: "thread.goal.control",
+          commandId: CommandId.make("stop:owner"),
+          threadId,
+          goalId,
+          action: "stop",
+        });
+        yield* loop.sweep();
+        const child = yield* orchestrator.getThreadRecords(childThreadId, ["runs"]);
+        assert.isTrue(child.runs.every((run) => run.status !== "queued" || run.queueHeld === true));
+        yield* loop.sweep();
+        assert.deepInclude(yield* readGoal(threadId), {
+          status: "stopped",
+          current: null,
+          iteration: 1,
+        });
+        yield* loop.sweep();
+        assert.strictEqual((yield* readGoal(threadId)).iteration, 1);
+      }),
+    ),
+  );
+
+  it.effect("runs iterations until the agent claims completion", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const { orchestrator, threadId, goalId } = yield* setup("loop-basic");
+        const loop = yield* goalLoop;
+
+        yield* loop.sweep();
+        const first = yield* readGoal(threadId);
+        assert.strictEqual(first.iteration, 1);
+        const firstChild = first.current!.childThreadId;
+        // A second sweep while the child works starts nothing new.
+        yield* loop.sweep();
+        assert.strictEqual((yield* readGoal(threadId)).iteration, 1);
+
+        yield* reportFromChild(threadId, goalId, { type: "note", text: "Fixed the parser" });
+        yield* completeChildRun(firstChild);
+        yield* loop.sweep();
+        const afterFirst = yield* readGoal(threadId);
+        assert.isNull(afterFirst.current);
+        assert.deepInclude(afterFirst.history[0], { iteration: 1, outcome: "continued" });
+        const settledChild = yield* orchestrator.getThreadShell(firstChild);
+        assert.strictEqual(settledChild?.settledOverride, "settled");
+
+        yield* loop.sweep();
+        const second = yield* readGoal(threadId);
+        assert.strictEqual(second.iteration, 2);
+        const secondChild = yield* orchestrator.getThreadRecords(second.current!.childThreadId, [
+          "messages",
+        ]);
+        assert.include(secondChild.messages[0]?.text, "[iteration 1] Fixed the parser");
+
+        yield* reportFromChild(threadId, goalId, {
+          type: "claim",
+          status: "complete",
+          summary: "Every test passes",
+        });
+        yield* completeChildRun(second.current!.childThreadId);
+        yield* loop.sweep();
+        assert.deepInclude(yield* readGoal(threadId), {
+          status: "complete",
+          completedSummary: "Every test passes",
+        });
+      }),
+    ),
+  );
+
+  it.effect("keeps going when the completion check fails", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const { threadId, goalId } = yield* setup("loop-check", { checkCommand: "pnpm test" });
+        const loop = yield* goalLoop;
+        checkResults.push({ code: 1, stdout: "2 failing" });
+
+        yield* loop.sweep();
+        yield* reportFromChild(threadId, goalId, {
+          type: "claim",
+          status: "complete",
+          summary: "Done",
+        });
+        yield* completeChildRun((yield* readGoal(threadId)).current!.childThreadId);
+        yield* loop.sweep();
+        assert.strictEqual((yield* readGoal(threadId)).current?.phase, "checking");
+
+        yield* loop.sweep();
+        yield* loop.awaitChecks;
+        const afterCheck = yield* readGoal(threadId);
+        assert.deepInclude(afterCheck, { status: "active", current: null });
+        assert.deepInclude(afterCheck.lastCheck, { passed: false, exitCode: 1 });
+
+        yield* loop.sweep();
+        const retry = yield* readGoal(threadId);
+        const retryChild = yield* Orchestrator.OrchestratorV2.pipe(
+          Effect.flatMap((orchestrator) =>
+            orchestrator.getThreadRecords(retry.current!.childThreadId, ["messages"]),
+          ),
+        );
+        assert.include(retryChild.messages[0]?.text, "2 failing");
+      }),
+    ),
+  );
+
+  it.effect("delivers a reply from the goal thread into the running iteration", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const { orchestrator, threadId, goalId } = yield* setup("loop-reply");
+        const loop = yield* goalLoop;
+        yield* loop.sweep();
+        const childThreadId = (yield* readGoal(threadId)).current!.childThreadId;
+
+        yield* orchestrator.dispatch({
+          type: "thread.goal.message",
+          commandId: CommandId.make("command:loop-reply:message"),
+          threadId,
+          goalId,
+          text: "Use the staging bucket",
+        });
+        assert.lengthOf((yield* readGoal(threadId)).current?.pendingMessages ?? [], 1);
+
+        yield* loop.sweep();
+        assert.lengthOf((yield* readGoal(threadId)).current?.pendingMessages ?? [], 0);
+        const child = yield* orchestrator.getThreadRecords(childThreadId, ["runs"]);
+        assert.lengthOf(child.runs, 2);
+      }),
+    ),
+  );
+
+  it.effect("keeps a rejected wrap-up pending, enforces the time limit, and moves on", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const { threadId } = yield* setup("loop-timeout", { iterationTimeoutMins: 30 });
+        const loop = yield* goalLoop;
+        yield* loop.sweep();
+        const childThreadId = (yield* readGoal(threadId)).current!.childThreadId;
+
+        yield* TestClock.adjust("23 minutes");
+        yield* loop.sweep();
+        // This fixture has not opened a provider turn, so steering is rejected.
+        // The worker must not mark the nudge delivered merely because it tried.
+        assert.isUndefined((yield* readGoal(threadId)).current?.wrapUpSentAt);
+
+        yield* TestClock.adjust("8 minutes");
+        yield* loop.sweep();
+        assert.isString((yield* readGoal(threadId)).current?.timedOutAt);
+
+        yield* completeChildRun(childThreadId, "interrupted");
+        yield* loop.sweep();
+        const afterTimeout = yield* readGoal(threadId);
+        assert.deepInclude(afterTimeout, { status: "active", current: null });
+        assert.strictEqual(afterTimeout.history.at(-1)?.outcome, "timed_out");
+
+        yield* loop.sweep();
+        assert.strictEqual((yield* readGoal(threadId)).iteration, 2);
+      }),
+    ),
+  );
+
+  it.effect("pauses when provider usage climbs faster than the burn guard allows", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const { threadId } = yield* setup("loop-burn");
+        const loop = yield* goalLoop;
+        const window = (usedPercent: number) => ({
+          checkedAt: "2026-10-04T12:00:00.000Z",
+          windows: [{ id: "session", kind: "session" as const, label: "5h", usedPercent }],
+        });
+
+        usageWindows = window(10);
+        yield* loop.sweep();
+        yield* loop.sweep();
+        usageWindows = window(45);
+        yield* loop.sweep();
+        assert.deepInclude(yield* readGoal(threadId), {
+          status: "paused",
+          statusReason: "burn_rate",
+        });
+        usageWindows = undefined;
+      }),
+    ),
+  );
+});

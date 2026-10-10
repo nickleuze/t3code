@@ -1504,3 +1504,40 @@ describe("latestProviderTurnForAttempt", () => {
     expect(latestProviderTurnForAttempt(turns, null)).toBeUndefined();
   });
 });
+
+it("accepts user goal controls while keeping worker and agent bookkeeping off the public wire", () => {
+  const decode = Schema.decodeUnknownSync(OrchestrationV2Command);
+  expect(
+    decode({
+      type: "thread.goal.set",
+      commandId: "goal:set",
+      threadId: "thread:goal",
+      objective: "Finish",
+    }).type,
+  ).toBe("thread.goal.set");
+  expect(
+    decode({
+      type: "thread.goal.control",
+      commandId: "goal:pause",
+      threadId: "thread:goal",
+      goalId: "goal:set",
+      action: "pause",
+    }).type,
+  ).toBe("thread.goal.control");
+  for (const type of [
+    "thread.goal.propose",
+    "thread.goal.iteration.start",
+    "thread.goal.report",
+    "thread.goal.advance",
+  ]) {
+    expect(() =>
+      decode({
+        type,
+        commandId: "internal",
+        threadId: "thread:goal",
+        goalId: "goal:set",
+        iteration: 1,
+      }),
+    ).toThrow();
+  }
+});

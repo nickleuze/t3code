@@ -1,5 +1,6 @@
 import { assert, it } from "@effect/vitest";
 import {
+  CommandId,
   type ModelSelection,
   NodeId,
   RunId,
@@ -23,6 +24,7 @@ import {
   makeSubagentConversationArtifacts,
 } from "@t3tools/provider-core/server/subagentProjection";
 
+import { applyGoalCommand } from "./GoalState.ts";
 import { emptyProjection } from "./ProjectionStore.ts";
 
 const parentThreadId = ThreadId.make("thread:subagent-snoozed-parent");
@@ -313,4 +315,60 @@ it("exposes the provider failure rather than a progress message from the failed 
   assert.equal(result.text, failure.message);
   assert.equal(result.turnItemId, artifacts.turnItem.id);
   assert.isNull(result.messageId);
+});
+
+it("clears the owner's loop, iteration marker and proposal on ordinary subagents", () => {
+  const parent = makeParentThread();
+  const goalId = CommandId.make("goal:owner");
+  const result = applyGoalCommand(
+    parent,
+    {
+      type: "set",
+      commandId: goalId,
+      objective: "Finish the importer",
+      checkCommand: null,
+      burnGuard: null,
+      noProgressLimit: undefined,
+      modelSelection: parentModelSelection,
+      runtimeMode: "full-access",
+      doneWhen: null,
+      background: null,
+      permissions: null,
+      iterationTimeoutMins: undefined,
+    },
+    DateTime.formatIso(parentCreatedAt),
+  );
+  assert.isTrue(result.ok);
+  if (!result.ok) throw new Error("Invalid fixture");
+  const child = makeSubagentChildThread({
+    parentThread: {
+      ...parent,
+      goal: result.goal,
+      goalIteration: { parentThreadId, goalId, iteration: 1 },
+      goalProposal: {
+        id: goalId,
+        objective: "Follow-up",
+        doneWhen: "Done",
+        background: null,
+        checkCommand: null,
+        permissions: null,
+        iterationTimeoutMins: null,
+        reason: null,
+        proposedAt: DateTime.formatIso(parentCreatedAt),
+      },
+    },
+    childThreadId,
+    parentNodeId: NodeId.make("parent:task"),
+    activeProviderThreadId: null,
+    providerInstanceId: childProviderInstanceId,
+    modelSelection: childModelSelection,
+    title: "Review",
+    now: childCreatedAt,
+    createdBy: "agent",
+    creationSource: "server",
+  });
+  assert.isNull(child.goal);
+  assert.isNull(child.goalIteration);
+  assert.isNull(child.goalProposal);
+  assert.equal(child.lineage.relationshipToParent, "subagent");
 });
