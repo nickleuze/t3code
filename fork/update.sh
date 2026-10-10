@@ -50,6 +50,14 @@ fi
 host="$(scutil --get LocalHostName 2>/dev/null || hostname -s)"
 say() { printf '[%s] %s\n' "$host" "$*"; }
 json_field() { plutil -extract "$2" raw -o - "$1"; }
+active_turns() {
+  local count
+  count="$(sqlite3 -readonly "$DB" "SELECT count(*) FROM orchestration_v2_projection_runs WHERE status IN ('preparing','starting','running','waiting')" 2>/dev/null)" || return 1
+  case "$count" in
+    ''|*[!0-9]*) return 1 ;;
+  esac
+  printf '%s\n' "$count"
+}
 
 mkdir -p "$WORK"
 if [ -n "$VERSION" ]; then
@@ -76,6 +84,8 @@ if [ "$installed" = "$target" ]; then
 fi
 say "Update available: $installed -> $target (${commit:0:10})"
 [ "$CHECK_ONLY" = 1 ] && exit 0
+
+busy="$(active_turns)" || { say "Cannot verify active turns; nothing was changed."; exit 1; }
 
 # The zip and its unpacked copy take about 600 MB until the swap.
 free_kb="$(df -k "$HOME" | awk 'NR == 2 { print $4 }')"
@@ -132,18 +142,18 @@ descendants() {
     echo "\$child"; descendants "\$child"
   done
 }
-active_turns() {
-  sqlite3 -readonly "\$DB" "SELECT count(*) FROM orchestration_v2_projection_runs WHERE status IN ('preparing','starting','running','waiting')" 2>/dev/null || echo 0
-}
+$(declare -f active_turns)
 log "Installing fork \$TARGET"
 # Let a reply that started this update finish before checking for work.
 sleep 15
 waited=0
-while [ "\$(active_turns)" != "0" ] && [ "\$waited" -lt "\$WAIT_SECS" ]; do
-  [ \$(( waited % 300 )) -eq 0 ] && log "Waiting for \$(active_turns) running turn(s) to finish"
+busy="\$(active_turns)" || { log "ABORTED: cannot verify active turns; nothing was changed."; exit 1; }
+while [ "\$busy" != "0" ] && [ "\$waited" -lt "\$WAIT_SECS" ]; do
+  [ \$(( waited % 300 )) -eq 0 ] && log "Waiting for \$busy running turn(s) to finish"
   sleep 20; waited=\$(( waited + 20 ))
+  busy="\$(active_turns)" || { log "ABORTED: cannot verify active turns; nothing was changed."; exit 1; }
 done
-if [ "\$(active_turns)" != "0" ] && [ "\$FORCE" != 1 ]; then
+if [ "\$busy" != "0" ] && [ "\$FORCE" != 1 ]; then
   log "ABORTED: turns still running after \$(( WAIT_SECS / 60 )) min; nothing was changed. Rerun with --force to interrupt them."
   exit 1
 fi
@@ -184,7 +194,6 @@ fi
 INSTALLER
 chmod +x "$installer"
 
-busy="$(sqlite3 -readonly "$DB" "SELECT count(*) FROM orchestration_v2_projection_runs WHERE status IN ('preparing','starting','running','waiting')" 2>/dev/null || echo 0)"
 launchctl remove "$LABEL" 2>/dev/null || true
 launchctl submit -l "$LABEL" -- /bin/bash "$installer"
 if [ "$busy" = "0" ]; then

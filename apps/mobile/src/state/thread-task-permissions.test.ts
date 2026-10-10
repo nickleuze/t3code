@@ -25,6 +25,7 @@ const state = vi.hoisted(() => ({
   thread: {
     id: "thread",
     environmentId: "secondary",
+    lineage: { rootThreadId: "thread", parentThreadId: null, relationshipToParent: null },
     modelSelection: { instanceId: "codex", model: "gpt-5.4" },
     runtimeMode: "full-access",
     interactionMode: "default",

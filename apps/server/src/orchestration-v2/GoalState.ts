@@ -25,17 +25,17 @@ import type {
   ThreadId,
 } from "@t3tools/contracts";
 
-export const DEFAULT_GOAL_NO_PROGRESS_LIMIT = 3;
-export const DEFAULT_GOAL_SAFETY_CAP = 100;
+const DEFAULT_GOAL_NO_PROGRESS_LIMIT = 3;
+const DEFAULT_GOAL_SAFETY_CAP = 100;
 export const DEFAULT_GOAL_BURN_GUARD: OrchestrationV2GoalBurnGuard = {
   maxPercentPoints: 20,
   windowMins: 60,
 };
-export const MAX_GOAL_NOTE_CHARS = 2_000;
+const MAX_GOAL_NOTE_CHARS = 2_000;
 export const MAX_GOAL_NOTES_TOTAL_CHARS = 8_000;
-export const MAX_GOAL_HISTORY = 20;
+const MAX_GOAL_HISTORY = 20;
 export const MAX_GOAL_CHECK_OUTPUT_CHARS = 4_000;
-export const DEFAULT_GOAL_ITERATION_TIMEOUT_MINS = 120;
+const DEFAULT_GOAL_ITERATION_TIMEOUT_MINS = 120;
 const MAX_GOAL_USER_MESSAGE_CHARS = 4_000;
 const SHELL_SUMMARY_CHARS = 200;
 const SHELL_OBJECTIVE_CHARS = 120;
