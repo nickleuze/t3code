@@ -1,0 +1,4 @@
+# Last accepted official upstream commit, one full SHA on its own line.
+# Intentionally unset: the fork still needs its first official-v2 integration.
+# Record a SHA only after the candidate passes the acceptance procedure in
+# docs/operations/personal-fork.md. Fetching or inspecting a commit is not acceptance.

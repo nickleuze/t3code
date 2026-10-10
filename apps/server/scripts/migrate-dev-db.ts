@@ -349,7 +349,11 @@ const pruneSnapshot = Effect.fn("pruneDevDbSnapshot")(function* (input: RunMigra
       WHERE latest.thread_id = r.thread_id)
     UNION
     SELECT thread_id FROM orchestration_v2_projection_threads
-    WHERE json_extract(payload_json, '$.limitRecovery') IS NOT NULL`;
+    WHERE json_extract(payload_json, '$.limitRecovery') IS NOT NULL
+       -- Fork goals can resume between iterations with no live run. Keep every
+       -- goal/control and iteration thread out of a runnable dev fixture.
+       OR json_type(payload_json, '$.goal') = 'object'
+       OR json_type(payload_json, '$.goalIteration') = 'object'`;
 
   // Forks and subagents read history and results through their lineage, so
   // a thread family is cloned or dropped as a whole. A family is stopped when

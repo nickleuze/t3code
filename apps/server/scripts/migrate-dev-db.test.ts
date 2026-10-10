@@ -45,6 +45,27 @@ const createFixtureSource = Effect.fn("createMigrateDevDbFixtureSource")(functio
       const threads = [
         ["stopped-thread", "project-kept", "completed", "{}", "2026-08-01"],
         ["fork-thread", "project-kept", "completed", forkPayload, "2026-08-02"],
+        [
+          "goal-between-iterations",
+          "project-kept",
+          "completed",
+          '{"goal":{"status":"active"}}',
+          "2026-08-05",
+        ],
+        [
+          "goal-iteration",
+          "project-kept",
+          "completed",
+          '{"goalIteration":{"parentThreadId":"goal-between-iterations","iteration":1}}',
+          "2026-08-05",
+        ],
+        [
+          "completed-goal",
+          "project-kept",
+          "completed",
+          '{"goal":{"status":"complete"}}',
+          "2026-08-05",
+        ],
         ["running-thread", "project-kept", "running", "{}", "2026-08-05"],
         ["settled-thread", "project-kept", "completed", '{"settledAt":"2026-08-01"}', "2026-08-05"],
         [

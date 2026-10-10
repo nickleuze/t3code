@@ -26,6 +26,8 @@ import * as DesktopLinuxUrlHandler from "./DesktopLinuxUrlHandler.ts";
 import * as DesktopObservability from "./DesktopObservability.ts";
 import * as DesktopPreReadyPlatform from "./DesktopPreReadyPlatform.ts";
 import * as DesktopShutdown from "./DesktopShutdown.ts";
+import { configureShutdownLog, shutdownBreadcrumb, traceTeardown } from "./DesktopShutdownLog.ts";
+import { watchShutdown } from "./DesktopShutdownWatchdog.ts";
 import * as DesktopServerExposure from "../backend/DesktopServerExposure.ts";
 import * as DesktopAppSettings from "../settings/DesktopAppSettings.ts";
 import * as DesktopShellEnvironment from "../shell/DesktopShellEnvironment.ts";
@@ -319,8 +321,9 @@ const startup = Effect.gen(function* () {
   }
 
   yield* appIdentity.configure;
-  yield* lifecycle.register;
-  yield* clerk.configure;
+  configureShutdownLog(environment.logDir);
+  yield* traceTeardown("lifecycle listeners", lifecycle.register);
+  yield* traceTeardown("clerk", clerk.configure);
 
   yield* electronApp.whenReady.pipe(
     Effect.withSpan("desktop.electron.whenReady"),
@@ -336,10 +339,13 @@ const startup = Effect.gen(function* () {
   yield* appIdentity.configure;
   yield* previewPasskeys.configure;
   yield* applicationMenu.configure;
-  yield* updates.configure;
-  yield* DesktopRemoteUpdates.listen;
+  yield* traceTeardown("desktop updates", updates.configure);
+  yield* traceTeardown("remote updates", DesktopRemoteUpdates.listen);
   yield* linuxUrlHandler.register;
-  yield* bootstrap.pipe(Effect.catchCause((cause) => fatalStartupCause("bootstrap", cause)));
+  yield* traceTeardown(
+    "bootstrap",
+    bootstrap.pipe(Effect.catchCause((cause) => fatalStartupCause("bootstrap", cause))),
+  );
 }).pipe(Effect.withSpan("desktop.startup"));
 
 const scopedProgram = Effect.scoped(
@@ -357,14 +363,21 @@ const scopedProgram = Effect.scoped(
       // cascade, so leaving the WSL instance for its parent scope
       // finalizer means it gets hard-killed by the OS instead of
       // receiving SIGTERM + grace.
-      stopAllPoolInstances().pipe(
+      Effect.sync(() => shutdownBreadcrumb("stopping backends")).pipe(
+        Effect.andThen(stopAllPoolInstances()),
         Effect.ensuring(rendererHistory.shutdown),
-        Effect.ensuring(shutdown.markComplete),
+        Effect.ensuring(
+          Effect.sync(() => shutdownBreadcrumb("backends stopped; shutdown complete")).pipe(
+            Effect.andThen(shutdown.markComplete),
+          ),
+        ),
       ),
     );
 
     yield* startup;
     yield* shutdown.awaitRequest;
+    shutdownBreadcrumb("shutdown requested; releasing app resources");
+    yield* watchShutdown(stopAllPoolInstances).pipe(Effect.forkDetach);
   }),
 );
 

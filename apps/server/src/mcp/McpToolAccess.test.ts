@@ -22,6 +22,7 @@ import { liveThreadShell } from "./McpToolAccess.testkit.ts";
 const supervisedThreadId = ThreadId.make("thread:supervised");
 const planThreadId = ThreadId.make("thread:plan");
 const fullAccessThreadId = ThreadId.make("thread:full-access");
+const autoThreadId = ThreadId.make("thread:auto");
 const endedThreadId = ThreadId.make("thread:ended");
 
 const shells = new Map([
@@ -31,6 +32,7 @@ const shells = new Map([
     liveThreadShell(planThreadId, { runtimeMode: "approval-required", interactionMode: "plan" }),
   ],
   [fullAccessThreadId, liveThreadShell(fullAccessThreadId)],
+  [autoThreadId, liveThreadShell(autoThreadId, { runtimeMode: "auto" })],
   [endedThreadId, liveThreadShell(endedThreadId, { activeRunId: null })],
 ]);
 
@@ -192,6 +194,7 @@ const plan = threadCaller(planThreadId);
 const fullAccess = threadCaller(fullAccessThreadId);
 const ended = threadCaller(endedThreadId);
 const supervisedClient = clientCaller("approval-required");
+const auto = threadCaller(autoThreadId);
 const fullAccessClient = clientCaller("full-access");
 const readOnlyClient = clientCaller("read-only");
 // A live full-access thread whose credential may use its browser but not control threads.
@@ -247,6 +250,8 @@ it.effect.each([
   ["writes_threads", supervised, { threadId: "thread:missing" }, "ran"],
 
   // Starting a thread: the caller's own modes or narrower.
+  ["starts_threads", auto, {}, "auto/default"],
+  ["starts_threads", auto, { runtimeMode: "full-access" }, "runtime_mode_escalation_denied"],
   ["starts_threads", supervised, {}, "approval-required/default"],
   ["starts_threads", supervised, { runtimeMode: "full-access" }, "runtime_mode_escalation_denied"],
   ["starts_threads", plan, {}, "approval-required/plan"],

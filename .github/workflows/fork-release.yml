@@ -1,0 +1,152 @@
+name: Fork release
+
+# Builds the macOS arm64 desktop app from every push to the fork's nick/v2
+# and publishes it as a GitHub release. Machines install it with
+# fork/update.sh (or fork/update-all.sh, or the app's update prompt). The
+# builds are signed with the fork's self-signed certificate, which Squirrel.Mac
+# does not accept, so Electron's built-in updater is switched off in them.
+
+on:
+  push:
+    branches: [nick/v2]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: fork-release
+  cancel-in-progress: false
+
+jobs:
+  checks:
+    if: github.repository == 'nickleuze/t3code' && github.ref == 'refs/heads/nick/v2'
+    uses: ./.github/workflows/fork-ci.yml
+    permissions:
+      contents: read
+      pull-requests: read
+
+  release:
+    needs: checks
+    if: github.repository == 'nickleuze/t3code' && github.ref == 'refs/heads/nick/v2' && needs.checks.result == 'success'
+    name: Build and publish macOS arm64
+    runs-on: macos-15
+    timeout-minutes: 75
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ github.sha }}
+          sparse-checkout: |
+            /*
+            !/.repos/
+          sparse-checkout-cone-mode: false
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version-file: package.json
+
+      - name: Verify exact checked commit before building
+        env:
+          CI_RESULT: ${{ needs.checks.result }}
+          CI_CHECKED_SHA: ${{ needs.checks.outputs.checked-sha }}
+        run: node fork/release-gate.mjs release
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
+        with:
+          targets: aarch64-apple-darwin
+
+      - name: Setup Vite+
+        uses: voidzero-dev/setup-vp@v1
+        with:
+          node-version-file: package.json
+          cache: true
+          run-install: true
+
+      - name: Ensure Electron runtime is installed
+        run: vp run --filter @t3tools/desktop ensure:electron
+
+      # Each push gets a version above the last, so installed apps can tell
+      # they are behind.
+      - name: Resolve version
+        id: version
+        run: |
+          base="$(node -p "require('./apps/desktop/package.json').version")"
+          echo "version=${base}-nick.${GITHUB_RUN_NUMBER}" >> "$GITHUB_OUTPUT"
+
+      # No update feed: Squirrel.Mac cannot install ad-hoc signed builds. The
+      # build derives the feed from GITHUB_REPOSITORY, which Actions does not
+      # let a step override, so it is removed from this command's environment.
+      # T3 Connect sign-in and relay settings are baked into the build (locally
+      # they come from .env). They are the same public values upstream ships;
+      # without them the app cannot connect to other machines.
+      - name: Build
+        env:
+          T3CODE_DESKTOP_VERSION: ${{ steps.version.outputs.version }}
+          T3CODE_CLERK_PUBLISHABLE_KEY: ${{ vars.T3CODE_CLERK_PUBLISHABLE_KEY }}
+          T3CODE_CLERK_JWT_TEMPLATE: ${{ vars.T3CODE_CLERK_JWT_TEMPLATE }}
+          T3CODE_CLERK_CLI_OAUTH_CLIENT_ID: ${{ vars.T3CODE_CLERK_CLI_OAUTH_CLIENT_ID }}
+          T3CODE_RELAY_URL: ${{ vars.T3CODE_RELAY_URL }}
+        run: |
+          for name in T3CODE_CLERK_PUBLISHABLE_KEY T3CODE_CLERK_JWT_TEMPLATE T3CODE_CLERK_CLI_OAUTH_CLIENT_ID T3CODE_RELAY_URL; do
+            if [ -z "${!name}" ]; then
+              echo "Repository variable $name is not set; the build could not use T3 Connect." >&2
+              exit 1
+            fi
+          done
+          env -u GITHUB_REPOSITORY -u T3CODE_DESKTOP_UPDATE_REPOSITORY \
+            PATH="$PWD/node_modules/.bin:$PATH" \
+            node scripts/build-desktop-artifact.ts --platform mac --target dmg --arch arm64
+          if unzip -l "release/T3-Code-${T3CODE_DESKTOP_VERSION}-arm64.zip" | grep -q "app-update.yml"; then
+            echo "Build still carries an update feed" >&2
+            exit 1
+          fi
+
+      # Re-signs the ad-hoc build with the fork's certificate so every build
+      # keeps one identity and the Keychain does not ask again after updates.
+      - name: Sign with the fork certificate
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+          FORK_MAC_SIGNING_P12: ${{ secrets.FORK_MAC_SIGNING_P12 }}
+          FORK_SIGNING_P12_PASSWORD: ${{ secrets.FORK_MAC_SIGNING_P12_PASSWORD }}
+        run: |
+          if [ -z "$FORK_MAC_SIGNING_P12" ] || [ -z "$FORK_SIGNING_P12_PASSWORD" ]; then
+            echo "Secrets FORK_MAC_SIGNING_P12 and FORK_MAC_SIGNING_P12_PASSWORD must be set." >&2
+            exit 1
+          fi
+          p12="$RUNNER_TEMP/fork-signing.p12"
+          printf '%s' "$FORK_MAC_SIGNING_P12" | base64 --decode > "$p12"
+          FORK_SIGNING_P12="$p12" fork/sign-release.sh "release/T3-Code-${VERSION}-arm64.zip"
+          rm -f "$p12"
+
+      - name: Recheck exact checked commit before publication
+        env:
+          CI_RESULT: ${{ needs.checks.result }}
+          CI_CHECKED_SHA: ${{ needs.checks.outputs.checked-sha }}
+        run: node fork/release-gate.mjs release
+
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          zip="T3-Code-${VERSION}-arm64.zip"
+          test -f "release/${zip}"
+          # The app's update prompt runs this to install the release.
+          cp fork/update.sh release/fork-update.sh
+          cd release
+          shasum -a 256 "${zip}" > SHA256SUMS
+          sha="$(cut -d' ' -f1 SHA256SUMS)"
+          printf '{"version":"%s","commit":"%s","zip":"%s","sha256":"%s","builtAt":"%s"}\n' \
+            "${VERSION}" "${GITHUB_SHA}" "${zip}" "${sha}" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+            > fork-release.json
+          notes="Built from ${GITHUB_SHA} on nick/v2.
+
+          Install from the app's update prompt, fork/update.sh, or fork/update-all.sh for every machine."
+          gh release create "fork-v${VERSION}" "${zip}" SHA256SUMS fork-release.json fork-update.sh \
+            --repo "${GITHUB_REPOSITORY}" \
+            --target "${GITHUB_SHA}" \
+            --title "Fork ${VERSION}" \
+            --notes "${notes}" \
+            --latest

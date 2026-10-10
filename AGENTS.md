@@ -30,6 +30,10 @@ T3 Code has 3 key app surfaces: **web**, **desktop**, and **mobile**.
 
 **Mobile** is a React Native app for both iOS and Android, available on the App Store and Google Play. The mobile app allows for connecting to any T3 Code server to control work remotely.
 
+## Personal fork
+
+For Nick's fork, follow [the personal fork maintenance procedure](docs/operations/personal-fork.md) alongside this upstream guidance. Keep the retired orchestrator, fixed worker roles and Codex Router retired.
+
 ## A note from Theo
 
 I like ambitious ideas, simple systems, and software that feels obvious. Do not preserve complexity just because it already exists. Do not introduce machinery because it looks architecturally impressive. Understand the real constraint, then fight for the smallest model that makes the correct behavior unsurprising.
