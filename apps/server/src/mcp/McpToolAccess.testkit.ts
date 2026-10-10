@@ -90,6 +90,8 @@ export const idleThreadProjection = (
     itemCount: _itemCount,
     visibleItemCount: _visibleItemCount,
     lastVisitedAt,
+    goal: _providerGoal,
+    t3Goal: _t3GoalSummary,
     ...thread
   } = shell;
   return {

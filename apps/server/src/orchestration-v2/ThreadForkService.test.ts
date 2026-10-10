@@ -1,5 +1,6 @@
 import { assert, it } from "@effect/vitest";
 import {
+  CommandId,
   ContextTransferId,
   MessageId,
   type ModelSelection,
@@ -16,6 +17,7 @@ import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 
 import * as ThreadForkService from "./ThreadForkService.ts";
+import { applyGoalCommand } from "./GoalState.ts";
 
 const sourceThreadId = ThreadId.make("thread:fork-snoozed-source");
 const targetThreadId = ThreadId.make("thread:fork-awake-target");
@@ -58,6 +60,22 @@ function makeSourceThread(): OrchestrationV2AppThread {
     lastVisitedAt: null,
     snoozedUntil,
     snoozedAt,
+    goalIteration: {
+      parentThreadId: sourceThreadId,
+      goalId: CommandId.make("source-goal"),
+      iteration: 1,
+    },
+    goalProposal: {
+      id: CommandId.make("proposal"),
+      objective: "Finish it",
+      doneWhen: "Tests pass",
+      background: null,
+      checkCommand: null,
+      permissions: null,
+      iterationTimeoutMins: null,
+      reason: null,
+      proposedAt: "2026-07-24T09:00:00.000Z",
+    },
     deletedAt: null,
   };
 }
@@ -85,7 +103,29 @@ function makeSourceRun(status: OrchestrationV2Run["status"]): OrchestrationV2Run
 
 function makeSourceProjection(sourceRun: OrchestrationV2Run): OrchestrationV2ThreadProjection {
   return {
-    thread: makeSourceThread(),
+    thread: (() => {
+      const thread = makeSourceThread();
+      const goal = applyGoalCommand(
+        { ...thread, goalIteration: null },
+        {
+          type: "set",
+          commandId: CommandId.make("source-goal"),
+          objective: "Finish it",
+          modelSelection,
+          runtimeMode: "full-access",
+          checkCommand: null,
+          burnGuard: null,
+          noProgressLimit: undefined,
+          doneWhen: null,
+          background: null,
+          permissions: null,
+          iterationTimeoutMins: undefined,
+        },
+        "2026-07-24T09:00:00.000Z",
+      );
+      if (!goal.ok) throw new Error(goal.reason);
+      return { ...thread, goal: goal.goal };
+    })(),
     runs: [sourceRun],
     attempts: [],
     nodes: [],
@@ -145,6 +185,9 @@ it.effect("keeps a fork awake when its source thread is snoozed", () =>
     const sourceRun = makeSourceRun("completed");
     const result = yield* planFork(sourceRun);
 
+    assert.isNull(result.targetThread.goal);
+    assert.isNull(result.targetThread.goalIteration);
+    assert.isNull(result.targetThread.goalProposal);
     assert.isNull(result.targetThread.snoozedUntil);
     assert.isNull(result.targetThread.snoozedAt);
     assert.equal(result.targetThread.projectId, sourceThread.projectId);

@@ -87,6 +87,10 @@ export const layer: Layer.Layer<ThreadForkServiceV2> = Layer.succeed(
         }
         const targetThread: OrchestrationV2AppThread = {
           ...input.sourceProjection.thread,
+          // A fork is an ordinary conversation, never a second loop or goal proposal.
+          goal: null,
+          goalIteration: null,
+          goalProposal: null,
           createdBy: input.createdBy,
           creationSource: input.creationSource,
           id: input.targetThreadId,

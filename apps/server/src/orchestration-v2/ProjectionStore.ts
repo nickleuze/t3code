@@ -1,3 +1,4 @@
+import { goalSummary, isLiveGoal } from "./GoalState.ts";
 import { projectTurnItemForWire } from "./WireProjection.ts";
 import * as Stream from "effect/Stream";
 import { makeThreadFind, findProjectedThreadItems } from "./ThreadFind.ts";
@@ -1531,6 +1532,9 @@ export function threadShellFromProjection(
     lastVisitedAt: projection.thread.lastVisitedAt,
     titleRegeneration: projection.thread.titleRegeneration ?? null,
     limitRecovery: projection.thread.limitRecovery ?? null,
+    t3Goal: goalSummary(projection.thread.goal),
+    goalIteration: projection.thread.goalIteration ?? null,
+    goalProposal: projection.thread.goalProposal ?? null,
     deletedAt: projection.thread.deletedAt,
   };
 }
@@ -1786,6 +1790,9 @@ function shellFromState(input: {
     lastVisitedAt: input.state.thread.lastVisitedAt,
     titleRegeneration: input.state.thread.titleRegeneration ?? null,
     limitRecovery: input.state.thread.limitRecovery ?? null,
+    t3Goal: goalSummary(input.state.thread.goal),
+    goalIteration: input.state.thread.goalIteration ?? null,
+    goalProposal: input.state.thread.goalProposal ?? null,
     deletedAt: input.state.thread.deletedAt,
   };
 }
@@ -5485,6 +5492,8 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
               AND json_extract(t.payload_json, '$.settledOverride') IS NULL
               AND json_extract(t.payload_json, '$.pinnedAt') IS NULL
               AND json_extract(t.payload_json, '$.autoSettleDisabledAt') IS NULL
+              AND COALESCE(json_extract(t.payload_json, '$.goal.status'), '')
+                NOT IN ('active', 'paused', 'blocked', 'usageLimited')
               AND NOT EXISTS (
                 SELECT 1 FROM orchestration_v2_projection_runs active
                 WHERE active.thread_id = t.thread_id
@@ -6050,6 +6059,7 @@ export const layerMemory: Layer.Layer<ProjectionStoreV2> = Layer.effect(
                 thread.settledOverride === null &&
                 thread.pinnedAt == null &&
                 thread.autoSettleDisabledAt == null &&
+                !isLiveGoal(thread.goal) &&
                 !runs.some(isActivityRunForShell) &&
                 !runtimeRequests.some((request) => request.status === "pending"),
             )
