@@ -8,11 +8,12 @@
 # finish), quits Alpha, keeps a backup, installs, relaunches, and rolls back
 # if the new app does not start.
 #
-# Usage: fork/update.sh [--check] [--force] [--wait-mins N] [--version V]
+# Usage: fork/update.sh [--check] [--force] [--wait-mins N] [--version V] [--commit SHA]
 #   --check       only report whether an update is available
 #   --force       swap even if turns are still running after the wait
 #   --wait-mins   how long to wait for running turns (default 60)
 #   --version     install this fork version instead of the latest
+#   --commit      require this exact release commit (requires --version)
 set -euo pipefail
 # Shell setups can wrap rm (one on the mini routes it to the Trash, which
 # frees no space); "command rm" below always means the real one.
@@ -27,6 +28,7 @@ CHECK_ONLY=0
 FORCE=0
 WAIT_MINS=60
 VERSION=""
+EXPECTED_COMMIT=""
 
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -34,10 +36,16 @@ while [ $# -gt 0 ]; do
     --force) FORCE=1 ;;
     --wait-mins) WAIT_MINS="$2"; shift ;;
     --version) VERSION="$2"; shift ;;
+    --commit) EXPECTED_COMMIT="$2"; shift ;;
     *) echo "Unknown option: $1" >&2; exit 64 ;;
   esac
   shift
 done
+
+if [ -n "$EXPECTED_COMMIT" ] && [ -z "$VERSION" ]; then
+  echo "--commit requires --version" >&2
+  exit 64
+fi
 
 host="$(scutil --get LocalHostName 2>/dev/null || hostname -s)"
 say() { printf '[%s] %s\n' "$host" "$*"; }
@@ -53,6 +61,11 @@ curl -fsSL --connect-timeout 20 "$release_url/fork-release.json" -o "$WORK/fork-
   || { say "No fork release found at $release_url"; exit 1; }
 target="$(json_field "$WORK/fork-release.json" version)"
 commit="$(json_field "$WORK/fork-release.json" commit)"
+if { [ -n "$VERSION" ] && [ "$target" != "$VERSION" ]; } || \
+   { [ -n "$EXPECTED_COMMIT" ] && [ "$commit" != "$EXPECTED_COMMIT" ]; }; then
+  say "Release identity mismatch; nothing was changed."
+  exit 1
+fi
 zip="$(json_field "$WORK/fork-release.json" zip)"
 sha256="$(json_field "$WORK/fork-release.json" sha256)"
 installed="$(plutil -extract CFBundleShortVersionString raw -o - "$APP/Contents/Info.plist" 2>/dev/null || echo none)"

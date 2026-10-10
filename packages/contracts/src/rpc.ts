@@ -295,6 +295,7 @@ import {
   ServerSelfUpdateError,
   ForkUpdateStatus,
   ForkUpdateStatusInput,
+  ForkUpdateInstallInput,
   ForkUpdateInstallResult,
   ForkUpdateError,
   ServerSelfUpdateInput,
@@ -733,7 +734,7 @@ const WsServerForkUpdateStatusRpc = Rpc.make(WS_METHODS.serverForkUpdateStatus, 
 });
 
 const WsServerInstallForkUpdateRpc = Rpc.make(WS_METHODS.serverInstallForkUpdate, {
-  payload: Schema.Struct({}),
+  payload: ForkUpdateInstallInput,
   success: ForkUpdateInstallResult,
   error: Schema.Union([ForkUpdateError, EnvironmentAuthorizationError]),
 });

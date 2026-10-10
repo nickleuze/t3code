@@ -1016,9 +1016,14 @@ export class ServerSelfUpdateError extends Schema.TaggedError<ServerSelfUpdateEr
  * the release's own installer script instead of Electron's updater (the fork
  * builds are not Developer ID signed).
  */
+export const ForkUpdateInstallInput = Schema.Struct({
+  version: Schema.String.check(Schema.isPattern(/^\d+\.\d+\.\d+-nick\.\d+$/)),
+  commit: Schema.String.check(Schema.isPattern(/^[a-f0-9]{40}$/)),
+});
+export type ForkUpdateInstallInput = typeof ForkUpdateInstallInput.Type;
+
 export const ForkUpdateRelease = Schema.Struct({
-  version: TrimmedNonEmptyString,
-  commit: TrimmedNonEmptyString,
+  ...ForkUpdateInstallInput.fields,
   builtAt: Schema.String,
 });
 export type ForkUpdateRelease = typeof ForkUpdateRelease.Type;
@@ -1044,6 +1049,7 @@ export type ForkUpdateStatusInput = typeof ForkUpdateStatusInput.Type;
 
 export const ForkUpdateInstallResult = Schema.Struct({
   version: TrimmedNonEmptyString,
+  commit: TrimmedNonEmptyString,
   /** Goals paused until the app restarts on the new version. */
   pausedGoals: NonNegativeInt,
   message: Schema.String,

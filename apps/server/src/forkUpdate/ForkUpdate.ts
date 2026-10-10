@@ -13,6 +13,7 @@
 import {
   CommandId,
   ForkUpdateError,
+  ForkUpdateInstallInput,
   type ForkUpdateInstallResult,
   ForkUpdateRelease,
   type ForkUpdateStatus,
@@ -85,12 +86,15 @@ type PauseMarker = typeof PauseMarker.Type;
 const PauseMarkerJson = Schema.fromJsonString(PauseMarker);
 const decodePauseMarker = Schema.decodeEffect(PauseMarkerJson);
 const encodePauseMarker = Schema.encodeEffect(PauseMarkerJson);
+const decodeInstallInput = Schema.decodeEffect(ForkUpdateInstallInput);
 
 export class ForkUpdate extends Context.Service<
   ForkUpdate,
   {
     readonly status: (input: ForkUpdateStatusInput) => Effect.Effect<ForkUpdateStatus>;
-    readonly install: Effect.Effect<ForkUpdateInstallResult, ForkUpdateError>;
+    readonly install: (
+      input: ForkUpdateInstallInput,
+    ) => Effect.Effect<ForkUpdateInstallResult, ForkUpdateError>;
   }
 >()("t3/forkUpdate/ForkUpdate") {}
 
@@ -286,7 +290,7 @@ const make = Effect.gen(function* () {
       return marker;
     });
 
-  const install = Effect.gen(function* () {
+  const install = Effect.fn("ForkUpdate.install")(function* (input: ForkUpdateInstallInput) {
     const current = yield* Ref.get(statusRef);
     if (current.installingVersion !== null)
       return yield* new ForkUpdateError({
@@ -297,16 +301,40 @@ const make = Effect.gen(function* () {
         reason: "This machine is not running an installed fork build.",
       });
     }
+    const target = yield* decodeInstallInput(input).pipe(
+      Effect.mapError(
+        () => new ForkUpdateError({ reason: "The requested fork release is invalid." }),
+      ),
+    );
+    if (installedVersion === null || !isNewerForkVersion(target.version, installedVersion)) {
+      return yield* new ForkUpdateError({
+        reason: "The requested release is not a newer fork build.",
+      });
+    }
+    // Every destination verifies the same pinned release, independent of its latest-feed cache.
+    const release = yield* httpClient
+      .execute(HttpClientRequest.get(releaseUrl(target.version, "fork-release.json")))
+      .pipe(
+        Effect.flatMap(HttpClientResponse.filterStatusOk),
+        Effect.flatMap((response) => response.json),
+        Effect.flatMap(Schema.decodeUnknownEffect(ForkUpdateRelease)),
+        Effect.timeout(Duration.seconds(30)),
+        Effect.mapError(
+          () => new ForkUpdateError({ reason: "Could not verify the requested fork release." }),
+        ),
+      );
+    if (release.version !== target.version || release.commit !== target.commit) {
+      return yield* new ForkUpdateError({
+        reason: "The requested fork release has changed. Refresh before updating.",
+      });
+    }
     const previousMarker = yield* readMarker;
     if (Option.isSome(previousMarker)) {
       yield* resumePausedGoals(previousMarker.value);
       if (Option.isSome(yield* readMarker))
         return yield* new ForkUpdateError({ reason: "Previous goal recovery is still pending." });
     }
-    if (current.latest === null || !current.updateAvailable) {
-      return yield* new ForkUpdateError({ reason: "No newer fork release is available." });
-    }
-    const version = current.latest.version;
+    const { version, commit } = target;
     yield* fs
       .makeDirectory(runtimeDir, { recursive: true })
       .pipe(
@@ -338,7 +366,16 @@ const make = Effect.gen(function* () {
     const output = yield* processRunner
       .run({
         command: "/bin/bash",
-        args: [scriptPath, "--version", version, "--wait-mins", String(INSTALL_WAIT_MINS)],
+        env: { T3_FORK_REPO: repository },
+        args: [
+          scriptPath,
+          "--version",
+          version,
+          "--commit",
+          commit,
+          "--wait-mins",
+          String(INSTALL_WAIT_MINS),
+        ],
         timeout: "15 minutes",
         maxOutputBytes: 64 * 1024,
         outputMode: "truncate",
@@ -354,6 +391,7 @@ const make = Effect.gen(function* () {
     yield* Ref.update(statusRef, (status) => ({ ...status, installingVersion: version }));
     return {
       version,
+      commit,
       pausedGoals: marker.goals.length,
       message: "The update will install after running turns finish.",
     };
@@ -390,7 +428,7 @@ const make = Effect.gen(function* () {
         if (input.refresh === true && supported) yield* check;
         return yield* Ref.get(statusRef);
       }),
-    install: install.pipe(permit.withPermits(1), Effect.withSpan("ForkUpdate.install")),
+    install: (input) => install(input).pipe(permit.withPermits(1)),
   });
 });
 

@@ -1,6 +1,6 @@
 import { assert, it } from "@effect/vitest";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
-import type { OrchestrationV2ServerCommand } from "@t3tools/contracts";
+import type { ForkUpdateRelease, OrchestrationV2ServerCommand } from "@t3tools/contracts";
 import * as NodePath from "@effect/platform-node/NodePath";
 import { CommandId, ThreadId, type OrchestrationV2AppThread } from "@t3tools/contracts";
 import * as HostProcess from "@t3tools/shared/HostProcess";
@@ -20,9 +20,15 @@ import * as TestClock from "effect/testing/TestClock";
 import * as Scheduler from "../scheduling/Scheduler.ts";
 import * as ForkUpdate from "./ForkUpdate.ts";
 
+const target = { version: "0.0.44-nick.6", commit: "a".repeat(40) };
+const release = { ...target, builtAt: "2026-10-10T00:00:00Z" };
+
 const threadId = ThreadId.make("update-owner");
 const goalId = CommandId.make("update-goal");
 const markerPath = "/fixture/runtime/fork-update-paused-goals.json";
+const latestUrl = "https://github.com/nickleuze/t3code/releases/latest/download/fork-release.json";
+const pinnedUrl = (version: string) =>
+  `https://github.com/nickleuze/t3code/releases/download/fork-v${version}/fork-release.json`;
 const error = () =>
   new PlatformError.PlatformError(
     new PlatformError.SystemError({
@@ -42,6 +48,9 @@ const harness = Effect.fn(function* (
     files?: Map<string, string>;
     goal?: Record<string, unknown>;
     failResume?: boolean;
+    releases?: Map<string, ForkUpdateRelease>;
+    processStarted?: Deferred.Deferred<void>;
+    repository?: string;
   } = {},
 ) {
   const files = options.files ?? new Map<string, string>();
@@ -81,13 +90,7 @@ const harness = Effect.fn(function* (
         ? new Response("# fake installer")
         : new Response(
             JSON.stringify(
-              options.badFeed
-                ? { unexpected: true }
-                : {
-                    version: "0.0.44-nick.6",
-                    commit: "a".repeat(40),
-                    builtAt: "2026-10-10T00:00:00Z",
-                  },
+              options.badFeed ? { unexpected: true } : (options.releases?.get(url) ?? release),
             ),
           );
     }),
@@ -96,7 +99,10 @@ const harness = Effect.fn(function* (
       HostProcess.ExecutablePath,
       "/Applications/T3 Code (Alpha).app/Contents/MacOS/T3 Code",
     ),
-    Effect.provideService(HostProcess.Environment, {}),
+    Effect.provideService(
+      HostProcess.Environment,
+      options.repository ? { T3CODE_FORK_UPDATE_REPOSITORY: options.repository } : {},
+    ),
     Effect.provideService(ServerConfig.ServerConfig, {
       baseDir: "/fixture",
       mode: "desktop",
@@ -145,6 +151,7 @@ const harness = Effect.fn(function* (
       run: (input) =>
         Effect.gen(function* () {
           processes.push(input);
+          if (options.processStarted) yield* Deferred.succeed(options.processStarted, undefined);
           if (options.hold) yield* Deferred.await(options.hold);
           return {
             stdout: "private output is not exposed",
@@ -180,7 +187,7 @@ it.effect("unsupported servers perform no release HTTP or installer work", () =>
     Effect.gen(function* () {
       const h = yield* harness({ unsupported: true });
       assert.isFalse((yield* h.service.status({ refresh: true })).supported);
-      assert.strictEqual((yield* h.service.install.pipe(Effect.result))._tag, "Failure");
+      assert.strictEqual((yield* h.service.install(target).pipe(Effect.result))._tag, "Failure");
       assert.lengthOf(h.requests, 0);
       assert.lengthOf(h.processes, 0);
     }),
@@ -193,7 +200,7 @@ it.effect("invalid release metadata cannot offer or install an update", () =>
       const status = yield* h.service.status({ refresh: true });
       assert.isFalse(status.updateAvailable);
       assert.isNotNull(status.error);
-      assert.strictEqual((yield* h.service.install.pipe(Effect.result))._tag, "Failure");
+      assert.strictEqual((yield* h.service.install(target).pipe(Effect.result))._tag, "Failure");
       assert.lengthOf(h.processes, 0);
     }),
   ),
@@ -203,19 +210,22 @@ it.effect("saves recovery before pausing and hands off the pinned version once",
     Effect.gen(function* () {
       const h = yield* harness();
       yield* h.service.status({ refresh: true });
-      const result = yield* h.service.install;
+      const result = yield* h.service.install(target);
       assert.strictEqual(result.pausedGoals, 1);
+      assert.strictEqual(result.commit, target.commit);
       assert.deepEqual(h.commands, ["pause"]);
       assert.deepEqual(h.processes[0]?.args.slice(1), [
         "--version",
         "0.0.44-nick.6",
+        "--commit",
+        target.commit,
         "--wait-mins",
         "150",
       ]);
       assert.notInclude(result.message, "private");
       yield* h.sweep();
       assert.deepEqual(h.commands, ["pause"]);
-      assert.strictEqual((yield* h.service.install.pipe(Effect.result))._tag, "Failure");
+      assert.strictEqual((yield* h.service.install(target).pipe(Effect.result))._tag, "Failure");
       assert.lengthOf(h.processes, 1);
     }),
   ),
@@ -225,7 +235,7 @@ it.effect("marker failure prevents every pause and installer invocation", () =>
     Effect.gen(function* () {
       const h = yield* harness({ markerFailure: true });
       yield* h.service.status({ refresh: true });
-      assert.strictEqual((yield* h.service.install.pipe(Effect.result))._tag, "Failure");
+      assert.strictEqual((yield* h.service.install(target).pipe(Effect.result))._tag, "Failure");
       assert.deepEqual(h.commands, []);
       assert.lengthOf(h.processes, 0);
     }),
@@ -236,7 +246,7 @@ it.effect("failed installer restores its pauses and removes completed recovery",
     Effect.gen(function* () {
       const h = yield* harness({ installerFailure: true });
       yield* h.service.status({ refresh: true });
-      assert.strictEqual((yield* h.service.install.pipe(Effect.result))._tag, "Failure");
+      assert.strictEqual((yield* h.service.install(target).pipe(Effect.result))._tag, "Failure");
       assert.deepEqual(h.commands, ["pause", "resume"]);
       assert.isFalse(h.files.has(markerPath));
     }),
@@ -247,7 +257,7 @@ it.effect("reconstruction resumes unchanged pauses and preserves subsequent user
     Effect.gen(function* () {
       const first = yield* harness();
       yield* first.service.status({ refresh: true });
-      yield* first.service.install;
+      yield* first.service.install(target);
       const second = yield* harness({
         files: first.files,
         goal: { ...first.goal(), updatedAt: "worker progress" },
@@ -257,7 +267,7 @@ it.effect("reconstruction resumes unchanged pauses and preserves subsequent user
       assert.isFalse(second.files.has(markerPath));
       const third = yield* harness();
       yield* third.service.status({ refresh: true });
-      yield* third.service.install;
+      yield* third.service.install(target);
       third.userPause();
       const fourth = yield* harness({ files: third.files, goal: third.goal() });
       yield* fourth.sweep();
@@ -271,7 +281,7 @@ it.effect("failed startup recovery retains its marker for another sweep", () =>
     Effect.gen(function* () {
       const first = yield* harness();
       yield* first.service.status({ refresh: true });
-      yield* first.service.install;
+      yield* first.service.install(target);
       const second = yield* harness({ files: first.files, goal: first.goal(), failResume: true });
       yield* second.sweep();
       yield* second.sweep();
@@ -286,8 +296,8 @@ it.effect("simultaneous installs start one process", () =>
       const hold = yield* Deferred.make<void>();
       const h = yield* harness({ hold });
       yield* h.service.status({ refresh: true });
-      const first = yield* h.service.install.pipe(Effect.result, Effect.forkChild);
-      const second = yield* h.service.install.pipe(Effect.result, Effect.forkChild);
+      const first = yield* h.service.install(target).pipe(Effect.result, Effect.forkChild);
+      const second = yield* h.service.install(target).pipe(Effect.result, Effect.forkChild);
       yield* Deferred.succeed(hold, undefined);
       const results = [yield* Fiber.join(first), yield* Fiber.join(second)];
       assert.deepEqual(results.map((r) => r._tag).sort(), ["Failure", "Success"]);
@@ -300,7 +310,7 @@ it.effect("stale handoff resumes goals after the installer wait window", () =>
     Effect.gen(function* () {
       const h = yield* harness();
       yield* h.service.status({ refresh: true });
-      yield* h.service.install;
+      yield* h.service.install(target);
       yield* TestClock.adjust("166 minutes");
       yield* h.sweep();
       assert.deepEqual(h.commands, ["pause", "resume"], h.files.get(markerPath));
@@ -314,8 +324,8 @@ it.effect("a failed install can pause again at the same timestamp without reusin
     Effect.gen(function* () {
       const h = yield* harness({ installerFailure: true });
       yield* h.service.status({ refresh: true });
-      yield* h.service.install.pipe(Effect.result);
-      yield* h.service.install.pipe(Effect.result);
+      yield* h.service.install(target).pipe(Effect.result);
+      yield* h.service.install(target).pipe(Effect.result);
       assert.deepEqual(h.commands, ["pause", "resume", "pause", "resume"]);
       assert.lengthOf(h.processes, 2);
       assert.notStrictEqual(h.commandIds[0], h.commandIds[2]);
@@ -329,10 +339,114 @@ it.effect("corrupt recovery state prevents overwriting pauses or running the ins
     Effect.gen(function* () {
       const h = yield* harness({ files: new Map([[markerPath, "broken json"]]) });
       yield* h.service.status({ refresh: true });
-      assert.strictEqual((yield* h.service.install.pipe(Effect.result))._tag, "Failure");
+      assert.strictEqual((yield* h.service.install(target).pipe(Effect.result))._tag, "Failure");
       assert.deepEqual(h.commands, []);
       assert.lengthOf(h.processes, 0);
       assert.strictEqual(h.files.get(markerPath), "broken json");
+    }),
+  ),
+);
+
+it.effect("a destination with an older cache installs the coordinated pinned target", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const newer = { version: "0.0.45-nick.7", commit: "b".repeat(40) };
+      const h = yield* harness({
+        releases: new Map([
+          [latestUrl, release],
+          [pinnedUrl(newer.version), { ...release, ...newer }],
+        ]),
+      });
+      assert.strictEqual(
+        (yield* h.service.status({ refresh: true })).latest?.version,
+        target.version,
+      );
+      const result = yield* h.service.install(newer);
+      assert.strictEqual(result.version, newer.version);
+      assert.strictEqual(result.commit, newer.commit);
+      assert.include(h.requests, pinnedUrl(newer.version));
+      assert.deepEqual(h.processes[0]?.args.slice(1), [
+        "--version",
+        newer.version,
+        "--commit",
+        newer.commit,
+        "--wait-mins",
+        "150",
+      ]);
+    }),
+  ),
+);
+
+it.effect("pinned metadata mismatches refuse preparation without changing recovery or goals", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      for (const mismatch of [{ commit: "b".repeat(40) }, { version: "0.0.45-nick.7" }]) {
+        const files = new Map([[markerPath, "existing recovery"]]);
+        const h = yield* harness({
+          files,
+          releases: new Map([[pinnedUrl(target.version), { ...release, ...mismatch }]]),
+        });
+        const result = yield* h.service.install(target).pipe(Effect.result);
+        assert.strictEqual(result._tag, "Failure");
+        assert.deepEqual(h.commands, []);
+        assert.lengthOf(h.processes, 0);
+        assert.lengthOf(h.requests, 1);
+        assert.strictEqual(files.get(markerPath), "existing recovery");
+      }
+    }),
+  ),
+);
+
+it.effect("a latest-feed refresh during handoff cannot change the selected identity", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const hold = yield* Deferred.make<void>();
+      const processStarted = yield* Deferred.make<void>();
+      const releases = new Map([[latestUrl, release]]);
+      const h = yield* harness({ hold, processStarted, releases });
+      yield* h.service.status({ refresh: true });
+      const install = yield* h.service.install(target).pipe(Effect.forkChild);
+      yield* Deferred.await(processStarted);
+      releases.set(latestUrl, { ...release, version: "0.0.45-nick.7", commit: "b".repeat(40) });
+      assert.strictEqual(
+        (yield* h.service.status({ refresh: true })).latest?.version,
+        "0.0.45-nick.7",
+      );
+      yield* Deferred.succeed(hold, undefined);
+      const result = yield* Fiber.join(install);
+      assert.strictEqual(result.version, target.version);
+      assert.strictEqual(result.commit, target.commit);
+      assert.strictEqual(JSON.parse(h.files.get(markerPath)!).version, target.version);
+    }),
+  ),
+);
+
+it.effect("invalid targets and downgrades perform no release or goal work", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const h = yield* harness();
+      for (const invalid of [
+        { ...target, commit: "short" },
+        { ...target, version: "../latest" },
+        { ...target, version: "0.0.44-nick.5" },
+        { ...target, version: "0.0.44-nick.4" },
+      ])
+        assert.strictEqual((yield* h.service.install(invalid).pipe(Effect.result))._tag, "Failure");
+      assert.lengthOf(h.requests, 0);
+      assert.lengthOf(h.processes, 0);
+      assert.deepEqual(h.commands, []);
+    }),
+  ),
+);
+
+it.effect("metadata, installer and subprocess use the same configured repository", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const h = yield* harness({ repository: "fixture/fork" });
+      yield* h.service.status({ refresh: true });
+      yield* h.service.install(target);
+      assert.isTrue(h.requests.every((url) => url.startsWith("https://github.com/fixture/fork/")));
+      assert.deepEqual(h.processes[0]?.env, { T3_FORK_REPO: "fixture/fork" });
     }),
   ),
 );

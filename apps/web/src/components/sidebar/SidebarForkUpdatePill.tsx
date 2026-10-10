@@ -115,7 +115,8 @@ export function SidebarForkUpdatePill() {
   const view = resolveForkUpdatePillView(machines);
 
   const handleUpdate = async () => {
-    if (!view || view.pending.length === 0 || pending.current) return;
+    if (!view?.target || view.pending.length === 0 || pending.current) return;
+    const target = view.target;
     pending.current = true;
     setIsPending(true);
     try {
@@ -125,7 +126,10 @@ export function SidebarForkUpdatePill() {
       if (!confirmed) return;
       // In order, so this machine's restart comes after the others started.
       for (const machine of view.pending) {
-        const result = await installForkUpdate({ environmentId: machine.environmentId, input: {} });
+        const result = await installForkUpdate({
+          environmentId: machine.environmentId,
+          input: target,
+        });
         if (result._tag === "Failure") {
           if (isAtomCommandInterrupted(result)) continue;
           const error = squashAtomCommandFailure(result);
@@ -149,8 +153,8 @@ export function SidebarForkUpdatePill() {
     }
   };
 
-  const installing = view !== null && view.pending.length === 0;
-  const disabled = isPending || installing;
+  const disabled = isPending || view?.target === null;
+  const installing = isPending || (view?.installing.length ?? 0) > 0;
 
   return (
     <>
@@ -178,7 +182,7 @@ export function SidebarForkUpdatePill() {
                   )}
                   onClick={() => void handleUpdate()}
                 >
-                  {disabled ? <Spinner size="md" /> : <CircleArrowUpIcon className="size-4" />}
+                  {installing ? <Spinner size="md" /> : <CircleArrowUpIcon className="size-4" />}
                 </button>
               }
             />
