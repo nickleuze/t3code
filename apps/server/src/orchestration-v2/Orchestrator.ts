@@ -487,7 +487,6 @@ function commandThreadId(command: OrchestrationV2ServerCommand): ThreadId {
     case "queued-run.cancel":
     case "queued-run.edit":
     case "runtime-request.respond":
-    case "thread.user-input.request":
     case "thread.user-input.dismiss":
     case "checkpoint.rollback":
     case "checkpoint.rollback.fail":
@@ -7807,140 +7806,6 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       ]);
     });
 
-  /**
-   * Opens a question on the running turn for a provider whose own question
-   * tool T3 cannot answer. It resolves through the message path, so the
-   * answers reach the agent as the user's next message.
-   */
-  const dispatchThreadUserInputRequest = (
-    command: Extract<
-      OrchestrationV2InternalCommand,
-      { readonly type: "thread.user-input.request" }
-    >,
-    events: Ref.Ref<Array<OrchestrationV2DomainEvent>>,
-  ) =>
-    Effect.gen(function* () {
-      const reject = (cause: string) =>
-        new OrchestratorDispatchError({
-          commandId: command.commandId,
-          commandType: command.type,
-          cause,
-        });
-      if (command.questions.length === 0) return yield* reject("Ask at least one question.");
-      const { run, providerThread, providerTurn } = yield* projectionStore
-        .getRunningTurnContext(command.threadId)
-        .pipe(mapDispatchError(command));
-      if (run?.id !== command.runId || run.rootNodeId === null) {
-        return yield* reject(`Run ${command.runId} is not running.`);
-      }
-      const rootNodeId = run.rootNodeId;
-      const session =
-        providerThread?.providerSessionId == null
-          ? Option.none()
-          : yield* providerSessions
-              .get(providerThread.providerSessionId)
-              .pipe(mapDispatchError(command));
-      if (
-        Option.isNone(session) ||
-        session.value.providerSession.id !== command.providerSessionId
-      ) {
-        return yield* reject("The provider session for this run is not live.");
-      }
-      const { providerSession } = session.value;
-      if (providerSession.capabilities.planning.supportsStructuredQuestions) {
-        return yield* reject(
-          "This provider has its own question tool. Ask with that tool instead.",
-        );
-      }
-      const thread = yield* projectionStore
-        .getThread(command.threadId)
-        .pipe(mapDispatchError(command));
-      if (thread.archivedAt !== null || thread.deletedAt !== null) {
-        return yield* reject("The calling thread is no longer active.");
-      }
-      if (thread.lineage.relationshipToParent === "subagent") {
-        return yield* reject(
-          "A delegated task cannot ask the user. Put the open question in your result instead.",
-        );
-      }
-
-      const existingRequest = yield* projectionStore
-        .getRuntimeRequest(command.threadId, command.requestId)
-        .pipe(mapDispatchError(command));
-      if (existingRequest !== undefined) return yield* reject("This question already exists.");
-      const now = yield* DateTime.now;
-      const nodeId = idAllocator.derive.approvalNode({ requestId: command.requestId });
-      const common = {
-        threadId: command.threadId,
-        runId: run.id,
-        nodeId,
-        driver: providerSession.driver,
-        providerInstanceId: run.providerInstanceId,
-        occurredAt: now,
-      };
-      const emitEvent = emit(events, command);
-      yield* emitEvent({
-        ...common,
-        type: "node.updated",
-        payload: {
-          id: nodeId,
-          threadId: command.threadId,
-          runId: run.id,
-          parentNodeId: rootNodeId,
-          rootNodeId,
-          kind: "user_input_request",
-          status: "waiting",
-          countsForRun: false,
-          providerThreadId: run.providerThreadId,
-          providerTurnId: providerTurn?.id ?? null,
-          nativeItemRef: null,
-          runtimeRequestId: command.requestId,
-          checkpointScopeId: null,
-          startedAt: now,
-          completedAt: null,
-        },
-      });
-      yield* emitEvent({
-        ...common,
-        type: "runtime-request.updated",
-        payload: {
-          id: command.requestId,
-          nodeId,
-          providerTurnId: providerTurn?.id ?? null,
-          nativeRequestRef: null,
-          kind: "user_input",
-          status: "pending",
-          responseCapability: { type: "message" },
-          createdAt: now,
-          resolvedAt: null,
-        },
-      });
-      yield* emitEvent({
-        ...common,
-        type: "turn-item.updated",
-        payload: {
-          id: idAllocator.derive.approvalTurnItem({ requestId: command.requestId }),
-          threadId: command.threadId,
-          runId: run.id,
-          nodeId,
-          providerThreadId: run.providerThreadId,
-          providerTurnId: providerTurn?.id ?? null,
-          nativeItemRef: null,
-          parentItemId: null,
-          ordinal: yield* nextTurnItemOrdinal({ thread }),
-          status: "waiting",
-          title: null,
-          startedAt: now,
-          completedAt: null,
-          updatedAt: now,
-          type: "user_input_request",
-          requestId: command.requestId,
-          questions: command.questions,
-          responseMode: "message",
-        },
-      });
-    });
-
   const dispatchThreadUserInputDismiss = (
     command: Extract<OrchestrationV2Command, { readonly type: "thread.user-input.dismiss" }>,
     events: Ref.Ref<Array<OrchestrationV2DomainEvent>>,
@@ -9316,7 +9181,6 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
             "subagent",
             "assistant_message",
             "reasoning",
-            "user_input_request",
           ],
           turnItemStatuses: ["pending", "running", "waiting"],
         },
@@ -9390,44 +9254,6 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
                 resolvedAt: now,
                 responseCapability: { type: "not_resumable", reason: "The run was interrupted." },
               },
-            });
-          }
-          for (const node of projection.nodes) {
-            if (
-              node.runId !== run.id ||
-              node.kind !== "user_input_request" ||
-              node.status !== "waiting"
-            )
-              continue;
-            yield* emit(
-              events,
-              command,
-            )({
-              type: "node.updated",
-              threadId: command.threadId,
-              runId: run.id,
-              nodeId: node.id,
-              occurredAt: now,
-              payload: { ...node, status: "cancelled", completedAt: now },
-            });
-          }
-          for (const item of projection.turnItems) {
-            if (
-              item.runId !== run.id ||
-              item.type !== "user_input_request" ||
-              item.status !== "waiting"
-            )
-              continue;
-            yield* emit(
-              events,
-              command,
-            )({
-              type: "turn-item.updated",
-              threadId: command.threadId,
-              runId: run.id,
-              ...(item.nodeId === null ? {} : { nodeId: item.nodeId }),
-              occurredAt: now,
-              payload: { ...item, status: "cancelled", completedAt: now, updatedAt: now },
             });
           }
           yield* command.holdQueue === true
@@ -11073,9 +10899,6 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         break;
       case "runtime-request.respond":
         yield* dispatchRuntimeRequestRespond(command, events, effects);
-        break;
-      case "thread.user-input.request":
-        yield* dispatchThreadUserInputRequest(command, events);
         break;
       case "thread.user-input.dismiss":
         yield* dispatchThreadUserInputDismiss(command, events, effects);

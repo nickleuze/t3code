@@ -2,7 +2,7 @@
 // @effect-diagnostics preferSchemaOverJson:off
 import * as Effect from "effect/Effect";
 import * as Stream from "effect/Stream";
-import { discardResponseBody, responsePayloads } from "./mcpResponsePayloads.ts";
+import { discardResponseBody, responsePayloads } from "@t3tools/shared/mcpResponsePayloads";
 
 interface JsonRpcEnvelope {
   readonly id?: unknown;
@@ -42,8 +42,8 @@ export function openMcpHttpSession<E>(
 ): Effect.Effect<McpHttpSession<E>, E> {
   const fetchImplementation = options.fetchImplementation ?? fetch;
   return Effect.gen(function* () {
-    // The bridge is single-fibered at creation time; concurrent sends only
-    // read these after the sequential handshake, so plain locals suffice.
+    // The handshake is sequential; concurrent requests only
+    // read these after it, so plain locals suffice.
     let sessionId: string | null = null;
     let protocolVersion: string | null = null;
 
@@ -81,7 +81,7 @@ export function openMcpHttpSession<E>(
         return payloads;
       });
 
-    const initializeId = "t3-acp-cli-initialize";
+    const initializeId = "t3-cursor-initialize";
     const initialized = yield* send({
       jsonrpc: "2.0",
       id: initializeId,
@@ -89,7 +89,7 @@ export function openMcpHttpSession<E>(
       params: {
         protocolVersion: MCP_PROTOCOL_VERSION,
         capabilities: {},
-        clientInfo: { name: "t3-code-acp-cli", version: "0.0.0" },
+        clientInfo: { name: "t3-code-cursor", version: "0.0.0" },
       },
     });
     const initializeResponse = initialized.find((entry) => asEnvelope(entry)?.id === initializeId);
