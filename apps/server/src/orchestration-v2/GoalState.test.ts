@@ -480,6 +480,97 @@ describe("goal state", () => {
     });
     expect(goal.handoffPath).toBe("docs/agent-work/parser/HANDOFF.md");
   });
+
+  it("edits the brief only while the goal is paused or blocked", () => {
+    const edit = {
+      objective: "Ship the parser",
+      doneWhen: null,
+      permissions: "Merge the PR once CI is green",
+    };
+    const active = newGoal();
+    expect(rejection(rootThread(active), { type: "update", goalId: GOAL_ID, brief: edit })).toMatch(
+      /Pause the goal/,
+    );
+    const blocked = advance(
+      report(started(active), { type: "claim", status: "blocked", summary: "Need merge approval" }),
+      finished(),
+    );
+    const paused = control(started(active), "pause")!;
+    for (const goal of [blocked, paused]) {
+      const edited = apply(rootThread({ ...goal, doneWhen: "CI green", background: "Plan" }), {
+        type: "update",
+        goalId: GOAL_ID,
+        brief: edit,
+      })!;
+      expect(edited).toMatchObject({
+        ...edit,
+        background: "Plan",
+        status: goal.status,
+        current: goal.current,
+      });
+    }
+    const stopped = control(active, "stop")!;
+    expect(
+      rejection(rootThread(stopped), { type: "update", goalId: GOAL_ID, brief: edit }),
+    ).toMatch(/Pause the goal/);
+  });
+
+  it("counts in-place continuations and keeps them in the iteration's record", () => {
+    const continued = advance(advance(started(newGoal()), { type: "turn_continued" }), {
+      type: "turn_continued",
+    });
+    expect(continued.current?.continuations).toBe(2);
+    const done = advance(report(continued, { type: "note", text: "Parser done" }), finished());
+    expect(done.history.at(-1)).toMatchObject({ continuations: 2, outcome: "continued" });
+  });
+
+  it("tracks uncached tokens beside context tokens, but not on goals that predate them", () => {
+    const step = { ...finished(), uncachedTokens: 40 } as OrchestrationV2GoalAdvanceStep;
+    const goal = advance(report(started(newGoal()), { type: "note", text: "Parser done" }), step);
+    expect(goal).toMatchObject({ tokensUsed: 1_000, uncachedTokensUsed: 40 });
+    expect(goal.history.at(-1)).toMatchObject({ tokens: 1_000, uncachedTokens: 40 });
+    expect(goalSummary(goal)).toMatchObject({ tokensUsed: 1_000, uncachedTokensUsed: 40 });
+
+    const { uncachedTokensUsed: _unknown, ...legacy } = newGoal();
+    const legacyAfter = advance(started(legacy), step);
+    expect(legacyAfter.tokensUsed).toBe(1_000);
+    expect(legacyAfter.uncachedTokensUsed).toBeUndefined();
+    expect(goalSummary(legacyAfter)).not.toHaveProperty("uncachedTokensUsed");
+  });
+
+  it("stores the burn guard's reading without counting it as a goal transition", () => {
+    const goal = newGoal();
+    const sample = {
+      at: "2026-10-04T12:05:00.000Z",
+      windows: [{ id: "session", usedPercent: 12 }],
+      risePoints: 3,
+    };
+    const sampled = applyGoalCommand(
+      rootThread(goal),
+      { type: "advance", goalId: GOAL_ID, iteration: 0, step: { type: "usage_sampled", sample } },
+      "2026-10-04T12:05:00.000Z",
+    );
+    expect(sampled).toMatchObject({ ok: true, goal: { usageSample: sample, updatedAt: NOW } });
+  });
+
+  it("raises a time limit below the floor", () => {
+    const goal = apply(rootThread(), {
+      type: "set",
+      commandId: GOAL_ID,
+      objective: "Make the test suite pass",
+      checkCommand: null,
+      burnGuard: undefined,
+      noProgressLimit: undefined,
+      modelSelection: newGoal().modelSelection,
+      runtimeMode: "full-access",
+      doneWhen: null,
+      background: null,
+      permissions: null,
+      iterationTimeoutMins: 20,
+    })!;
+    expect(goal.iterationTimeoutMins).toBe(45);
+    expect(newGoal().iterationTimeoutMins).toBe(120);
+  });
 });
 
 describe("applyGoalProposalCommand", () => {

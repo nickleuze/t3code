@@ -1,7 +1,7 @@
 {"type":"transcript_start","provider":"cursor","protocol":"cursor-agent-sdk.local","version":"1","scenario":"skill_invocation","metadata":{"generatedBy":"recordCursorAgentSdkReplayTranscript","nativeAgentId":"agent-a5339a21-2654-4789-9486-8a0fab24edd0"}}
 {"type":"expect_outbound","label":"agent.open","frame":{"type":"agent.open","operation":"create","options":{"model":{"id":"composer-2.5"},"hasName":true,"mode":"agent","local":{"hasCwd":true,"autoReview":false,"settingSources":["project","user","team","mdm","plugins"],"sandboxEnabled":false,"enableAgentRetries":true}}}}
 {"type":"emit_inbound","label":"agent.opened","frame":{"type":"agent.opened","agentId":"agent-a5339a21-2654-4789-9486-8a0fab24edd0"}}
-{"type":"expect_outbound","label":"run.start:1","frame":{"type":"run.start","message":"/review README.md","options":{"model":{"id":"composer-2.5"},"mode":"agent","local":{"hasCustomTools":true}}}}
+{"type":"expect_outbound","label":"run.start:1","frame":{"type":"run.start","message":"/review README.md","options":{"model":{"id":"composer-2.5"},"mode":"agent"}}}
 {"type":"emit_inbound","label":"run.started:1","frame":{"type":"run.started","runId":"run-f6b1c9d1-7ebc-4816-90a3-842e36688fa4","agentId":"agent-a5339a21-2654-4789-9486-8a0fab24edd0"}}
 {"type":"emit_inbound","label":"thinking-delta","frame":{"type":"interaction.update","runId":"run-f6b1c9d1-7ebc-4816-90a3-842e36688fa4","update":{"type":"thinking-delta","text":"Reviewing README.md."}}}
 {"type":"emit_inbound","label":"token-delta","frame":{"type":"interaction.update","runId":"run-f6b1c9d1-7ebc-4816-90a3-842e36688fa4","update":{"type":"token-delta","tokens":5}}}

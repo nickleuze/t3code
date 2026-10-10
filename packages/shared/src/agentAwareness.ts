@@ -71,6 +71,45 @@ export function t3GoalOwnsActivity(
   );
 }
 
+type T3GoalAttentionInput = Pick<
+  NonNullable<OrchestrationV2ThreadShell["t3Goal"]>,
+  "status" | "statusReason" | "needsInput"
+>;
+
+/**
+ * What a T3 goal asks of the user, shared by the sidebar, thread lists,
+ * notifications and relay activity. Null once the goal has ended. A pause the
+ * user made asks nothing ("paused"); any other pause needs them ("input").
+ */
+export function t3GoalAttention(
+  goal: T3GoalAttentionInput,
+): "input" | "limited" | "working" | "paused" | null {
+  if (goal.status === "complete" || goal.status === "stopped") return null;
+  if (goal.needsInput || goal.status === "blocked") return "input";
+  if (goal.status === "paused")
+    return (goal.statusReason ?? "user") === "user" ? "paused" : "input";
+  return goal.status === "usageLimited" ? "limited" : "working";
+}
+
+/** Notification and relay headline for a goal thread. */
+export function t3GoalHeadline(goal: T3GoalAttentionInput): string {
+  if (goal.needsInput) return "Goal needs input";
+  switch (goal.status) {
+    case "blocked":
+      return "Goal blocked";
+    case "paused":
+      return "Goal paused";
+    case "usageLimited":
+      return "Usage limit reached";
+    case "complete":
+      return "Goal complete";
+    case "stopped":
+      return "Goal stopped";
+    case "active":
+      return "Goal is working";
+  }
+}
+
 /** Build relay activity directly from the V2 shell projection. */
 export function projectThreadAwarenessV2(
   input: ProjectThreadAwarenessV2Input,
@@ -89,17 +128,7 @@ export function projectThreadAwarenessV2(
     !goalOwnsActivity ||
     (thread.pendingRuntimeRequest !== null && thread.pendingRuntimeRequest.kind !== "auth_refresh")
       ? undefined
-      : goal.needsInput
-        ? "Goal needs input"
-        : goal.status === "blocked"
-          ? "Goal blocked"
-          : goal.status === "paused"
-            ? "Goal paused"
-            : goal.status === "usageLimited"
-              ? "Usage limit reached"
-              : goal.status === "complete"
-                ? "Goal complete"
-                : "Goal is working";
+      : t3GoalHeadline(goal);
   const detail =
     phase === "completed"
       ? goalOwnsActivity
@@ -139,13 +168,18 @@ function resolveThreadAwarenessPhaseV2(
   }
   const goal = thread.t3Goal;
   if (goal != null && t3GoalOwnsActivity(thread)) {
-    if (goal.needsInput || goal.status === "blocked" || goal.status === "usageLimited") {
-      return "waiting_for_input";
+    // Relay phases have no usage-limit state; a limited goal waits on the user like input.
+    switch (t3GoalAttention(goal)) {
+      case "input":
+      case "limited":
+        return "waiting_for_input";
+      case "paused":
+        return null;
+      case "working":
+        return "running";
+      case null:
+        return "completed";
     }
-    if (goal.status === "paused") {
-      return goal.statusReason === "user" ? null : "waiting_for_input";
-    }
-    return goal.status === "complete" ? "completed" : "running";
   }
   switch (thread.activityRunStatus ?? thread.status) {
     case "preparing":

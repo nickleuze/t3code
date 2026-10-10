@@ -1,3 +1,4 @@
+import { selectedGoalIterationKey } from "@t3tools/client-runtime/state/thread-goals";
 import { useAndroidControlSizing } from "../../components/useAndroidControlSizing";
 import type { ThreadMoveDestination } from "../threads/threadOrder";
 import { computeThreadMoveAvailability } from "../threads/threadOrder";
@@ -758,7 +759,10 @@ export function HomeScreen(props: HomeScreenProps) {
           onNewThreadOnBranch={props.onNewThreadOnBranch}
           thread={thread}
           goalIterations={item.item.goalIterations}
-          selectedThreadKey={selectedThreadKey}
+          selectedIterationKey={selectedGoalIterationKey(
+            item.item.goalIterations,
+            selectedThreadKey,
+          )}
           variant={item.item.variant}
           hasQueuedMessages={item.hasQueuedMessages}
           snoozed={item.item.snoozed}

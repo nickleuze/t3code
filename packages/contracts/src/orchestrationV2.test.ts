@@ -1524,8 +1524,17 @@ it("accepts user goal controls while keeping worker and agent bookkeeping off th
       action: "pause",
     }).type,
   ).toBe("thread.goal.control");
+  expect(
+    decode({
+      type: "thread.goal.update",
+      commandId: "goal:edit",
+      threadId: "thread:goal",
+      goalId: "goal:set",
+      doneWhen: null,
+      permissions: "Merge once CI is green",
+    }),
+  ).toMatchObject({ type: "thread.goal.update", doneWhen: null });
   for (const type of [
-    "thread.user-input.request",
     "thread.goal.propose",
     "thread.goal.iteration.start",
     "thread.goal.report",
@@ -1541,19 +1550,4 @@ it("accepts user goal controls while keeping worker and agent bookkeeping off th
       }),
     ).toThrow();
   }
-});
-
-it("rejects a fully populated fallback question from the public command boundary", () => {
-  const decode = Schema.decodeUnknownSync(OrchestrationV2Command);
-  expect(() =>
-    decode({
-      type: "thread.user-input.request",
-      commandId: "ask",
-      threadId: "thread",
-      runId: "run",
-      providerSessionId: "session",
-      requestId: "request",
-      questions: [{ id: "1", header: "Choice", question: "Continue?", options: [] }],
-    }),
-  ).toThrow();
 });
