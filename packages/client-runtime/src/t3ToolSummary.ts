@@ -203,6 +203,15 @@ export function summarizeT3ToolCalls(
         quantity(countEntities(entityIds("scheduledTaskId")), "scheduled task"),
       );
       break;
+    case "goal-update":
+      label = phrase("Recorded", "record", quantity(selected.length, "goal progress note"));
+      break;
+    case "goal-complete":
+      label = phrase("Reported", "report", "the goal outcome");
+      break;
+    case "goal-propose":
+      label = phrase("Proposed", "propose", quantity(selected.length, "T3 goal"));
+      break;
     case "schedule-run":
       label = phrase("Requested", "request", quantity(selected.length, "scheduled task run"));
       break;

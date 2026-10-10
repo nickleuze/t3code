@@ -32,7 +32,7 @@ import { visibleThreadPullRequests } from "@t3tools/shared/threadPullRequests";
 import * as Crypto from "effect/Crypto";
 import * as Effect from "effect/Effect";
 
-import { getInitialServerConfig, request } from "../rpc/client.ts";
+import { getInitialServerConfig, request, EnvironmentRpcUnavailableError } from "../rpc/client.ts";
 
 interface CommandMetadata {
   readonly commandId?: CommandId;
@@ -473,6 +473,98 @@ export const setThreadAutoSettle = Effect.fn("EnvironmentCommands.setThreadAutoS
     enabled: input.enabled,
   });
 });
+
+const requireT3Goals = Effect.fn("EnvironmentCommands.requireT3Goals")(function* () {
+  const config = yield* getInitialServerConfig();
+  if (config.environment.capabilities.t3Goals !== true) {
+    return yield* new EnvironmentRpcUnavailableError({
+      environmentId: config.environment.environmentId,
+      message: "This environment does not support T3 goals.",
+    });
+  }
+});
+
+export type SetThreadGoalInput = Omit<
+  Extract<OrchestrationV2Command, { type: "thread.goal.set" }>,
+  "type" | "commandId"
+> &
+  CommandMetadata;
+export const setThreadGoal = Effect.fn("EnvironmentCommands.setThreadGoal")(function* (
+  input: SetThreadGoalInput,
+) {
+  yield* requireT3Goals();
+  return yield* dispatch({
+    type: "thread.goal.set",
+    commandId: yield* allocateCommandId(input),
+    threadId: input.threadId,
+    objective: input.objective,
+    ...(input.checkCommand === undefined ? {} : { checkCommand: input.checkCommand }),
+    ...(input.burnGuard === undefined ? {} : { burnGuard: input.burnGuard }),
+    ...(input.noProgressLimit === undefined ? {} : { noProgressLimit: input.noProgressLimit }),
+    ...(input.modelSelection === undefined ? {} : { modelSelection: input.modelSelection }),
+    ...(input.runtimeMode === undefined ? {} : { runtimeMode: input.runtimeMode }),
+    ...(input.doneWhen === undefined ? {} : { doneWhen: input.doneWhen }),
+    ...(input.background === undefined ? {} : { background: input.background }),
+    ...(input.permissions === undefined ? {} : { permissions: input.permissions }),
+    ...(input.iterationTimeoutMins === undefined
+      ? {}
+      : { iterationTimeoutMins: input.iterationTimeoutMins }),
+  });
+});
+
+export type MessageThreadGoalInput = Omit<
+  Extract<OrchestrationV2Command, { type: "thread.goal.message" }>,
+  "type" | "commandId"
+> &
+  CommandMetadata;
+export const messageThreadGoal = Effect.fn("EnvironmentCommands.messageThreadGoal")(function* (
+  input: MessageThreadGoalInput,
+) {
+  yield* requireT3Goals();
+  return yield* dispatch({
+    type: "thread.goal.message",
+    commandId: yield* allocateCommandId(input),
+    threadId: input.threadId,
+    goalId: input.goalId,
+    text: input.text,
+  });
+});
+
+export type ControlThreadGoalInput = Omit<
+  Extract<OrchestrationV2Command, { type: "thread.goal.control" }>,
+  "type" | "commandId"
+> &
+  CommandMetadata;
+export const controlThreadGoal = Effect.fn("EnvironmentCommands.controlThreadGoal")(function* (
+  input: ControlThreadGoalInput,
+) {
+  yield* requireT3Goals();
+  return yield* dispatch({
+    type: "thread.goal.control",
+    commandId: yield* allocateCommandId(input),
+    threadId: input.threadId,
+    goalId: input.goalId,
+    action: input.action,
+    ...(input.burnGuard === undefined ? {} : { burnGuard: input.burnGuard }),
+  });
+});
+
+export type DismissThreadGoalProposalInput = Omit<
+  Extract<OrchestrationV2Command, { type: "thread.goal.proposal.dismiss" }>,
+  "type" | "commandId"
+> &
+  CommandMetadata;
+export const dismissThreadGoalProposal = Effect.fn("EnvironmentCommands.dismissThreadGoalProposal")(
+  function* (input: DismissThreadGoalProposalInput) {
+    yield* requireT3Goals();
+    return yield* dispatch({
+      type: "thread.goal.proposal.dismiss",
+      commandId: yield* allocateCommandId(input),
+      threadId: input.threadId,
+      proposalId: input.proposalId,
+    });
+  },
+);
 
 export const reorderPinnedThread = Effect.fn("EnvironmentCommands.reorderPinnedThread")(function* (
   input: ReorderPinnedThreadInput,

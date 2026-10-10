@@ -88,3 +88,10 @@ describe("T3 orchestration provider instructions", () => {
     assert.notInclude(withoutMcp, "T3 Code orchestration");
   });
 });
+
+it("keeps T3 goal proposals user-started and native goals separate", () => {
+  assert.include(T3_CODE_ORCHESTRATION_INSTRUCTIONS, "t3_goal_propose");
+  assert.include(T3_CODE_ORCHESTRATION_INSTRUCTIONS, "user starts the goal");
+  assert.include(T3_CODE_ORCHESTRATION_INSTRUCTIONS, "provider-native `/goal`");
+  assert.include(T3_CODE_ORCHESTRATION_INSTRUCTIONS, "t3_goal_update");
+});

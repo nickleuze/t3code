@@ -38,6 +38,10 @@ import type { WsRpcProtocolClient } from "../rpc/protocol.ts";
 import { v2Now, v2Projection, v2ThreadId } from "../state/orchestrationV2TestFixtures.ts";
 import {
   archiveThread,
+  setThreadGoal,
+  messageThreadGoal,
+  controlThreadGoal,
+  dismissThreadGoalProposal,
   cancelQueuedRun,
   createProject,
   dismissThreadUserInput,
@@ -78,6 +82,7 @@ const makeSupervisor = Effect.fn("TestEnvironmentCommands.makeSupervisor")(funct
   readonly projection?: OrchestrationV2ThreadProjection;
   readonly projectionRequests?: ThreadId[];
   readonly advertiseServerResolvedCommandContext?: boolean;
+  readonly advertiseT3Goals?: boolean;
 }) {
   const client = {
     [ORCHESTRATION_V2_WS_METHODS.dispatchCommand]: (command: OrchestrationV2Command) =>
@@ -123,7 +128,9 @@ const makeSupervisor = Effect.fn("TestEnvironmentCommands.makeSupervisor")(funct
     client,
     initialConfig: Effect.succeed({
       environment: {
+        environmentId: TARGET.environmentId,
         capabilities: {
+          ...(input.advertiseT3Goals === false ? {} : { t3Goals: true }),
           repositoryIdentity: true,
           ...(input.advertiseServerResolvedCommandContext === false
             ? {}
@@ -1024,3 +1031,85 @@ describe("V2 environment commands", () => {
     }).pipe(Effect.provide(layerTestCrypto)),
   );
 });
+
+it.effect(
+  "keeps goal control/reply/proposal commands user-owned and preserves retry identities",
+  () =>
+    Effect.gen(function* () {
+      const commands: OrchestrationV2Command[] = [];
+      const supervisor = yield* makeSupervisor({ commands, projects: [] });
+      const threadId = ThreadId.make("goal-owner");
+      const commandId = CommandId.make("start-goal");
+      const run = <A, E, R>(
+        effect: Effect.Effect<A, E, R | EnvironmentSupervisor.EnvironmentSupervisor>,
+      ) =>
+        effect.pipe(Effect.provideService(EnvironmentSupervisor.EnvironmentSupervisor, supervisor));
+      yield* run(
+        setThreadGoal({
+          commandId,
+          threadId,
+          objective: "Ship",
+          doneWhen: "Tests pass",
+          background: "Context",
+          iterationTimeoutMins: 20,
+        }),
+      );
+      yield* run(
+        setThreadGoal({
+          commandId,
+          threadId,
+          objective: "Ship",
+          doneWhen: "Tests pass",
+          background: "Context",
+          iterationTimeoutMins: 20,
+        }),
+      );
+      yield* run(
+        messageThreadGoal({
+          commandId: CommandId.make("reply"),
+          threadId,
+          goalId: commandId,
+          text: "Use the candidate",
+        }),
+      );
+      yield* run(
+        controlThreadGoal({
+          commandId: CommandId.make("pause"),
+          threadId,
+          goalId: commandId,
+          action: "pause",
+        }),
+      );
+      yield* run(
+        dismissThreadGoalProposal({
+          commandId: CommandId.make("dismiss"),
+          threadId,
+          proposalId: CommandId.make("proposal"),
+        }),
+      );
+      expect(commands[0]).toEqual(commands[1]);
+      expect(commands.map((c) => c.type)).toEqual([
+        "thread.goal.set",
+        "thread.goal.set",
+        "thread.goal.message",
+        "thread.goal.control",
+        "thread.goal.proposal.dismiss",
+      ]);
+      expect(commands[0]).not.toHaveProperty("runtimeMode");
+      expect(commands[0]).not.toHaveProperty("modelSelection");
+      expect(commands[2]).toMatchObject({ goalId: commandId, text: "Use the candidate" });
+    }).pipe(Effect.provide(layerTestCrypto)),
+);
+
+it.effect("does not send goal commands to an environment without the capability", () =>
+  Effect.gen(function* () {
+    const commands: OrchestrationV2Command[] = [];
+    const supervisor = yield* makeSupervisor({ commands, projects: [], advertiseT3Goals: false });
+    const result = yield* setThreadGoal({ threadId: v2ThreadId, objective: "Ship" }).pipe(
+      Effect.provideService(EnvironmentSupervisor.EnvironmentSupervisor, supervisor),
+      Effect.flip,
+    );
+    expect(result._tag).toBe("EnvironmentRpcUnavailableError");
+    expect(commands).toEqual([]);
+  }).pipe(Effect.provide(layerTestCrypto)),
+);
