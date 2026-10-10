@@ -1,4 +1,5 @@
 import type { ClientSettings } from "@t3tools/contracts/settings";
+import { CommandId, ThreadId, type OrchestrationV2ThreadGoalSummary } from "@t3tools/contracts";
 import * as DateTime from "effect/DateTime";
 import * as Option from "effect/Option";
 import { act } from "react";
@@ -13,6 +14,7 @@ const state = vi.hoisted(() => ({
   visible: "visible",
   live: true,
   completedAt: null as string | null,
+  requestedAt: "2026-09-13T09:00:00.000Z",
   archivedAt: null as string | null,
   input: false,
   approval: false,
@@ -20,6 +22,8 @@ const state = vi.hoisted(() => ({
   turnError: false,
   limited: false,
   subagent: false,
+  goal: null as OrchestrationV2ThreadGoalSummary | null,
+  goalIteration: false,
   background: [] as Array<{ taskId: string; kind: "command" | "monitor" }>,
   add: vi.fn(
     (_toast: { title: string; description: string; actionProps: { onClick: () => void } }) =>
@@ -52,6 +56,10 @@ function mockThreadShell() {
       parentThreadId: state.subagent ? "parent" : null,
       relationshipToParent: state.subagent ? "subagent" : null,
     },
+    t3Goal: state.goal,
+    goalIteration: state.goalIteration
+      ? { parentThreadId: "owner", goalId: "goal-1", iteration: 1 }
+      : null,
     forkedFrom: null,
     createdBy: "user",
     creationSource: "web",
@@ -76,7 +84,7 @@ function mockThreadShell() {
     visibleItemCount: 0,
     createdAt: SHELL_NOW,
     updatedAt: SHELL_NOW,
-    latestRunRequestedAt: SHELL_NOW,
+    latestRunRequestedAt: DateTime.makeUnsafe(state.requestedAt),
     latestRunStartedAt: SHELL_NOW,
     latestRunCompletedAt: state.completedAt ? DateTime.makeUnsafe(state.completedAt) : undefined,
     archivedAt: state.archivedAt ? DateTime.makeUnsafe(state.archivedAt) : null,
@@ -146,6 +154,7 @@ beforeEach(() => {
     visible: "visible",
     live: true,
     completedAt: null,
+    requestedAt: "2026-09-13T09:00:00.000Z",
     archivedAt: null,
     input: false,
     approval: false,
@@ -153,6 +162,8 @@ beforeEach(() => {
     turnError: false,
     limited: false,
     subagent: false,
+    goal: null,
+    goalIteration: false,
     background: [],
   });
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
@@ -175,6 +186,167 @@ afterEach(async () => {
 });
 
 describe("thread notifications", () => {
+  const goal = (
+    overrides: Partial<OrchestrationV2ThreadGoalSummary> = {},
+  ): OrchestrationV2ThreadGoalSummary => ({
+    id: CommandId.make("goal-1"),
+    objective: "Fix the login form",
+    status: "active",
+    statusReason: null,
+    iteration: 1,
+    tokensUsed: 0,
+    needsInput: false,
+    currentChildThreadId: ThreadId.make("iteration-1"),
+    ...overrides,
+  });
+
+  it.each([true, false])("keeps goal iterations silent with focus=%s", async (focused) => {
+    state.goalIteration = true;
+    state.focused = focused;
+    state.mode = "notifications-and-sound";
+    await render();
+    await complete();
+    state.input = true;
+    await render();
+    expect(state.sound).not.toHaveBeenCalled();
+    expect(state.add).not.toHaveBeenCalled();
+    expect(state.notification).not.toHaveBeenCalled();
+  });
+
+  it("announces goal completion once on its owner, including a second goal", async () => {
+    state.goal = goal();
+    await render();
+    state.goal = goal({ status: "complete", currentChildThreadId: null });
+    await render();
+    await render();
+    expect(state.add).toHaveBeenCalledTimes(1);
+    expect(state.add).toHaveBeenLastCalledWith(expect.objectContaining({ title: "Goal complete" }));
+    state.add.mock.calls[0]?.[0].actionProps.onClick();
+    expect(state.navigate).toHaveBeenCalledWith({
+      to: "/$environmentId/$threadId",
+      params: { environmentId: "env-1", threadId: "thread-1" },
+    });
+    state.goal = goal({ id: CommandId.make("goal-2") });
+    await render();
+    state.goal = goal({ id: CommandId.make("goal-2"), status: "complete" });
+    await render();
+    expect(state.add).toHaveBeenCalledTimes(2);
+  });
+
+  it.each([
+    [{ needsInput: true }, "Goal needs input"],
+    [{ status: "blocked" }, "Goal blocked"],
+    [{ status: "paused", statusReason: "no_progress" }, "Goal paused"],
+    [{ status: "usageLimited" }, "Usage limit reached"],
+  ] satisfies ReadonlyArray<[Partial<OrchestrationV2ThreadGoalSummary>, string]>)(
+    "announces goal attention %j without repeat alerts",
+    async (change, title) => {
+      state.completedAt = "2026-09-13T09:00:00.000Z";
+      state.goal = goal();
+      await render();
+      state.goal = goal(change);
+      await render();
+      await render();
+      expect(state.add).toHaveBeenCalledTimes(1);
+      expect(state.add).toHaveBeenLastCalledWith(expect.objectContaining({ title }));
+    },
+  );
+
+  it("keeps user pause quiet and prioritizes owner approvals over goal input", async () => {
+    state.completedAt = "2026-09-13T09:00:00.000Z";
+    state.goal = goal();
+    await render();
+    state.goal = goal({ status: "paused", statusReason: "user" });
+    await render();
+    expect(state.add).not.toHaveBeenCalled();
+    state.approval = true;
+    state.goal = goal({ needsInput: true });
+    await render();
+    expect(state.add).toHaveBeenLastCalledWith(
+      expect.objectContaining({ title: "Approval needed" }),
+    );
+  });
+
+  it("keeps historical goal completions quiet on first load and reconnect", async () => {
+    state.goal = goal({ status: "complete" });
+    await render();
+    state.live = false;
+    await render();
+    state.live = true;
+    await render();
+    expect(state.add).not.toHaveBeenCalled();
+  });
+
+  it("does not announce the owner's old completion when stopping or clearing a goal", async () => {
+    state.completedAt = "2026-09-13T09:00:00.000Z";
+    state.goal = goal();
+    await render();
+    state.goal = goal({ status: "stopped" });
+    await render();
+    state.goal = null;
+    await render();
+    expect(state.add).not.toHaveBeenCalled();
+  });
+
+  it("announces a later ordinary run after a completed goal", async () => {
+    state.goal = goal({ status: "complete", updatedAt: "2026-09-13T09:30:00.000Z" });
+    state.completedAt = "2026-09-13T09:00:00.000Z";
+    await render();
+    state.requestedAt = "2026-09-13T09:45:00.000Z";
+    state.completedAt = null;
+    await render();
+    await complete();
+    expect(state.add).toHaveBeenCalledTimes(1);
+    expect(state.add).toHaveBeenLastCalledWith(
+      expect.objectContaining({ title: "Thread completed" }),
+    );
+  });
+
+  it("announces goal completion despite an old failed owner run", async () => {
+    state.sessionError = true;
+    state.goal = goal();
+    await render();
+    state.goal = goal({ status: "complete" });
+    await render();
+    expect(state.add).toHaveBeenCalledTimes(1);
+    expect(state.add).toHaveBeenLastCalledWith(expect.objectContaining({ title: "Goal complete" }));
+  });
+
+  it("keeps a user pause quiet over an old failed run and announces limits over a running run", async () => {
+    state.sessionError = true;
+    state.goal = goal();
+    await render();
+    state.goal = goal({ status: "paused", statusReason: "user" });
+    await render();
+    expect(state.add).not.toHaveBeenCalled();
+    state.sessionError = false;
+    state.goal = goal();
+    await render();
+    state.goal = goal({ status: "usageLimited" });
+    await render();
+    expect(state.add).toHaveBeenCalledTimes(1);
+    expect(state.add).toHaveBeenLastCalledWith(
+      expect.objectContaining({ title: "Usage limit reached" }),
+    );
+  });
+
+  it("uses the same goal completion for background popup and sound", async () => {
+    state.mode = "notifications-and-sound";
+    state.focused = false;
+    state.goal = goal();
+    await render();
+    state.goal = goal({ status: "complete" });
+    await render();
+    await render();
+    expect(state.notification).toHaveBeenCalledTimes(1);
+    expect(state.notification).toHaveBeenCalledWith("Goal complete", {
+      body: "Fix the login form",
+      tag: "env-1:thread-1",
+      silent: true,
+    });
+    expect(state.sound).toHaveBeenCalledWith("completion", expect.any(Function));
+  });
+
   it.each([true, false])("keeps subagents silent with focus=%s", async (focused) => {
     state.subagent = true;
     state.focused = focused;

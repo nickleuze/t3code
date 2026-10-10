@@ -2,6 +2,7 @@ import { assert, describe, it } from "@effect/vitest";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import {
   EnvironmentId,
+  CommandId,
   EventId,
   MessageId,
   NodeId,
@@ -44,6 +45,18 @@ const THREAD_ID = ThreadId.make("relay-thread");
 const SECOND_THREAD_ID = ThreadId.make("relay-thread-2");
 const PROJECT_ID = ProjectId.make("relay-project");
 const NOW = "2026-09-04T12:00:00.000Z";
+const t3Goal = (overrides: Partial<NonNullable<OrchestrationV2ThreadShell["t3Goal"]>> = {}) => ({
+  id: CommandId.make("relay-goal"),
+  objective: "Private goal objective",
+  status: "active" as const,
+  statusReason: null,
+  iteration: 3,
+  tokensUsed: 0,
+  needsInput: false,
+  currentChildThreadId: SECOND_THREAD_ID,
+  updatedAt: NOW,
+  ...overrides,
+});
 
 function shell(overrides: Partial<OrchestrationV2ThreadShell> = {}): OrchestrationV2ThreadShell {
   return {
@@ -95,6 +108,52 @@ const decodePublishPayload = Schema.decodeUnknownSync(Schema.fromJsonString(Publ
 const unused = () => Effect.die("Unexpected test dependency call");
 
 describe("startup agent activity", () => {
+  it("uses goal transition time rather than owner lifecycle/run timestamps for startup catch-up", () => {
+    const startedAt = DateTime.toEpochMillis(DateTime.makeUnsafe(NOW));
+    const oldGoal = ThreadId.make("old-goal");
+    const newGoal = ThreadId.make("new-goal");
+    const oldSummary = ThreadId.make("old-summary");
+    const { updatedAt: _updatedAt, ...legacy } = t3Goal({ status: "complete" });
+    const ids = AgentAwarenessRelay.resolveAgentAwarenessRelayActiveThreadIds({
+      environmentId: EnvironmentId.make("relay-env"),
+      startedAt,
+      projects: [{ id: PROJECT_ID, title: "Project" }],
+      threads: [
+        shell({ status: "idle", t3Goal: t3Goal() }),
+        shell({
+          id: oldGoal,
+          status: "completed",
+          t3Goal: t3Goal({ status: "complete" }),
+          updatedAt: DateTime.makeUnsafe("2026-09-04T12:30:00.000Z"),
+          latestRunCompletedAt: DateTime.makeUnsafe("2026-09-04T12:30:00.000Z"),
+        }),
+        shell({
+          id: newGoal,
+          status: "idle",
+          t3Goal: t3Goal({
+            status: "complete",
+            updatedAt: "2026-09-04T12:00:01.000Z",
+          }),
+        }),
+        shell({
+          id: oldSummary,
+          status: "idle",
+          t3Goal: legacy,
+          updatedAt: DateTime.makeUnsafe("2026-09-04T12:30:00.000Z"),
+        }),
+        shell({
+          id: SECOND_THREAD_ID,
+          goalIteration: {
+            parentThreadId: THREAD_ID,
+            goalId: legacy.id,
+            iteration: 3,
+          },
+        }),
+      ],
+    });
+    assert.deepStrictEqual(ids, [THREAD_ID, newGoal]);
+  });
+
   it("publishes active work and only terminal runs completed after startup", () => {
     const startedAt = DateTime.toEpochMillis(DateTime.makeUnsafe(NOW));
     const oldCompleted = ThreadId.make("old-completed");
@@ -285,6 +344,83 @@ const makeTestRelay = Effect.fnUntraced(function* (
 });
 
 describe("AgentAwarenessRelay", () => {
+  it.effect(
+    "publishes owner goal work, input and completion once through the production relay",
+    () =>
+      Effect.gen(function* () {
+        const { relay, currentShell, publications } = yield* makeTestRelay();
+        yield* Ref.set(currentShell, shell({ status: "idle", t3Goal: t3Goal() }));
+        yield* relay.publishThread(THREAD_ID);
+        yield* Ref.set(
+          currentShell,
+          shell({ status: "idle", t3Goal: t3Goal({ needsInput: true }) }),
+        );
+        yield* relay.publishThread(THREAD_ID);
+        yield* Ref.set(
+          currentShell,
+          shell({ status: "idle", t3Goal: t3Goal({ status: "blocked" }) }),
+        );
+        yield* relay.publishThread(THREAD_ID);
+        yield* Ref.set(
+          currentShell,
+          shell({ status: "idle", t3Goal: t3Goal({ status: "complete" }) }),
+        );
+        yield* relay.publishThread(THREAD_ID);
+        yield* relay.publishThread(THREAD_ID);
+        assert.deepStrictEqual(
+          publications.map((p) => p.state?.headline),
+          ["Goal is working", "Goal needs input", "Goal blocked", "Goal complete"],
+        );
+        assert.isTrue(publications.every((p) => p.state?.threadId === THREAD_ID));
+        assert.equal(
+          publications.at(-1)?.state?.deepLink,
+          `/threads/relay-environment/${THREAD_ID}`,
+        );
+        assert.isFalse(publications.some((p) => p.state?.detail?.includes("Private goal")));
+      }),
+  );
+
+  it.effect("suppresses historical goal completion despite later lifecycle writes", () =>
+    Effect.gen(function* () {
+      const { relay, currentShell, publications } = yield* makeTestRelay();
+      yield* Ref.set(
+        currentShell,
+        shell({
+          status: "idle",
+          t3Goal: t3Goal({ status: "complete", updatedAt: "1969-12-31T23:59:00.000Z" }),
+          updatedAt: DateTime.add(yield* DateTime.now, { hours: 1 }),
+        }),
+      );
+      yield* relay.publishThread(THREAD_ID);
+      yield* TestClock.adjust("5 seconds");
+      yield* relay.drain;
+      assert.equal(publications.length, 0);
+    }),
+  );
+
+  it.effect.each([false, true])(
+    "keeps top-level goal iteration tombstones silent (archived=%s)",
+    (archived) =>
+      Effect.gen(function* () {
+        const { relay, currentShell, publications } = yield* makeTestRelay();
+        yield* Ref.set(
+          currentShell,
+          shell({
+            goalIteration: {
+              parentThreadId: SECOND_THREAD_ID,
+              goalId: CommandId.make("goal"),
+              iteration: 3,
+            },
+            ...(archived ? { archivedAt: yield* DateTime.now } : {}),
+          }),
+        );
+        yield* relay.publishThread(THREAD_ID);
+        yield* TestClock.adjust("5 seconds");
+        yield* relay.drain;
+        assert.equal(publications.length, 0);
+      }),
+  );
+
   it("ignores transcript and tool updates but retains activity and metadata changes", () => {
     for (const type of [
       "message.updated",

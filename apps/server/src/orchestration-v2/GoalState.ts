@@ -674,6 +674,7 @@ export function goalSummary(
     tokensUsed: goal.tokensUsed,
     needsInput: goal.current?.waitingOnRequest != null,
     currentChildThreadId: goal.current?.childThreadId ?? null,
+    updatedAt: goal.updatedAt,
     summaryNote:
       goal.completedSummary == null
         ? null

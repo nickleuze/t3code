@@ -559,6 +559,8 @@ export const OrchestrationV2ThreadGoalSummary = Schema.Struct({
   tokensUsed: NonNegativeInt,
   needsInput: Schema.Boolean,
   currentChildThreadId: Schema.NullOr(ThreadId),
+  /** Goal transition time, independent of thread visits and other lifecycle writes. */
+  updatedAt: Schema.optional(IsoDateTime),
   /** Short form of the completion or blocked summary. */
   summaryNote: Schema.optional(Schema.NullOr(Schema.String)),
 });

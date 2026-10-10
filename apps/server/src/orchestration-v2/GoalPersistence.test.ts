@@ -3,6 +3,7 @@ import {
   CommandId,
   EventId,
   OrchestrationV2DomainEventJson,
+  OrchestrationV2ThreadGoalSummary,
   type OrchestrationV2AppThread,
   type OrchestrationV2DomainEvent,
   ProjectId,
@@ -75,6 +76,16 @@ const created: OrchestrationV2DomainEvent = {
 };
 const encodeEvent = Schema.encodeSync(OrchestrationV2DomainEventJson);
 const decodeEvent = Schema.decodeSync(OrchestrationV2DomainEventJson);
+
+it("accepts legacy shell goal summaries and round-trips the new transition timestamp", () => {
+  const summary = goalSummary(t3Goal)!;
+  const { updatedAt: _updatedAt, ...legacy } = summary;
+  const decode = Schema.decodeUnknownSync(OrchestrationV2ThreadGoalSummary);
+  const encode = Schema.encodeSync(OrchestrationV2ThreadGoalSummary);
+  assert.deepEqual(decode(legacy), legacy);
+  assert.deepEqual(decode(encode(summary)), summary);
+  assert.equal(summary.updatedAt, t3Goal.updatedAt);
+});
 
 it("retains old fork goal fields when decoding stored events and accepts pre-goal events", () => {
   const replayed = decodeEvent(encodeEvent(created));

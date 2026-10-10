@@ -1,4 +1,5 @@
 import { presentThreadShell } from "@t3tools/client-runtime/state/models";
+import { t3GoalOwnsActivity } from "@t3tools/shared/agentAwareness";
 import { useAtomValue } from "@effect/atom-react";
 import { useNavigate, useParams } from "@tanstack/react-router";
 import type { EnvironmentId, OrchestrationV2ThreadShell, ThreadId } from "@t3tools/contracts";
@@ -92,6 +93,7 @@ interface NotificationState {
   readonly raw: OrchestrationV2ThreadShell;
   readonly attention: string | null;
   readonly completion: number | null;
+  readonly goalCompleted: string | null;
 }
 
 function EnvironmentNotifications({
@@ -124,6 +126,7 @@ function EnvironmentNotifications({
     const next = new Map<ThreadId, NotificationState>();
     for (const rawThread of threads) {
       if (rawThread.lineage.relationshipToParent === "subagent") continue;
+      if (rawThread.goalIteration != null) continue;
       const prior = previous.current.get(rawThread.id);
       // The same object cannot produce a new notification.
       if (prior?.raw === rawThread) {
@@ -131,39 +134,74 @@ function EnvironmentNotifications({
         continue;
       }
       const thread = presentThreadShell(environmentId, rawThread);
+      const goal = thread.t3Goal ?? null;
+      const goalHoldsRunCompletion = t3GoalOwnsActivity(rawThread);
       let status = resolveSidebarThreadStatus(thread);
-      if (status === "ready" && thread.latestRun?.status === "failed") status = "failed";
+      if (
+        goal !== null &&
+        goalHoldsRunCompletion &&
+        !thread.hasPendingApprovals &&
+        !thread.hasPendingUserInput
+      ) {
+        status =
+          goal.needsInput ||
+          goal.status === "blocked" ||
+          (goal.status === "paused" && goal.statusReason !== "user")
+            ? "input"
+            : goal.status === "usageLimited"
+              ? "limited"
+              : goal.status === "active"
+                ? "working"
+                : "ready";
+      } else if (status === "ready" && thread.latestRun?.status === "failed") status = "failed";
       const attention =
         status === "input" || status === "approval" || status === "failed" || status === "limited"
-          ? `${thread.latestRun?.runId ?? ""}:${status}`
+          ? `${thread.latestRun?.runId ?? ""}:${status}:${goal?.id ?? ""}:${goal?.status ?? ""}:${goal?.statusReason ?? ""}:${goal?.needsInput ?? false}`
           : null;
       const completedAt = Date.parse(thread.latestRun?.completedAt ?? "");
       // Commands left running (a dev server) read as ready; subagents and monitors wait.
       const completion =
-        status === "ready" &&
+        (goalHoldsRunCompletion || status === "ready") &&
         thread.latestRun?.status === "completed" &&
         Number.isFinite(completedAt)
           ? completedAt
           : (prior?.completion ?? null);
-      next.set(thread.id, { raw: rawThread, attention, completion });
+      const goalCompleted = goal?.status === "complete" ? goal.id : null;
+      next.set(thread.id, { raw: rawThread, attention, completion, goalCompleted });
       if (!prior || thread.archivedAt !== null) continue;
-      const kind =
-        attention && attention !== prior.attention
+      const finishedGoal = goalCompleted !== null && goalCompleted !== prior.goalCompleted;
+      const kind = finishedGoal
+        ? "completion"
+        : attention && attention !== prior.attention
           ? "input"
-          : completion !== null && (prior.completion === null || completion > prior.completion)
+          : !goalHoldsRunCompletion &&
+              completion !== null &&
+              (prior.completion === null || completion > prior.completion)
             ? "completion"
             : null;
       if (!kind) continue;
+      const goalAttentionTitle =
+        goal === null || status !== "input" || thread.hasPendingUserInput
+          ? null
+          : goal.needsInput
+            ? "Goal needs input"
+            : goal.status === "blocked"
+              ? "Goal blocked"
+              : "Goal paused";
       const title =
         kind === "completion"
-          ? "Thread completed"
-          : status === "approval"
-            ? "Approval needed"
-            : status === "limited"
-              ? "Usage limit reached"
-              : status === "failed"
-                ? "Thread failed"
-                : "Input needed";
+          ? finishedGoal
+            ? "Goal complete"
+            : "Thread completed"
+          : goalAttentionTitle !== null
+            ? goalAttentionTitle
+            : status === "approval"
+              ? "Approval needed"
+              : status === "limited"
+                ? "Usage limit reached"
+                : status === "failed"
+                  ? "Thread failed"
+                  : "Input needed";
       if (hasNotificationSound(mode)) {
         void playNotificationSound(kind, () =>
           hasNotificationSound(getClientSettings().notificationMode),

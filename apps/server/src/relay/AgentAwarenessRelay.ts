@@ -11,7 +11,7 @@ import {
   type RelayAgentActivityPublishProofPayload,
   type RelayAgentActivityState,
 } from "@t3tools/contracts/relay";
-import { projectThreadAwarenessV2 } from "@t3tools/shared/agentAwareness";
+import { projectThreadAwarenessV2, t3GoalOwnsActivity } from "@t3tools/shared/agentAwareness";
 import { turnItemUpdateCanEndBackgroundWork } from "@t3tools/shared/orchestrationV2PendingBackgroundWork";
 import { makeDrainableWorker } from "@t3tools/shared/DrainableWorker";
 import { withRelayClientTracing } from "@t3tools/shared/relayTracing";
@@ -330,6 +330,11 @@ function resolveAgentAwarenessRelayPublishSnapshot(input: {
 }
 
 function terminalWorkSinceStart(thread: OrchestrationV2ThreadShell, startedAt: number): boolean {
+  if (thread.t3Goal?.status === "complete" && t3GoalOwnsActivity(thread)) {
+    // Old summaries have no transition time; only an observed live state can
+    // establish their completion. Thread.updatedAt includes unrelated visits.
+    return thread.t3Goal.updatedAt != null && Date.parse(thread.t3Goal.updatedAt) > startedAt;
+  }
   return (
     thread.latestRunCompletedAt != null &&
     DateTime.toEpochMillis(thread.latestRunCompletedAt) > startedAt
@@ -525,10 +530,11 @@ export const make = Effect.gen(function* () {
     // of one thread's activity proportional to how many threads exist.
     const threadShell = yield* threads.getThreadShell(threadId);
     if (
-      threadShell?.lineage.relationshipToParent === "subagent" &&
+      (threadShell?.lineage.relationshipToParent === "subagent" ||
+        threadShell?.goalIteration != null) &&
       !(yield* Ref.get(publishedStateByThreadRef)).has(threadId)
     ) {
-      // Subagents never project activity, so the relay holds no row to clear.
+      // Subagents and goal iterations never project activity, so there is no row to clear.
       // Their events would otherwise publish a tombstone each, and every
       // publish re-delivers the user's aggregate. Checked before the archive
       // filter so archiving one stays quiet too.
