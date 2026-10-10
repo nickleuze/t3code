@@ -17,14 +17,17 @@ import * as DesktopAppIdentity from "./DesktopAppIdentity.ts";
 import * as DesktopClerk from "./DesktopClerk.ts";
 import * as DesktopApplicationMenu from "../window/DesktopApplicationMenu.ts";
 import * as DesktopWindow from "../window/DesktopWindow.ts";
+import * as PreviewPasskeys from "../preview/Passkeys.ts";
 import * as DesktopBackendPool from "../backend/DesktopBackendPool.ts";
 import * as DesktopEnvironment from "./DesktopEnvironment.ts";
+import * as DesktopLegacyLocalStorage from "./DesktopLegacyLocalStorage.ts";
 import * as DesktopLifecycle from "./DesktopLifecycle.ts";
 import * as DesktopLinuxUrlHandler from "./DesktopLinuxUrlHandler.ts";
 import * as DesktopObservability from "./DesktopObservability.ts";
 import * as DesktopPreReadyPlatform from "./DesktopPreReadyPlatform.ts";
 import * as DesktopShutdown from "./DesktopShutdown.ts";
 import { configureShutdownLog, shutdownBreadcrumb, traceTeardown } from "./DesktopShutdownLog.ts";
+import { watchShutdown } from "./DesktopShutdownWatchdog.ts";
 import * as DesktopServerExposure from "../backend/DesktopServerExposure.ts";
 import * as DesktopAppSettings from "../settings/DesktopAppSettings.ts";
 import * as DesktopShellEnvironment from "../shell/DesktopShellEnvironment.ts";
@@ -33,6 +36,8 @@ import * as DesktopRemoteUpdates from "../updates/DesktopRemoteUpdates.ts";
 import * as DesktopUpdates from "../updates/DesktopUpdates.ts";
 import * as DesktopSnapShot from "../snapShot/DesktopSnapShot.ts";
 import * as DesktopWslBackend from "../wsl/DesktopWslBackend.ts";
+import * as DesktopRendererHistory from "../telemetry/DesktopRendererHistory.ts";
+import * as HostProcess from "@t3tools/shared/HostProcess";
 
 const DEFAULT_DESKTOP_BACKEND_PORT = 3773;
 const MAX_TCP_PORT = 65_535;
@@ -180,6 +185,10 @@ const bootstrap = Effect.gen(function* () {
   });
   yield* installDesktopIpcHandlers();
   yield* logBootstrapInfo("bootstrap ipc handlers registered");
+  // Before any window: the preload merges these items before the app reads storage.
+  yield* (yield* DesktopLegacyLocalStorage.DesktopLegacyLocalStorage).load(
+    yield* (yield* DesktopAppIdentity.DesktopAppIdentity).resolveUserDataPath,
+  );
 
   yield* snapShot.initialize;
 
@@ -271,13 +280,16 @@ const startup = Effect.gen(function* () {
   const safeStorage = yield* ElectronSafeStorage.ElectronSafeStorage;
   const updates = yield* DesktopUpdates.DesktopUpdates;
   const environment = yield* DesktopEnvironment.DesktopEnvironment;
+  const previewPasskeys = yield* PreviewPasskeys.PreviewPasskeys;
 
   yield* shellEnvironment.installIntoProcess;
   const hasCommandLinePasswordStore =
     preReadyElectronOptions.linuxPasswordStoreCommandLine !== null;
   const linuxElectronOptions =
     environment.platform === "linux" && !hasCommandLinePasswordStore
-      ? DesktopPreReadyPlatform.resolveEarlyLinuxElectronOptionsFromProcess()
+      ? DesktopPreReadyPlatform.resolveEarlyLinuxElectronOptionsFromProcess(
+          yield* HostProcess.HomeDirectory,
+        )
       : preReadyElectronOptions.linux;
   if (linuxElectronOptions !== null && !hasCommandLinePasswordStore) {
     if (
@@ -325,6 +337,7 @@ const startup = Effect.gen(function* () {
     });
   }
   yield* appIdentity.configure;
+  yield* previewPasskeys.configure;
   yield* applicationMenu.configure;
   yield* traceTeardown("desktop updates", updates.configure);
   yield* traceTeardown("remote updates", DesktopRemoteUpdates.listen);
@@ -342,6 +355,7 @@ const scopedProgram = Effect.scoped(
     yield* Effect.annotateCurrentSpan({ scope: "desktop", runId });
 
     const shutdown = yield* DesktopShutdown.DesktopShutdown;
+    const rendererHistory = yield* DesktopRendererHistory.DesktopRendererHistory;
 
     yield* Effect.addFinalizer(() =>
       // Stop every backend in the pool, not just the primary. The
@@ -351,6 +365,7 @@ const scopedProgram = Effect.scoped(
       // receiving SIGTERM + grace.
       Effect.sync(() => shutdownBreadcrumb("stopping backends")).pipe(
         Effect.andThen(stopAllPoolInstances()),
+        Effect.ensuring(rendererHistory.shutdown),
         Effect.ensuring(
           Effect.sync(() => shutdownBreadcrumb("backends stopped; shutdown complete")).pipe(
             Effect.andThen(shutdown.markComplete),
@@ -362,32 +377,8 @@ const scopedProgram = Effect.scoped(
     yield* startup;
     yield* shutdown.awaitRequest;
     shutdownBreadcrumb("shutdown requested; releasing app resources");
-    yield* shutdownWatchdog.pipe(Effect.forkDetach);
+    yield* watchShutdown(stopAllPoolInstances).pipe(Effect.forkDetach);
   }),
 );
-
-/**
- * A quit must not depend on every resource releasing cleanly: on a headless
- * host one teardown stalled indefinitely, so updates never completed. If the
- * normal shutdown has not finished in time, stop the backends directly and
- * let the quit continue; exit outright if even that does not end the app.
- */
-const SHUTDOWN_STALL_TIMEOUT = Duration.seconds(20);
-const QUIT_EXIT_TIMEOUT = Duration.seconds(10);
-
-const shutdownWatchdog = Effect.gen(function* () {
-  const shutdown = yield* DesktopShutdown.DesktopShutdown;
-  const electronApp = yield* ElectronApp.ElectronApp;
-  yield* Effect.sleep(SHUTDOWN_STALL_TIMEOUT);
-  if (!(yield* shutdown.isComplete)) {
-    shutdownBreadcrumb("shutdown stalled; stopping backends directly");
-    yield* stopAllPoolInstances();
-    shutdownBreadcrumb("backends stopped by the watchdog");
-    yield* shutdown.markComplete;
-  }
-  yield* Effect.sleep(QUIT_EXIT_TIMEOUT);
-  shutdownBreadcrumb("app did not exit after shutdown; exiting");
-  yield* electronApp.exit(0);
-}).pipe(Effect.withSpan("desktop.app.shutdownWatchdog"));
 
 export const program = scopedProgram.pipe(Effect.withSpan("desktop.app"));

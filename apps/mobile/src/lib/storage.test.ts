@@ -232,24 +232,32 @@ describe("mobile connection storage", () => {
     expect(fallback.updatedAt).toEqual(expect.any(Number));
   });
 
-  it("persists thread list shelf expansion preferences", async () => {
+  it("persists thread list shelf preferences", async () => {
     await expect(
       savePreferencesPatch({
         threadListSettledShelfExpanded: false,
         threadListSnoozedShelfExpanded: true,
+        threadListWorkingShelfExpanded: true,
+        workingShelfEnabled: true,
       }),
     ).resolves.toEqual({
       threadListSettledShelfExpanded: false,
       threadListSnoozedShelfExpanded: true,
+      threadListWorkingShelfExpanded: true,
+      workingShelfEnabled: true,
     });
 
     await expect(loadPreferences()).resolves.toEqual({
       threadListSettledShelfExpanded: false,
       threadListSnoozedShelfExpanded: true,
+      threadListWorkingShelfExpanded: true,
+      workingShelfEnabled: true,
     });
     expect(JSON.parse(mocks.getPreferencesJson() ?? "")).toEqual({
       threadListSettledShelfExpanded: false,
       threadListSnoozedShelfExpanded: true,
+      threadListWorkingShelfExpanded: true,
+      workingShelfEnabled: true,
     });
   });
 
@@ -320,4 +328,22 @@ describe("mobile connection storage", () => {
     await expect(loadPreferences()).resolves.toEqual({ baseFontSize: 21 });
     expect(JSON.parse(mocks.getPreferencesJson() ?? "")).toEqual({ baseFontSize: 21 });
   });
+});
+
+it.each(["manual", "last_activity", "updated_at", "created_at"] as const)(
+  "retains %s thread order after saving and reloading preferences",
+  async (sidebarFlatThreadSortOrder) => {
+    await savePreferencesPatch({ baseFontSize: 18, sidebarFlatThreadSortOrder });
+    await expect(loadPreferences()).resolves.toEqual({
+      baseFontSize: 18,
+      sidebarFlatThreadSortOrder,
+    });
+  },
+);
+it("drops an invalid saved thread order while retaining unrelated preferences", async () => {
+  mocks.setPreferencesJson(
+    JSON.stringify({ baseFontSize: 18, sidebarFlatThreadSortOrder: "invalid" }),
+    10,
+  );
+  await expect(loadPreferences()).resolves.toEqual({ baseFontSize: 18 });
 });

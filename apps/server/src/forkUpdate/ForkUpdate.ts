@@ -13,17 +13,15 @@
 import {
   CommandId,
   ForkUpdateError,
+  ForkUpdateInstallInput,
   type ForkUpdateInstallResult,
   ForkUpdateRelease,
   type ForkUpdateStatus,
   type ForkUpdateStatusInput,
   ThreadId,
 } from "@t3tools/contracts";
-import {
-  HostProcessEnvironment,
-  HostProcessExecutablePath,
-  HostProcessPlatform,
-} from "@t3tools/shared/hostProcess";
+import * as HostProcess from "@t3tools/shared/HostProcess";
+import * as Crypto from "effect/Crypto";
 import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
 import * as Duration from "effect/Duration";
@@ -34,7 +32,8 @@ import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
-import { HttpClient, HttpClientRequest, HttpClientResponse } from "effect/unstable/http";
+import * as Semaphore from "effect/Semaphore";
+import { HttpClient, HttpClientRequest, HttpClientResponse } from "effect/http";
 
 import * as ServerConfig from "../config.ts";
 import * as Orchestrator from "../orchestration-v2/Orchestrator.ts";
@@ -75,31 +74,42 @@ export function bundleShortVersion(infoPlist: string): string | null {
 const PauseMarker = Schema.Struct({
   version: Schema.String,
   pausedAt: Schema.String,
-  goals: Schema.Array(Schema.Struct({ threadId: ThreadId, goalId: CommandId })),
+  goals: Schema.Array(
+    Schema.Struct({
+      threadId: ThreadId,
+      goalId: CommandId,
+      pauseCommandId: Schema.optionalKey(CommandId),
+    }),
+  ),
 });
 type PauseMarker = typeof PauseMarker.Type;
 const PauseMarkerJson = Schema.fromJsonString(PauseMarker);
+const decodePauseMarker = Schema.decodeEffect(PauseMarkerJson);
 const encodePauseMarker = Schema.encodeEffect(PauseMarkerJson);
+const decodeInstallInput = Schema.decodeEffect(ForkUpdateInstallInput);
 
 export class ForkUpdate extends Context.Service<
   ForkUpdate,
   {
     readonly status: (input: ForkUpdateStatusInput) => Effect.Effect<ForkUpdateStatus>;
-    readonly install: Effect.Effect<ForkUpdateInstallResult, ForkUpdateError>;
+    readonly install: (
+      input: ForkUpdateInstallInput,
+    ) => Effect.Effect<ForkUpdateInstallResult, ForkUpdateError>;
   }
 >()("t3/forkUpdate/ForkUpdate") {}
 
 const make = Effect.gen(function* () {
   const config = yield* ServerConfig.ServerConfig;
+  const crypto = yield* Crypto.Crypto;
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
   const httpClient = yield* HttpClient.HttpClient;
   const processRunner = yield* ProcessRunner.ProcessRunner;
   const orchestrator = yield* Orchestrator.OrchestratorV2;
   const projections = yield* ProjectionStore.ProjectionStoreV2;
-  const platform = yield* HostProcessPlatform;
-  const executablePath = yield* HostProcessExecutablePath;
-  const environment = yield* HostProcessEnvironment;
+  const platform = yield* HostProcess.Platform;
+  const executablePath = yield* HostProcess.ExecutablePath;
+  const environment = yield* HostProcess.Environment;
   const repository = environment.T3CODE_FORK_UPDATE_REPOSITORY?.trim() || DEFAULT_REPOSITORY;
   const runtimeDir = path.join(config.baseDir, "runtime");
   const markerPath = path.join(runtimeDir, PAUSE_MARKER_FILE);
@@ -133,7 +143,7 @@ const make = Effect.gen(function* () {
     error: null,
   });
   const lastCheckMs = yield* Ref.make(0);
-  const startupHandled = yield* Ref.make(false);
+  const permit = yield* Semaphore.make(1);
 
   const releaseUrl = (version: string, asset: string) =>
     `https://github.com/${repository}/releases/download/fork-v${version}/${asset}`;
@@ -170,73 +180,168 @@ const make = Effect.gen(function* () {
     );
   });
 
-  const readMarker = fs
-    .readFileString(markerPath)
-    .pipe(Effect.flatMap(Schema.decodeUnknownEffect(PauseMarkerJson)), Effect.option);
+  const readMarker = fs.readFileString(markerPath).pipe(
+    Effect.map(Option.some),
+    Effect.catchTags({
+      PlatformError: (error) =>
+        error.reason._tag === "NotFound"
+          ? Effect.succeed(Option.none<string>())
+          : Effect.fail(new ForkUpdateError({ reason: "Could not read goal recovery state." })),
+    }),
+    Effect.flatMap((value) =>
+      Option.isNone(value)
+        ? Effect.succeed(Option.none<PauseMarker>())
+        : decodePauseMarker(value.value).pipe(
+            Effect.map(Option.some),
+            Effect.mapError(
+              () => new ForkUpdateError({ reason: "Goal recovery state is invalid." }),
+            ),
+          ),
+    ),
+  );
 
-  /** Resumes the goals this service paused, unless the user changed them since. */
+  /** Retry failed recovery; an explicit user control invalidates the pause identity. */
   const resumePausedGoals = (marker: PauseMarker) =>
     Effect.gen(function* () {
-      for (const { threadId, goalId } of marker.goals) {
-        const thread = yield* projections.getThread(threadId).pipe(Effect.option);
-        const goal = Option.isSome(thread) ? thread.value.goal : null;
-        if (goal?.id !== goalId || goal.status !== "paused" || goal.statusReason !== "user") {
+      let failed = false;
+      for (const { threadId, goalId, pauseCommandId } of marker.goals) {
+        const thread = yield* projections.getThread(threadId).pipe(Effect.result);
+        if (thread._tag === "Failure") {
+          failed = true;
           continue;
         }
-        yield* orchestrator
+        const goal = thread.success.goal;
+        if (
+          thread.success.deletedAt !== null ||
+          thread.success.archivedAt !== null ||
+          goal?.id !== goalId ||
+          goal.status !== "paused" ||
+          goal.statusReason !== "user" ||
+          (pauseCommandId !== undefined && goal.lastControlCommandId !== pauseCommandId) ||
+          (pauseCommandId === undefined && goal.lastControlCommandId !== undefined)
+        )
+          continue;
+        const resumed = yield* orchestrator
           .dispatch({
             type: "thread.goal.control",
-            commandId: CommandId.make(`fork-update:resume:${threadId}:${marker.pausedAt}`),
+            commandId: CommandId.make(
+              `fork-update:resume:${threadId}:${yield* crypto.randomUUIDv4.pipe(Effect.orDie)}`,
+            ),
             threadId,
             goalId,
             action: "resume",
+            ...(pauseCommandId === undefined ? {} : { expectedControlCommandId: pauseCommandId }),
           })
-          .pipe(
-            Effect.catchCause((cause) =>
-              Effect.logWarning("fork-update.resume-goal-failed", { threadId, cause }),
-            ),
-          );
+          .pipe(Effect.result);
+        if (resumed._tag === "Failure") failed = true;
       }
-      yield* fs.remove(markerPath).pipe(Effect.ignore);
+      if (!failed) yield* fs.remove(markerPath).pipe(Effect.ignore);
     });
 
-  const pauseLiveGoals = Effect.gen(function* () {
-    const now = DateTime.formatIso(yield* DateTime.now);
-    const paused: Array<{ threadId: ThreadId; goalId: CommandId }> = [];
-    for (const thread of yield* projections.getGoalThreads().pipe(Effect.orElseSucceed(() => []))) {
-      const goal = thread.goal;
-      if (goal == null || (goal.status !== "active" && goal.status !== "usageLimited")) continue;
-      const result = yield* orchestrator
-        .dispatch({
-          type: "thread.goal.control",
-          commandId: CommandId.make(`fork-update:pause:${thread.id}:${now}`),
-          threadId: thread.id,
-          goalId: goal.id,
-          action: "pause",
-        })
-        .pipe(Effect.result);
-      if (result._tag === "Success") paused.push({ threadId: thread.id, goalId: goal.id });
-    }
-    return { pausedAt: now, goals: paused };
-  });
+  const pauseLiveGoals = (version: string) =>
+    Effect.gen(function* () {
+      const pausedAt = DateTime.formatIso(yield* DateTime.now);
+      const installId = yield* crypto.randomUUIDv4.pipe(Effect.orDie);
+      const threads = yield* projections
+        .getGoalThreads()
+        .pipe(
+          Effect.mapError(() => new ForkUpdateError({ reason: "Could not inspect active goals." })),
+        );
+      const marker: PauseMarker = {
+        version,
+        pausedAt,
+        goals: threads.flatMap((thread) => {
+          const goal = thread.goal;
+          return goal == null || (goal.status !== "active" && goal.status !== "usageLimited")
+            ? []
+            : [
+                {
+                  threadId: thread.id,
+                  goalId: goal.id,
+                  pauseCommandId: CommandId.make(`fork-update:pause:${thread.id}:${installId}`),
+                },
+              ];
+        }),
+      };
+      // Record intent before the first pause, so interrupted preparation is recoverable.
+      yield* encodePauseMarker(marker).pipe(
+        Effect.flatMap((text) => fs.writeFileString(markerPath, text)),
+        Effect.mapError(
+          () => new ForkUpdateError({ reason: "Could not save goal recovery state." }),
+        ),
+      );
+      for (const { threadId, goalId, pauseCommandId } of marker.goals) {
+        const paused = yield* orchestrator
+          .dispatch({
+            type: "thread.goal.control",
+            commandId: pauseCommandId!,
+            threadId,
+            goalId,
+            action: "pause",
+          })
+          .pipe(Effect.result);
+        if (paused._tag === "Failure") {
+          yield* resumePausedGoals(marker);
+          return yield* new ForkUpdateError({
+            reason: "Could not pause active goals for the update.",
+          });
+        }
+      }
+      return marker;
+    });
 
-  const install = Effect.gen(function* () {
+  const install = Effect.fn("ForkUpdate.install")(function* (input: ForkUpdateInstallInput) {
     const current = yield* Ref.get(statusRef);
+    if (current.installingVersion !== null)
+      return yield* new ForkUpdateError({
+        reason: `Fork ${current.installingVersion} is already installing.`,
+      });
     if (!current.supported) {
       return yield* new ForkUpdateError({
         reason: "This machine is not running an installed fork build.",
       });
     }
-    if (current.installingVersion !== null) {
+    const target = yield* decodeInstallInput(input).pipe(
+      Effect.mapError(
+        () => new ForkUpdateError({ reason: "The requested fork release is invalid." }),
+      ),
+    );
+    if (installedVersion === null || !isNewerForkVersion(target.version, installedVersion)) {
       return yield* new ForkUpdateError({
-        reason: `Fork ${current.installingVersion} is already installing.`,
+        reason: "The requested release is not a newer fork build.",
       });
     }
-    if (current.latest === null || !current.updateAvailable) {
-      return yield* new ForkUpdateError({ reason: "No newer fork release is available." });
+    // Every destination verifies the same pinned release, independent of its latest-feed cache.
+    const release = yield* httpClient
+      .execute(HttpClientRequest.get(releaseUrl(target.version, "fork-release.json")))
+      .pipe(
+        Effect.flatMap(HttpClientResponse.filterStatusOk),
+        Effect.flatMap((response) => response.json),
+        Effect.flatMap(Schema.decodeUnknownEffect(ForkUpdateRelease)),
+        Effect.timeout(Duration.seconds(30)),
+        Effect.mapError(
+          () => new ForkUpdateError({ reason: "Could not verify the requested fork release." }),
+        ),
+      );
+    if (release.version !== target.version || release.commit !== target.commit) {
+      return yield* new ForkUpdateError({
+        reason: "The requested fork release has changed. Refresh before updating.",
+      });
     }
-    const version = current.latest.version;
-    yield* fs.makeDirectory(runtimeDir, { recursive: true }).pipe(Effect.ignore);
+    const previousMarker = yield* readMarker;
+    if (Option.isSome(previousMarker)) {
+      yield* resumePausedGoals(previousMarker.value);
+      if (Option.isSome(yield* readMarker))
+        return yield* new ForkUpdateError({ reason: "Previous goal recovery is still pending." });
+    }
+    const { version, commit } = target;
+    yield* fs
+      .makeDirectory(runtimeDir, { recursive: true })
+      .pipe(
+        Effect.mapError(
+          () => new ForkUpdateError({ reason: "Could not prepare the installer directory." }),
+        ),
+      );
     const scriptPath = path.join(runtimeDir, "fork-update.sh");
     const script = yield* httpClient
       .execute(HttpClientRequest.get(releaseUrl(version, "fork-update.sh")))
@@ -256,47 +361,49 @@ const make = Effect.gen(function* () {
 
     // Paused goals finish their running iteration but start no new one, so
     // the installer's wait for idle turns can end.
-    const pause = yield* pauseLiveGoals;
-    const marker: PauseMarker = { version, ...pause };
-    yield* encodePauseMarker(marker).pipe(
-      Effect.flatMap((text) => fs.writeFileString(markerPath, text)),
-      Effect.ignore,
-    );
+    const marker = yield* pauseLiveGoals(version);
 
     const output = yield* processRunner
       .run({
         command: "/bin/bash",
-        args: [scriptPath, "--version", version, "--wait-mins", String(INSTALL_WAIT_MINS)],
+        env: { T3_FORK_REPO: repository },
+        args: [
+          scriptPath,
+          "--version",
+          version,
+          "--commit",
+          commit,
+          "--wait-mins",
+          String(INSTALL_WAIT_MINS),
+        ],
         timeout: "15 minutes",
         maxOutputBytes: 64 * 1024,
         outputMode: "truncate",
         timeoutBehavior: "timedOutResult",
       })
       .pipe(Effect.option);
-    const lastLine = Option.match(output, {
-      onNone: () => "",
-      onSome: ({ stdout, stderr }) =>
-        `${stdout}\n${stderr}`
-          .split("\n")
-          .map((line) => line.trim())
-          .findLast((line) => line.length > 0 && !line.startsWith("#")) ?? "",
-    });
     if (Option.isNone(output) || output.value.timedOut || Number(output.value.code) !== 0) {
       yield* resumePausedGoals(marker);
       return yield* new ForkUpdateError({
-        reason: lastLine || `The installer for ${version} did not start.`,
+        reason: `The installer for ${version} did not start.`,
       });
     }
     yield* Ref.update(statusRef, (status) => ({ ...status, installingVersion: version }));
-    return { version, pausedGoals: pause.goals.length, message: lastLine };
+    return {
+      version,
+      commit,
+      pausedGoals: marker.goals.length,
+      message: "The update will install after running turns finish.",
+    };
   });
 
   const sweep = Effect.gen(function* () {
+    if (!supported) return;
     const nowMs = DateTime.toEpochMillis(yield* DateTime.now);
     const marker = yield* readMarker;
     // A marker left from before this process started means the app restarted,
     // normally onto the new version: the goals it paused can run again.
-    if (!(yield* Ref.getAndSet(startupHandled, true)) && Option.isSome(marker)) {
+    if ((yield* Ref.get(statusRef)).installingVersion === null && Option.isSome(marker)) {
       return yield* resumePausedGoals(marker.value);
     }
     if (
@@ -313,7 +420,7 @@ const make = Effect.gen(function* () {
   });
 
   const scheduler = yield* Scheduler.Scheduler;
-  yield* scheduler.register("fork-update", sweep);
+  yield* scheduler.register("fork-update", sweep.pipe(permit.withPermits(1)));
 
   return ForkUpdate.of({
     status: (input) =>
@@ -321,8 +428,8 @@ const make = Effect.gen(function* () {
         if (input.refresh === true && supported) yield* check;
         return yield* Ref.get(statusRef);
       }),
-    install: install.pipe(Effect.withSpan("ForkUpdate.install")),
+    install: (input) => install(input).pipe(permit.withPermits(1)),
   });
 });
 
-export const layer = Layer.effect(ForkUpdate, make).pipe(Layer.provide(Scheduler.layer));
+export const layer = Layer.effect(ForkUpdate, make);

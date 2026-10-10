@@ -392,6 +392,7 @@ describe("goal state", () => {
       status: "active",
       needsInput: true,
       currentChildThreadId: CHILD,
+      updatedAt: goal.updatedAt,
     });
   });
   it("resumes a blocked goal from a reply and tells the next iteration why it stopped", () => {

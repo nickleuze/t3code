@@ -3,6 +3,8 @@ import { describe, expect, it } from "vite-plus/test";
 
 import { ExecutionEnvironmentDescriptor } from "./environment.ts";
 import {
+  ForkUpdateInstallInput,
+  ForkUpdateRelease,
   resolveEnvironmentMachineKind,
   ServerConfig,
   ServerObservability,
@@ -11,6 +13,9 @@ import {
   ServerUpsertKeybindingResult,
 } from "./server.ts";
 import { ServerSettings } from "./settings.ts";
+
+const decodeForkUpdateInstallInput = Schema.decodeUnknownSync(ForkUpdateInstallInput);
+const decodeForkUpdateRelease = Schema.decodeUnknownSync(ForkUpdateRelease);
 
 const decodeServerProvider = Schema.decodeUnknownSync(ServerProvider);
 const decodeServerProviders = Schema.decodeUnknownSync(ServerProviders);
@@ -31,6 +36,21 @@ const baseProviderSnapshot = {
 };
 
 describe("ServerProvider", () => {
+  it.each([undefined, true, false])("decodes workspace command discovery pending=%s", (pending) => {
+    const workspace = {
+      cwd: "/workspace/project",
+      checkedAt: baseProviderSnapshot.checkedAt,
+      slashCommands: [{ name: "compact" }],
+      ...(pending === undefined ? {} : { slashCommandsPending: pending }),
+      skills: [{ name: "project", path: "/workspace/project/SKILL.md", enabled: true }],
+    };
+    const parsed = decodeServerProvider({
+      ...baseProviderSnapshot,
+      workspaceSnapshots: [workspace],
+    });
+    expect(parsed.workspaceSnapshots).toEqual([workspace]);
+  });
+
   it("defaults capability arrays when decoding provider snapshots", () => {
     const parsed = decodeServerProvider({
       instanceId: "codex",
@@ -249,5 +269,21 @@ describe("resolveEnvironmentMachineKind", () => {
     expect(
       resolveEnvironmentMachineKind({ environment: parsed, settings: decodeSettings({}) }),
     ).toBe("server");
+  });
+});
+
+describe("fork update identity", () => {
+  it("requires a pinned fork version and full commit, including on feed metadata", () => {
+    const target = { version: "0.0.44-nick.6", commit: "a".repeat(40) };
+    const decode = decodeForkUpdateInstallInput;
+    expect(decode(target)).toEqual(target);
+    for (const invalid of [
+      {},
+      { ...target, commit: "short" },
+      { ...target, version: "latest" },
+      { ...target, version: "../release" },
+    ])
+      expect(() => decode(invalid)).toThrow();
+    expect(() => decodeForkUpdateRelease({ ...target, commit: "short", builtAt: "" })).toThrow();
   });
 });

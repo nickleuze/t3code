@@ -1,5 +1,6 @@
 import { assert, it } from "@effect/vitest";
 import {
+  CommandId,
   type ModelSelection,
   NodeId,
   RunId,
@@ -21,8 +22,9 @@ import {
   delegatedTaskProgress,
   subagentResultForRun,
   makeSubagentConversationArtifacts,
-} from "./SubagentProjection.ts";
+} from "@t3tools/provider-core/server/subagentProjection";
 
+import { applyGoalCommand } from "./GoalState.ts";
 import { emptyProjection } from "./ProjectionStore.ts";
 
 const parentThreadId = ThreadId.make("thread:subagent-snoozed-parent");
@@ -114,29 +116,6 @@ it("keeps a subagent child awake when its parent thread is snoozed", () => {
   });
 });
 
-it("never copies the parent's goal onto a subagent child", () => {
-  const parentThread = {
-    ...makeParentThread(),
-    goal: { id: "command:goal" } as never,
-    goalIteration: { parentThreadId, goalId: "command:goal", iteration: 1 } as never,
-  };
-  const childThread = makeSubagentChildThread({
-    parentThread,
-    childThreadId,
-    parentNodeId: NodeId.make("node:subagent-goal-parent"),
-    activeProviderThreadId: null,
-    providerInstanceId: childProviderInstanceId,
-    modelSelection: childModelSelection,
-    title: "Goal-free child",
-    now: childCreatedAt,
-    createdBy: "agent",
-    creationSource: "provider",
-  });
-
-  assert.isNull(childThread.goal);
-  assert.isNull(childThread.goalIteration);
-});
-
 it("attributes native subagent prompts to their parent thread", () => {
   for (const role of ["user", "assistant"] as const) {
     const artifacts = makeSubagentConversationArtifacts({
@@ -189,6 +168,28 @@ function taskFixture() {
   return { projection: { ...projection, runs: [run] }, run };
 }
 
+it("reports the run that ended last, not the highest ordinal", () => {
+  const { projection, run } = taskFixture();
+  // A restart continuation (ordinal 4) ran ahead of held queued runs 2 and 3.
+  const ended = (ordinal: number, completedAt: string): OrchestrationV2Run => ({
+    ...run,
+    id: RunId.make(`run:${ordinal}`),
+    ordinal,
+    completedAt: DateTime.makeUnsafe(completedAt),
+  });
+  const progress = delegatedTaskProgress({
+    ...projection,
+    runs: [
+      { ...run, status: "cancelled" },
+      ended(4, "2026-07-24T10:00:00.000Z"),
+      ended(2, "2026-07-24T10:05:00.000Z"),
+      ended(3, "2026-07-24T10:10:00.000Z"),
+    ],
+  });
+  assert.equal(progress.state, "result_available");
+  assert.equal(progress.resultRun?.ordinal, 3);
+});
+
 it("waits for nested work and retains the report across monitor acknowledgements", () => {
   const { projection, run } = taskFixture();
   assert.equal(
@@ -238,6 +239,14 @@ it("waits for nested work and retains the report across monitor acknowledgements
     startedAt: null,
   };
   assert.equal(delegatedTaskProgress({ ...projection, runs: [run, pending] }).state, "working");
+  // Stop or a restart holds queued wakes for the user; they are not work the task owes.
+  const cancelled = { ...run, status: "cancelled" as const };
+  const held = delegatedTaskProgress({
+    ...projection,
+    runs: [cancelled, { ...pending, queueHeld: true }],
+  });
+  assert.equal(held.state, "result_available");
+  assert.equal(held.resultRun?.id, cancelled.id);
   const report = { ...pending, status: "completed" as const, startedAt: parentCreatedAt };
   const monitor = { ...report, id: RunId.make("monitor"), ordinal: 3 };
   const artifacts = makeSubagentConversationArtifacts({
@@ -306,4 +315,60 @@ it("exposes the provider failure rather than a progress message from the failed 
   assert.equal(result.text, failure.message);
   assert.equal(result.turnItemId, artifacts.turnItem.id);
   assert.isNull(result.messageId);
+});
+
+it("clears the owner's loop, iteration marker and proposal on ordinary subagents", () => {
+  const parent = makeParentThread();
+  const goalId = CommandId.make("goal:owner");
+  const result = applyGoalCommand(
+    parent,
+    {
+      type: "set",
+      commandId: goalId,
+      objective: "Finish the importer",
+      checkCommand: null,
+      burnGuard: null,
+      noProgressLimit: undefined,
+      modelSelection: parentModelSelection,
+      runtimeMode: "full-access",
+      doneWhen: null,
+      background: null,
+      permissions: null,
+      iterationTimeoutMins: undefined,
+    },
+    DateTime.formatIso(parentCreatedAt),
+  );
+  assert.isTrue(result.ok);
+  if (!result.ok) throw new Error("Invalid fixture");
+  const child = makeSubagentChildThread({
+    parentThread: {
+      ...parent,
+      goal: result.goal,
+      goalIteration: { parentThreadId, goalId, iteration: 1 },
+      goalProposal: {
+        id: goalId,
+        objective: "Follow-up",
+        doneWhen: "Done",
+        background: null,
+        checkCommand: null,
+        permissions: null,
+        iterationTimeoutMins: null,
+        reason: null,
+        proposedAt: DateTime.formatIso(parentCreatedAt),
+      },
+    },
+    childThreadId,
+    parentNodeId: NodeId.make("parent:task"),
+    activeProviderThreadId: null,
+    providerInstanceId: childProviderInstanceId,
+    modelSelection: childModelSelection,
+    title: "Review",
+    now: childCreatedAt,
+    createdBy: "agent",
+    creationSource: "server",
+  });
+  assert.isNull(child.goal);
+  assert.isNull(child.goalIteration);
+  assert.isNull(child.goalProposal);
+  assert.equal(child.lineage.relationshipToParent, "subagent");
 });

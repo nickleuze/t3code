@@ -1,0 +1,5 @@
+# Last accepted official upstream commit, one full SHA on its own line.
+# Accepted 2026-10-10: first official-v2 integration (nick/sync/2026-10-10).
+# Record a new SHA only after a candidate passes the acceptance procedure in
+# docs/operations/personal-fork.md. Fetching or inspecting a commit is not acceptance.
+98beed1a226c42b85c52ff5ee9d5dbb67d776a77

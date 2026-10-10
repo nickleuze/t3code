@@ -1,7 +1,7 @@
 import { OrchestratorMcpFailure } from "@t3tools/contracts";
-import * as Crypto from "effect/Crypto";
+import * as GoalMcpService from "../../GoalMcpService.ts";
 import * as Schema from "effect/Schema";
-import { Tool, Toolkit } from "effect/unstable/ai";
+import { Tool, Toolkit } from "effect/ai";
 import * as ThreadManagementService from "../../../orchestration-v2/ThreadManagementService.ts";
 import * as McpInvocationContext from "../../McpInvocationContext.ts";
 
@@ -11,7 +11,7 @@ const shared = {
   dependencies: [
     McpInvocationContext.McpInvocationContext,
     ThreadManagementService.ThreadManagementService,
-    Crypto.Crypto,
+    GoalMcpService.GoalMcpService,
   ],
 };
 
@@ -29,7 +29,7 @@ const GoalUpdateTool = Tool.make("t3_goal_update", {
   }),
   success: Recorded,
 })
-  .annotate(Tool.Readonly, true)
+  .annotate(Tool.Readonly, false)
   .annotate(Tool.Destructive, false);
 
 const GoalCompleteTool = Tool.make("t3_goal_complete", {
@@ -42,7 +42,7 @@ const GoalCompleteTool = Tool.make("t3_goal_complete", {
   }),
   success: Recorded,
 })
-  .annotate(Tool.Readonly, true)
+  .annotate(Tool.Readonly, false)
   .annotate(Tool.Destructive, false);
 
 const text = (max: number) => Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(max));
@@ -68,7 +68,7 @@ const GoalProposeTool = Tool.make("t3_goal_propose", {
   }),
   success: Schema.Struct({ proposed: Schema.Boolean }),
 })
-  .annotate(Tool.Readonly, true)
+  .annotate(Tool.Readonly, false)
   .annotate(Tool.Destructive, false);
 
 export const GoalToolkit = Toolkit.make(GoalUpdateTool, GoalCompleteTool, GoalProposeTool);

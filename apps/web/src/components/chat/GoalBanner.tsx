@@ -4,7 +4,7 @@ import type {
   ThreadId,
 } from "@t3tools/contracts";
 import { TargetIcon } from "lucide-react";
-import { useState } from "react";
+import { useRef, useState } from "react";
 
 import { Button } from "../ui/button";
 import { stackedThreadToast, toastManager } from "../ui/toast";
@@ -14,12 +14,13 @@ import {
   goalIsRunning,
   goalNeedsAttention,
   goalStatusLabel,
-} from "./goalPresentation";
+} from "@t3tools/client-runtime/state/thread-goals";
 
 export type GoalControlAction = "pause" | "resume" | "stop" | "clear";
 
 interface GoalBannerProps {
   readonly goal: OrchestrationV2ThreadGoalSummary;
+  readonly canControl: boolean;
   readonly onControl: (action: GoalControlAction) => Promise<void>;
   readonly onOpenIteration: (childThreadId: ThreadId) => void;
 }
@@ -32,7 +33,7 @@ export function goalBannerItem(props: GoalBannerProps): ComposerBannerStackItem 
   const clearable =
     (goal.status === "complete" || goal.status === "stopped") && goal.currentChildThreadId === null;
   return {
-    id: `goal:${goal.id}`,
+    id: `t3-goal:${goal.id}`,
     variant: goal.status === "complete" ? "success" : goalNeedsAttention(goal) ? "warning" : "info",
     priority: goalNeedsAttention(goal) ? "urgent" : goalIsRunning(goal) ? "activity" : "notice",
     icon: <TargetIcon />,
@@ -45,7 +46,7 @@ export function goalBannerItem(props: GoalBannerProps): ComposerBannerStackItem 
           ? `${goal.objective} · ${formatGoalTokens(goal.tokensUsed)}`
           : goal.objective,
     actions: <GoalBannerActions key={`${goal.id}:${goal.status}`} {...props} />,
-    ...(clearable
+    ...(clearable && props.canControl
       ? {
           dismissLabel: "Clear goal",
           onDismiss: () =>
@@ -63,10 +64,11 @@ export function goalBannerItem(props: GoalBannerProps): ComposerBannerStackItem 
   };
 }
 
-function GoalBannerActions({ goal, onControl, onOpenIteration }: GoalBannerProps) {
+function GoalBannerActions({ goal, canControl, onControl, onOpenIteration }: GoalBannerProps) {
   const [pending, setPending] = useState<GoalControlAction | null>(null);
   const [error, setError] = useState<string | null>(null);
   const run = async (action: GoalControlAction) => {
+    if (!canControl || pending !== null) return;
     setPending(action);
     setError(null);
     try {
@@ -92,7 +94,7 @@ function GoalBannerActions({ goal, onControl, onOpenIteration }: GoalBannerProps
         <Button
           size="xs"
           variant="ghost"
-          disabled={pending !== null}
+          disabled={!canControl || pending !== null}
           onClick={() => void run("resume")}
         >
           {pending === "resume" ? "Resuming..." : "Resume"}
@@ -102,7 +104,7 @@ function GoalBannerActions({ goal, onControl, onOpenIteration }: GoalBannerProps
         <Button
           size="xs"
           variant="ghost"
-          disabled={pending !== null}
+          disabled={!canControl || pending !== null}
           onClick={() => void run("pause")}
         >
           {pending === "pause" ? "Pausing..." : "Pause"}
@@ -112,7 +114,7 @@ function GoalBannerActions({ goal, onControl, onOpenIteration }: GoalBannerProps
         <Button
           size="xs"
           variant="ghost"
-          disabled={pending !== null}
+          disabled={!canControl || pending !== null}
           onClick={() => void run("stop")}
         >
           {pending === "stop" ? "Stopping..." : "Stop"}
@@ -129,6 +131,8 @@ function GoalBannerActions({ goal, onControl, onOpenIteration }: GoalBannerProps
 
 interface GoalProposalBannerProps {
   readonly proposal: OrchestrationV2GoalProposal;
+  readonly canStart: boolean;
+  readonly canDismiss: boolean;
   readonly onStart: () => Promise<void>;
   readonly onEdit: () => void;
   readonly onDismiss: () => Promise<void>;
@@ -149,39 +153,47 @@ export function goalProposalBannerItem(props: GoalProposalBannerProps): Composer
       ...(proposal.reason ? [proposal.reason] : []),
     ].join(" · "),
     actions: <GoalProposalActions key={proposal.id} {...props} />,
-    dismissLabel: "Dismiss proposed goal",
-    onDismiss: () =>
-      void props.onDismiss().catch((cause: unknown) =>
-        toastManager.add(
-          stackedThreadToast({
-            type: "error",
-            title: "Could not dismiss the proposed goal",
-            description: cause instanceof Error ? cause.message : String(cause),
-          }),
-        ),
-      ),
+    ...(props.canDismiss
+      ? {
+          dismissLabel: "Dismiss proposed goal",
+          onDismiss: () =>
+            void props.onDismiss().catch((cause: unknown) =>
+              toastManager.add(
+                stackedThreadToast({
+                  type: "error",
+                  title: "Could not dismiss the proposed goal",
+                  description: cause instanceof Error ? cause.message : String(cause),
+                }),
+              ),
+            ),
+        }
+      : {}),
   };
 }
 
-function GoalProposalActions({ onStart, onEdit }: GoalProposalBannerProps) {
+function GoalProposalActions({ canStart, onStart, onEdit }: GoalProposalBannerProps) {
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const starting = useRef(false);
   const start = async () => {
+    if (!canStart || starting.current) return;
+    starting.current = true;
     setPending(true);
     setError(null);
     try {
       await onStart();
     } catch (cause) {
+      starting.current = false;
       setError(cause instanceof Error ? cause.message : "Could not start the goal.");
       setPending(false);
     }
   };
   return (
     <div className="flex flex-wrap items-center gap-2">
-      <Button size="xs" disabled={pending} onClick={() => void start()}>
+      <Button size="xs" disabled={!canStart || pending} onClick={() => void start()}>
         {pending ? "Starting..." : "Start goal"}
       </Button>
-      <Button size="xs" variant="ghost" disabled={pending} onClick={onEdit}>
+      <Button size="xs" variant="ghost" disabled={!canStart || pending} onClick={onEdit}>
         Edit
       </Button>
       {error ? (

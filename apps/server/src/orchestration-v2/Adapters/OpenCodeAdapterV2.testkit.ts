@@ -6,22 +6,19 @@ import * as Duration from "effect/Duration";
 import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
 
-import * as ServerConfig from "../../config.ts";
-import * as OpenCodeRuntime from "../../provider/opencodeRuntime.ts";
-import * as ProviderEventLoggers from "../../provider/Layers/ProviderEventLoggers.ts";
-import * as IdAllocator from "../IdAllocator.ts";
-import { ProviderAdapterDriverCreateError } from "../ProviderAdapterDriver.ts";
+import { OpenCodeAdapterV2Driver } from "@t3tools/provider-opencode/server";
+import * as OpenCodeRuntime from "@t3tools/provider-opencode/server/OpenCodeRuntime";
+import * as TestProviderHost from "@t3tools/provider-testing/TestProviderHost";
+import * as ProviderEventLoggers from "@t3tools/provider-core/server/ProviderEventLoggers";
+import * as IdAllocator from "@t3tools/provider-core/server/IdAllocator";
+import { ProviderAdapterDriverCreateError } from "@t3tools/provider-core/server/adapterDriver";
 import * as ProviderAdapterRegistry from "../ProviderAdapterRegistry.ts";
-import {
-  makeReplayServerConfig,
-  type OrchestratorV2ProviderReplayHarness,
-} from "../testkit/ProviderReplayHarness.ts";
+import { type OrchestratorV2ProviderReplayHarness } from "../testkit/ProviderReplayHarness.ts";
 import {
   OPENCODE_DEFAULT_INSTANCE_ID,
   OPENCODE_PROVIDER,
   OPENCODE_SDK_PROTOCOL,
-  OpenCodeAdapterV2Driver,
-} from "./OpenCodeAdapterV2.ts";
+} from "@t3tools/provider-opencode/testing";
 
 const OPENCODE_SDK_REPLAY_PROTOCOL = OPENCODE_SDK_PROTOCOL;
 
@@ -119,7 +116,12 @@ function materializeMessageIds(value: unknown, messageIds: ReadonlyMap<string, s
   return Object.fromEntries(
     Object.entries(record).map(([key, entry]) => [
       key,
-      typeof entry === "string" && (key === "id" || key === "messageID" || key === "parentID")
+      typeof entry === "string" &&
+      (key === "id" ||
+        key === "messageID" ||
+        key === "parentID" ||
+        key === "inboxID" ||
+        key === "before")
         ? (messageIds.get(entry) ?? entry)
         : materializeMessageIds(entry, messageIds),
     ]),
@@ -133,6 +135,13 @@ function materializeMessageIds(value: unknown, messageIds: ReadonlyMap<string, s
  */
 export class OpenCodeReplayController {
   private cursor = 0;
+  /** Set once the event stream reached a successful `runtime_exit`: the server is gone. */
+  exited = false;
+
+  /** Whether every entry has been used, so a stopped server is not coming back. */
+  get finished(): boolean {
+    return this.cursor >= this.transcript.entries.length;
+  }
   private readonly waiters = new Set<() => void>();
   private failure: unknown = null;
   private readonly transcript: ProviderReplayTranscript;
@@ -149,12 +158,16 @@ export class OpenCodeReplayController {
       const actualFrame = frameRecord(actual);
       const messageIds = new Map(this.messageIds);
       let conflictingMessageId = false;
+      // A message id the client picks (1.x prompts, 2.x steers) replaces the
+      // recorded one everywhere after it, so replies and events carry the live id.
+      const idKey = expectedFrame?.type === "session.promptAsync" ? "messageID" : "id";
       if (
-        expectedFrame?.type === "session.promptAsync" &&
+        (expectedFrame?.type === "session.promptAsync" ||
+          expectedFrame?.type === "session.prompt") &&
         actualFrame?.type === expectedFrame.type
       ) {
-        const recordedId = frameRecord(expectedFrame.input)?.messageID;
-        const actualId = frameRecord(actualFrame.input)?.messageID;
+        const recordedId = frameRecord(expectedFrame.input)?.[idKey];
+        const actualId = frameRecord(actualFrame.input)?.[idKey];
         if (
           typeof recordedId === "string" &&
           typeof actualId === "string" &&
@@ -233,7 +246,23 @@ export class OpenCodeReplayController {
     }
   }
 
-  async *events(signal?: AbortSignal): AsyncIterable<unknown> {
+  /**
+   * Like {@link untilEventsDelivered}, but also waits for recorded responses to
+   * be taken: over HTTP a request can start while an earlier one's answer is
+   * still in flight, and must not be matched against that answer.
+   */
+  async untilInboundDelivered(): Promise<void> {
+    while (true) {
+      this.throwFailure();
+      if (this.transcript.entries[this.cursor]?.type !== "emit_inbound") return;
+      await this.changed();
+    }
+  }
+
+  async *events(
+    signal?: AbortSignal,
+    beforeEmit?: (label: string | undefined) => Promise<void>,
+  ): AsyncIterable<unknown> {
     while (true) {
       if (signal?.aborted === true) return;
       this.throwFailure();
@@ -241,6 +270,8 @@ export class OpenCodeReplayController {
       if (entry?.type === "emit_inbound") {
         const frame = frameRecord(entry.frame);
         if (frame?.type === "sdk.event") {
+          // A scenario can hold an event until it has done what happened meanwhile.
+          if (beforeEmit !== undefined) await beforeEmit(entry.label);
           if (entry.afterMs !== undefined && entry.afterMs > 0) {
             await Effect.runPromise(Effect.sleep(Duration.millis(entry.afterMs)));
           }
@@ -252,7 +283,10 @@ export class OpenCodeReplayController {
       }
       if (entry?.type === "runtime_exit") {
         this.advance();
-        if (entry.status === "success") return;
+        if (entry.status === "success") {
+          this.exited = true;
+          return;
+        }
         const mismatch = new OpenCodeReplayMismatchError({
           scenario: this.transcript.scenario,
           cursor: this.cursor - 1,
@@ -346,12 +380,13 @@ function makeReplayClient(controller: OpenCodeReplayController): OpencodeClient 
       reply: (input: unknown) => request("question.reply", input),
     },
     mcp: {
+      status: () => request("mcp.status", {}),
       add: (input: unknown) => request("mcp.add", input),
     },
   } as unknown as OpencodeClient;
 }
 
-function makeOpenCodeReplayRuntimeLayer(transcript: OpenCodeSdkReplayTranscript) {
+function layerOpenCodeReplayRuntime(transcript: OpenCodeSdkReplayTranscript) {
   return Layer.effect(
     OpenCodeRuntime.OpenCodeRuntime,
     Effect.gen(function* () {
@@ -413,17 +448,13 @@ function makeOpenCodeReplayRuntimeLayer(transcript: OpenCodeSdkReplayTranscript)
               detail: "OpenCode replay does not load skills.",
             }),
           ),
-      } satisfies OpenCodeRuntime.OpenCodeRuntimeShape);
+      } satisfies OpenCodeRuntime.OpenCodeRuntime["Service"]);
     }),
   );
 }
 
-function makeOpenCodeProviderAdapterRegistryReplayLayer(transcript: OpenCodeSdkReplayTranscript) {
-  const serverConfigLayer = Layer.effect(
-    ServerConfig.ServerConfig,
-    makeReplayServerConfig(transcript.scenario).pipe(Effect.orDie),
-  ).pipe(Layer.provide(NodeServices.layer));
-  return ProviderAdapterRegistry.makeDriverLayer({
+function layerOpenCodeProviderAdapterRegistryReplay(transcript: OpenCodeSdkReplayTranscript) {
+  return ProviderAdapterRegistry.layerFromDrivers({
     drivers: [OpenCodeAdapterV2Driver],
     configMap: {
       [OPENCODE_DEFAULT_INSTANCE_ID]: {
@@ -434,8 +465,8 @@ function makeOpenCodeProviderAdapterRegistryReplayLayer(transcript: OpenCodeSdkR
   }).pipe(
     Layer.provide(
       Layer.mergeAll(
-        makeOpenCodeReplayRuntimeLayer(transcript),
-        serverConfigLayer,
+        layerOpenCodeReplayRuntime(transcript),
+        TestProviderHost.layer().pipe(Layer.provide(NodeServices.layer)),
         NodeServices.layer,
         IdAllocator.layer,
         Layer.succeed(
@@ -470,5 +501,5 @@ export const OpenCodeOrchestratorReplayHarness: OrchestratorV2ProviderReplayHarn
           }),
       ),
     ),
-  makeProviderAdapterRegistryLayer: makeOpenCodeProviderAdapterRegistryReplayLayer,
+  makeProviderAdapterRegistryLayer: layerOpenCodeProviderAdapterRegistryReplay,
 };

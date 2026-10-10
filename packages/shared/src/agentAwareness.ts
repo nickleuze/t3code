@@ -51,7 +51,24 @@ export interface ProjectThreadAwarenessV2Input {
     | "status"
     | "title"
     | "updatedAt"
+    | "t3Goal"
+    | "goalIteration"
+    | "latestRunRequestedAt"
   >;
+}
+
+export function t3GoalOwnsActivity(
+  thread: Pick<OrchestrationV2ThreadShell, "t3Goal" | "latestRunRequestedAt">,
+): boolean {
+  const goal = thread.t3Goal;
+  return (
+    goal != null &&
+    goal.status !== "stopped" &&
+    (goal.status !== "complete" ||
+      goal.updatedAt == null ||
+      thread.latestRunRequestedAt == null ||
+      DateTime.toEpochMillis(thread.latestRunRequestedAt) <= Date.parse(goal.updatedAt))
+  );
 }
 
 /** Build relay activity directly from the V2 shell projection. */
@@ -60,13 +77,34 @@ export function projectThreadAwarenessV2(
 ): AgentAwarenessState | null {
   const { environmentId, project, thread } = input;
   if (thread.lineage.relationshipToParent === "subagent") return null;
+  // Iterations report through their owner; routine iteration endings stay quiet.
+  if (thread.goalIteration != null) return null;
   const phase = resolveThreadAwarenessPhaseV2(thread);
   if (phase === null) {
     return null;
   }
+  const goal = thread.t3Goal;
+  const goalOwnsActivity = goal != null && t3GoalOwnsActivity(thread);
+  const goalHeadline =
+    !goalOwnsActivity ||
+    (thread.pendingRuntimeRequest !== null && thread.pendingRuntimeRequest.kind !== "auth_refresh")
+      ? undefined
+      : goal.needsInput
+        ? "Goal needs input"
+        : goal.status === "blocked"
+          ? "Goal blocked"
+          : goal.status === "paused"
+            ? "Goal paused"
+            : goal.status === "usageLimited"
+              ? "Usage limit reached"
+              : goal.status === "complete"
+                ? "Goal complete"
+                : "Goal is working";
   const detail =
     phase === "completed"
-      ? "Review the completed task."
+      ? goalOwnsActivity
+        ? "Review the completed goal."
+        : "Review the completed task."
       : phase === "failed"
         ? "The agent run failed."
         : undefined;
@@ -76,10 +114,13 @@ export function projectThreadAwarenessV2(
     projectTitle: project.title,
     threadTitle: thread.title,
     phase,
-    headline: headlineForPhase(phase),
+    headline: goalHeadline ?? headlineForPhase(phase),
     ...(detail === undefined ? {} : { detail }),
     modelTitle: thread.modelSelection.model,
-    updatedAt: DateTime.formatIso(thread.updatedAt),
+    updatedAt:
+      goalOwnsActivity && goal.updatedAt != null
+        ? goal.updatedAt
+        : DateTime.formatIso(thread.updatedAt),
     deepLink: buildAgentAwarenessDeepLink({ environmentId, threadId: thread.id }),
   };
 }
@@ -95,6 +136,16 @@ function resolveThreadAwarenessPhaseV2(
     thread.pendingRuntimeRequest.kind !== "auth_refresh"
   ) {
     return "waiting_for_approval";
+  }
+  const goal = thread.t3Goal;
+  if (goal != null && t3GoalOwnsActivity(thread)) {
+    if (goal.needsInput || goal.status === "blocked" || goal.status === "usageLimited") {
+      return "waiting_for_input";
+    }
+    if (goal.status === "paused") {
+      return goal.statusReason === "user" ? null : "waiting_for_input";
+    }
+    return goal.status === "complete" ? "completed" : "running";
   }
   switch (thread.activityRunStatus ?? thread.status) {
     case "preparing":

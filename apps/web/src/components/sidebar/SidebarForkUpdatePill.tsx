@@ -3,6 +3,7 @@ import {
   isAtomCommandInterrupted,
   squashAtomCommandFailure,
 } from "@t3tools/client-runtime/state/runtime";
+import { useAtomValue } from "@effect/atom-react";
 import { CircleArrowUpIcon } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
@@ -24,7 +25,11 @@ import {
   shortForkVersion,
 } from "./SidebarForkUpdatePill.logic";
 
-type ReportStatus = (environmentId: EnvironmentId, status: ForkUpdateStatus | null) => void;
+type ReportStatus = (
+  environmentId: EnvironmentId,
+  status: ForkUpdateStatus | null,
+  canInstall: boolean,
+) => void;
 
 /** Reads one machine's fork update status; hooks cannot run per item of a list. */
 function ForkUpdateProbe({
@@ -39,14 +44,17 @@ function ForkUpdateProbe({
   const query = useEnvironmentQuery(
     serverEnvironment.forkUpdateStatus({ environmentId, input: {} }),
   );
+  const canInstall = useAtomValue(
+    serverEnvironment.installForkUpdate.permissionAtom(environmentId),
+  );
   const { refresh } = query;
   useEffect(() => {
-    onStatus(environmentId, query.data);
-  }, [environmentId, onStatus, query.data]);
+    onStatus(environmentId, query.data, canInstall);
+  }, [environmentId, onStatus, query.data, canInstall]);
   useEffect(() => {
     if (refreshKey > 0) refresh();
   }, [refresh, refreshKey]);
-  useEffect(() => () => onStatus(environmentId, null), [environmentId, onStatus]);
+  useEffect(() => () => onStatus(environmentId, null, false), [environmentId, onStatus]);
   return null;
 }
 
@@ -64,6 +72,7 @@ export function SidebarForkUpdatePill() {
   const [statuses, setStatuses] = useState<ReadonlyMap<EnvironmentId, ForkUpdateStatus>>(
     () => new Map(),
   );
+  const [grants, setGrants] = useState<ReadonlyMap<EnvironmentId, boolean>>(() => new Map());
   const [refreshKey, setRefreshKey] = useState(0);
   const [isPending, setIsPending] = useState(false);
   const pending = useRef(false);
@@ -76,7 +85,12 @@ export function SidebarForkUpdatePill() {
     [serverConfigs],
   );
 
-  const reportStatus = useCallback<ReportStatus>((environmentId, status) => {
+  const reportStatus = useCallback<ReportStatus>((environmentId, status, canInstall) => {
+    setGrants((previous) =>
+      previous.get(environmentId) === canInstall
+        ? previous
+        : new Map(previous).set(environmentId, canInstall),
+    );
     setStatuses((previous) => {
       if ((previous.get(environmentId) ?? null) === status) return previous;
       const next = new Map(previous);
@@ -88,18 +102,21 @@ export function SidebarForkUpdatePill() {
 
   const machines = useMemo<ReadonlyArray<ForkUpdateMachine>>(
     () =>
-      [...statuses].map(([environmentId, status]) => ({
-        environmentId,
-        label: presentationById.get(environmentId)?.entry.target.label ?? environmentId,
-        isPrimary: environmentId === primaryEnvironmentId,
-        status,
-      })),
-    [presentationById, primaryEnvironmentId, statuses],
+      [...statuses]
+        .filter(([id]) => environmentIds.includes(id) && grants.get(id) === true)
+        .map(([environmentId, status]) => ({
+          environmentId,
+          label: presentationById.get(environmentId)?.entry.target.label ?? environmentId,
+          isPrimary: environmentId === primaryEnvironmentId,
+          status,
+        })),
+    [presentationById, primaryEnvironmentId, statuses, grants, environmentIds],
   );
   const view = resolveForkUpdatePillView(machines);
 
   const handleUpdate = async () => {
-    if (!view || view.pending.length === 0 || pending.current) return;
+    if (!view?.target || view.pending.length === 0 || pending.current) return;
+    const target = view.target;
     pending.current = true;
     setIsPending(true);
     try {
@@ -109,7 +126,10 @@ export function SidebarForkUpdatePill() {
       if (!confirmed) return;
       // In order, so this machine's restart comes after the others started.
       for (const machine of view.pending) {
-        const result = await installForkUpdate({ environmentId: machine.environmentId, input: {} });
+        const result = await installForkUpdate({
+          environmentId: machine.environmentId,
+          input: target,
+        });
         if (result._tag === "Failure") {
           if (isAtomCommandInterrupted(result)) continue;
           const error = squashAtomCommandFailure(result);
@@ -133,8 +153,8 @@ export function SidebarForkUpdatePill() {
     }
   };
 
-  const installing = view !== null && view.pending.length === 0;
-  const disabled = isPending || installing;
+  const disabled = isPending || view?.target === null;
+  const installing = isPending || (view?.installing.length ?? 0) > 0;
 
   return (
     <>
@@ -154,14 +174,15 @@ export function SidebarForkUpdatePill() {
                 <button
                   type="button"
                   aria-label={view.tooltip}
+                  disabled={disabled}
                   aria-disabled={disabled || undefined}
                   className={cn(
-                    "inline-flex size-8 items-center justify-center rounded-full bg-sidebar-control-surface text-sidebar-foreground outline-hidden ring-ring transition-colors focus-visible:ring-2",
+                    "inline-flex size-8 items-center justify-center rounded-full bg-sidebar-control-surface text-sidebar-foreground outline-hidden ring-ring transition-colors focus-visible:ring-2 focus-visible:ring-inset",
                     disabled ? "cursor-not-allowed" : "cursor-pointer hover:bg-sidebar-row-hover",
                   )}
                   onClick={() => void handleUpdate()}
                 >
-                  {disabled ? <Spinner size="md" /> : <CircleArrowUpIcon className="size-4" />}
+                  {installing ? <Spinner size="md" /> : <CircleArrowUpIcon className="size-4" />}
                 </button>
               }
             />

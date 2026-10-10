@@ -1,3 +1,7 @@
+import { resolveGoalComposerIntent } from "@t3tools/client-runtime/state/thread-goals";
+import { squashAtomCommandFailure } from "@t3tools/client-runtime/state/runtime";
+import { AuthOrchestrationOperateScope } from "@t3tools/contracts";
+import { readEnvironmentScope } from "./session";
 import type { ComposerTextPaste } from "../native/T3ComposerEditor.types";
 import { useAtomValue } from "@effect/atom-react";
 import { threadRuntimeIsActive } from "@t3tools/client-runtime/state/shell";
@@ -81,8 +85,8 @@ import {
   resolveComposerDispatchMode,
   type ActiveTurnComposerAction,
 } from "@t3tools/client-runtime/state/composer-dispatch";
-import { Atom } from "effect/unstable/reactivity";
-import { AsyncResult } from "effect/unstable/reactivity";
+import { Atom } from "effect/reactivity";
+import { AsyncResult } from "effect/reactivity";
 import { prepareTurnAttachments } from "../lib/attachmentUpload";
 import { DEFAULT_FOLLOW_UP_BEHAVIOR } from "../lib/followUpBehavior";
 import { mobilePreferencesAtom } from "./preferences";
@@ -96,6 +100,7 @@ import {
   useQueuedRunEdit,
 } from "./queued-run-edit";
 import { setPendingConnectionError } from "../state/use-remote-environment-registry";
+import { clearThreadComposerError, setThreadComposerError } from "./thread-composer-error";
 import {
   useSelectedThreadProjection,
   useSelectedThreadVisibleTurnItems,
@@ -191,6 +196,8 @@ export function useThreadComposerState() {
   const uploadThreadFeedback = useAtomCommand(threadEnvironment.uploadFeedback, {
     reportFailure: false,
   });
+  const messageGoal = useAtomCommand(threadEnvironment.messageGoal, { reportFailure: false });
+  const goalSendPending = useRef(false);
   const editQueuedRun = useAtomCommand(threadEnvironment.editQueuedRun, {
     label: "edit queued message",
     reportFailure: false,
@@ -452,7 +459,8 @@ export function useThreadComposerState() {
       });
     }
     endQueuedRunEdit(selectedThreadKey, { deferAttachmentCleanup: keepable });
-    setPendingConnectionError(
+    setThreadComposerError(
+      selectedThreadKey,
       keepable
         ? "That message already started. Your edit is back in the composer."
         : "That message already started, so the edit was discarded.",
@@ -546,6 +554,12 @@ export function useThreadComposerState() {
 
   const onSendMessage = useCallback(
     async (followUpOverride?: ActiveTurnComposerAction) => {
+      if (
+        selectedThreadShell &&
+        selectedEnvironmentRuntime?.connectionState === "connected" &&
+        !readEnvironmentScope(selectedThreadShell.environmentId, AuthOrchestrationOperateScope)
+      )
+        return null;
       if (!selectedThreadShell) {
         return null;
       }
@@ -569,7 +583,7 @@ export function useThreadComposerState() {
       const draft = getComposerDraftSnapshot(threadKey);
       if (appAtomRegistry.get(composerContextImportsAtom)[threadKey]) return null;
       const thread = selectedThreadShell;
-      const text = draft.text.trim();
+      let text = draft.text.trim();
       const attachments = draft.attachments;
       if (
         composerAttachmentUploadBlockReason({
@@ -602,6 +616,51 @@ export function useThreadComposerState() {
         return null;
       }
 
+      const goalIntent = resolveGoalComposerIntent({
+        text,
+        goal: thread.t3Goal ?? null,
+        supportsGoals:
+          selectedEnvironmentRuntime?.serverConfig?.environment.capabilities.t3Goals === true,
+        canMutate: readEnvironmentScope(thread.environmentId, AuthOrchestrationOperateScope),
+        isIteration: thread.goalIteration != null,
+        isSubagent: thread.lineage.relationshipToParent === "subagent",
+        hasNonTextContent: attachments.length > 0 || (draft.context?.records.length ?? 0) > 0,
+      });
+      if (goalIntent.kind === "blocked") {
+        setThreadComposerError(threadKey, goalIntent.reason);
+        return null;
+      }
+      if (goalIntent.kind === "reply") {
+        if (goalSendPending.current) return null;
+        goalSendPending.current = true;
+        clearThreadComposerError(threadKey);
+        try {
+          const result = await messageGoal({
+            environmentId: thread.environmentId,
+            input: {
+              type: "thread.goal.message",
+              commandId: CommandId.make(uuidv4()),
+              threadId: thread.id,
+              goalId: goalIntent.goalId,
+              text: goalIntent.text,
+            },
+          });
+          if (result._tag === "Failure") throw squashAtomCommandFailure(result);
+          // Preserve anything typed while the acknowledgement was in flight.
+          if (getComposerDraftSnapshot(threadKey).text === draft.text)
+            setComposerDraftText(threadKey, "");
+        } catch (cause) {
+          setThreadComposerError(
+            threadKey,
+            cause instanceof Error ? cause.message : "Could not message the goal.",
+          );
+        } finally {
+          goalSendPending.current = false;
+        }
+        return null;
+      }
+      text = goalIntent.text;
+
       const modelSelection = draft.modelSelection ?? thread.modelSelection;
       const serverConfig = selectedEnvironmentRuntime?.serverConfig;
       if (
@@ -622,6 +681,8 @@ export function useThreadComposerState() {
           ? parseCodexFeedbackCommand(text)
           : null;
       if (feedbackCommand) {
+        if (!readEnvironmentScope(selectedThreadShell.environmentId, AuthOrchestrationOperateScope))
+          return null;
         if (thread.activeProviderThreadId === null) {
           Alert.alert("Start a Codex thread first", "Send a message before you submit feedback.");
           return null;
@@ -670,6 +731,8 @@ export function useThreadComposerState() {
 
       const metadata = makeQueuedMessageMetadata();
       const messageId = MessageId.make(metadata.messageId);
+      // A new send supersedes the reason the previous one bounced back.
+      clearThreadComposerError(threadKey);
       // Enqueue publishes the queued atom synchronously (the durable write
       // happens behind it), so clearing the draft here gives send feedback on
       // the tap frame instead of after file I/O. If the write fails the message
@@ -706,7 +769,8 @@ export function useThreadComposerState() {
             attachments: [],
           });
           appendComposerDraftAttachments(threadKey, attachments, { allowOverflow: true });
-          setPendingConnectionError(
+          setThreadComposerError(
+            threadKey,
             error instanceof Error ? error.message : "Failed to save the queued message.",
           );
         },
@@ -723,6 +787,7 @@ export function useThreadComposerState() {
       selectedThreadCreation,
       selectedThreadShell,
       uploadThreadFeedback,
+      messageGoal,
     ],
   );
 

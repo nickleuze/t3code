@@ -9,7 +9,10 @@ import { matchComposerThreadItems } from "@t3tools/client-runtime/composerThread
 import type { EnvironmentThreadShell } from "@t3tools/client-runtime/state/models";
 
 const EMPTY_THREAD_SHELLS: ReadonlyArray<EnvironmentThreadShell> = [];
-import { COMPOSER_CONTEXT_MAX_RECORDS } from "@t3tools/contracts";
+import {
+  COMPOSER_CONTEXT_MAX_RECORDS,
+  PROVIDER_WORKSPACE_SNAPSHOT_TTL_MS,
+} from "@t3tools/contracts";
 import { Alert } from "react-native";
 import { formatComposerContextReference } from "@t3tools/shared/composerContextReferences";
 import { pullRequestComposerContext, threadComposerContext } from "../../lib/composerContext";
@@ -36,6 +39,8 @@ import {
   getProviderSkillsForSlashMenu,
   getProviderSlashCommandsForSlashMenu,
   isProviderSkillUserInvocable,
+  hasCompleteProviderWorkspaceSnapshot,
+  hasCurrentProviderWorkspaceSnapshot,
   resolveProviderSkillsForCwd,
   resolveProviderSlashCommandsForCwd,
 } from "@t3tools/client-runtime/providerSkills";
@@ -61,6 +66,7 @@ export function buildComposerSlashCommandItems(input: {
   readonly hasCompactableConversation?: boolean;
   /** Whether T3 itself offers /usage-limits for the selected provider. */
   readonly offersUsageLimits?: boolean;
+  readonly offersT3Goals?: boolean;
   readonly allowInteractionMode: boolean;
   readonly selectedProviderStatus: Pick<
     ServerProvider,
@@ -100,6 +106,15 @@ export function buildComposerSlashCommandItems(input: {
   // Providers expand commands only at the start of a message. T3 commands
   // change local state and do not have this restriction.
   if (!input.atMessageStart) return items;
+  if (input.hasThread && input.offersT3Goals && "t3-goal".includes(query)) {
+    items.push({
+      id: "cmd:t3-goal",
+      type: "slash-command",
+      command: "t3-goal",
+      label: "/t3-goal",
+      description: "Draft a T3 goal for you to start",
+    });
+  }
   for (const command of input.selectedProviderStatus?.slashCommands ?? []) {
     if (!command.name.toLowerCase().includes(query)) continue;
     if (command.name === "compact" && !input.hasCompactableConversation) continue;
@@ -178,6 +193,7 @@ export function useComposerCommandMenu({
   hasThread,
   hasCompactableConversation,
   offersUsageLimits = false,
+  offersT3Goals = false,
   enabled = true,
   onChangeDraftMessage,
   onUpdateInteractionMode,
@@ -198,6 +214,7 @@ export function useComposerCommandMenu({
   readonly hasCompactableConversation: boolean;
   /** Whether T3 itself offers /usage-limits for the selected provider. */
   readonly offersUsageLimits?: boolean;
+  readonly offersT3Goals?: boolean;
   readonly enabled?: boolean;
   readonly onChangeDraftMessage: (value: string) => void;
   readonly onUpdateInteractionMode?: (mode: ProviderInteractionMode) => void;
@@ -245,39 +262,73 @@ export function useComposerCommandMenu({
     reportFailure: false,
   });
   const selectedProviderInstanceId = selectedProviderStatus?.instanceId;
-  const hasWorkspaceSnapshot = Boolean(
-    projectCwd &&
-    selectedProviderStatus?.workspaceSnapshots?.some((snapshot) => snapshot.cwd === projectCwd),
+  const hasWorkspaceSnapshot = hasCompleteProviderWorkspaceSnapshot(
+    selectedProviderStatus,
+    projectCwd,
   );
-  const workspaceRefreshKeyRef = useRef<string | null>(null);
-  const workspaceRefreshRetryRef = useRef<{ key: string; notBefore: number } | null>(null);
+  // The last scan this composer asked for. A request inside the TTL is not
+  // repeated, so a client clock ahead of the server's cannot loop rescans.
+  const workspaceRefreshKeyRef = useRef<{ key: string; requestedAt: number } | null>(null);
+  const [workspaceRefreshRetry, setWorkspaceRefreshRetry] = useState<{
+    key: string;
+    notBefore: number;
+  } | null>(null);
+  const workspaceRefreshScopeKey =
+    environmentId && projectCwd && selectedProviderInstanceId
+      ? `${environmentId}:${selectedProviderInstanceId}:${projectCwd}`
+      : null;
+  const workspaceSlashCommandsPending =
+    selectedProviderStatus?.workspaceSnapshots?.some(
+      (snapshot) => snapshot.cwd === projectCwd && snapshot.slashCommandsPending === true,
+    ) ?? false;
+  useEffect(() => {
+    if (
+      !workspaceSlashCommandsPending ||
+      !workspaceRefreshRetry ||
+      workspaceRefreshRetry.key !== workspaceRefreshScopeKey
+    )
+      return;
+    const timeout = setTimeout(
+      () => {
+        setWorkspaceRefreshRetry((current) => (current === workspaceRefreshRetry ? null : current));
+      },
+      Math.max(0, workspaceRefreshRetry.notBefore - Date.now()),
+    );
+    return () => clearTimeout(timeout);
+  }, [workspaceRefreshRetry, workspaceRefreshScopeKey, workspaceSlashCommandsPending]);
   const hadWorkspaceSnapshotRef = useRef(false);
   useEffect(() => {
     if (hadWorkspaceSnapshotRef.current && !hasWorkspaceSnapshot) {
       workspaceRefreshKeyRef.current = null;
-      workspaceRefreshRetryRef.current = null;
+      setWorkspaceRefreshRetry(null);
     }
     hadWorkspaceSnapshotRef.current = hasWorkspaceSnapshot;
   }, [hasWorkspaceSnapshot]);
   useEffect(() => {
     if (!environmentId || !projectCwd || !selectedProviderInstanceId) return;
     const key = `${environmentId}:${selectedProviderInstanceId}:${projectCwd}`;
-    if (workspaceRefreshKeyRef.current === key) return;
-    if (hasWorkspaceSnapshot) {
-      workspaceRefreshKeyRef.current = key;
-      workspaceRefreshRetryRef.current = null;
+    const now = Date.now();
+    const lastRequest = workspaceRefreshKeyRef.current;
+    if (
+      lastRequest?.key === key &&
+      now - lastRequest.requestedAt < PROVIDER_WORKSPACE_SNAPSHOT_TTL_MS
+    )
+      return;
+    if (hasCurrentProviderWorkspaceSnapshot(selectedProviderStatus, projectCwd, now)) {
+      setWorkspaceRefreshRetry(null);
       return;
     }
-    const retry = workspaceRefreshRetryRef.current;
-    if (retry?.key === key && Date.now() < retry.notBefore) return;
-    workspaceRefreshKeyRef.current = key;
+    const retry = workspaceRefreshRetry;
+    if (retry?.key === key && now < retry.notBefore) return;
+    const request = { key, requestedAt: now };
+    workspaceRefreshKeyRef.current = request;
     const retryLater = () => {
-      if (workspaceRefreshKeyRef.current !== key) return;
+      if (workspaceRefreshKeyRef.current !== request) return;
       workspaceRefreshKeyRef.current = null;
-      workspaceRefreshRetryRef.current = {
+      setWorkspaceRefreshRetry({
         key,
         notBefore: Date.now() + WORKSPACE_SNAPSHOT_RETRY_COOLDOWN_MS,
-      };
+      });
     };
     void refreshProviders({
       environmentId,
@@ -285,20 +336,22 @@ export function useComposerCommandMenu({
     }).then((result) => {
       const refreshed =
         result._tag === "Success" &&
-        result.value.providers
-          .find((provider) => provider.instanceId === selectedProviderInstanceId)
-          ?.workspaceSnapshots?.some((snapshot) => snapshot.cwd === projectCwd);
-      if (!refreshed && workspaceRefreshKeyRef.current === key) {
-        retryLater();
-      }
+        hasCompleteProviderWorkspaceSnapshot(
+          result.value.providers.find(
+            (provider) => provider.instanceId === selectedProviderInstanceId,
+          ),
+          projectCwd,
+        );
+      if (!refreshed) retryLater();
     }, retryLater);
   }, [
     draftMessage,
     environmentId,
-    hasWorkspaceSnapshot,
     projectCwd,
     refreshProviders,
     selectedProviderInstanceId,
+    selectedProviderStatus,
+    workspaceRefreshRetry,
   ]);
 
   const trigger = useMemo(() => {
@@ -349,6 +402,7 @@ export function useComposerCommandMenu({
         hasThread,
         hasCompactableConversation,
         offersUsageLimits,
+        offersT3Goals,
         allowInteractionMode: onUpdateInteractionMode !== undefined,
         selectedProviderStatus: selectedProviderStatus
           ? {
@@ -497,6 +551,7 @@ export function useComposerCommandMenu({
     skills,
     trigger,
     offersUsageLimits,
+    offersT3Goals,
   ]);
 
   const onSelect = useCallback(

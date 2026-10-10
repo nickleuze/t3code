@@ -55,9 +55,26 @@ export function latestExecutedRun(
   for (const run of runs) {
     if (run.status === "queued") continue;
     if (run.status === "cancelled" && run.startedAt === null) continue;
-    if (latest === null || run.ordinal > latest.ordinal) latest = run;
+    if (latest === null || runRanAfter(run, latest)) latest = run;
   }
   return latest;
+}
+
+/**
+ * Whether started `run` ran after `other`. Ordinals follow submission, but a
+ * run can start ahead of a held queue (a restart continuation, or a message
+ * sent while the queue is held), so a queued run resumed later can have a
+ * lower ordinal than one that already ended. An unfinished run is the latest.
+ */
+export function runRanAfter(
+  run: Pick<OrchestrationV2Run, "ordinal" | "completedAt">,
+  other: Pick<OrchestrationV2Run, "ordinal" | "completedAt">,
+): boolean {
+  const end = (candidate: typeof run) =>
+    !candidate.completedAt
+      ? Number.POSITIVE_INFINITY
+      : DateTime.toEpochMillis(candidate.completedAt);
+  return end(run) === end(other) ? run.ordinal > other.ordinal : end(run) > end(other);
 }
 
 /**
@@ -88,4 +105,20 @@ export function usageLimitRunPresentedAsLatest(
 ): OrchestrationV2Run | null {
   const blocked = usageLimitBlockedRun(runs, turnItems, sessionError);
   return blocked !== null && runs.some((run) => run.ordinal > blocked.ordinal) ? blocked : null;
+}
+
+/**
+ * The newest run that is not waiting in a held queue, or null when only held
+ * runs exist. A held queue waits for the user, so its runs never stand for the
+ * thread's outcome. The SQL thread shell selects the same run.
+ */
+export function latestUnheldRun(
+  runs: ReadonlyArray<OrchestrationV2Run>,
+): OrchestrationV2Run | null {
+  let latest: OrchestrationV2Run | null = null;
+  for (const run of runs) {
+    if (run.status === "queued" && run.queueHeld === true) continue;
+    if (latest === null || run.ordinal > latest.ordinal) latest = run;
+  }
+  return latest;
 }

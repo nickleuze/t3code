@@ -1,5 +1,5 @@
 import type { OrchestrationV2GoalBurnGuard, RuntimeMode } from "@t3tools/contracts";
-import { useId, useState } from "react";
+import { useId, useRef, useState } from "react";
 
 import { Button } from "../ui/button";
 import {
@@ -47,6 +47,7 @@ interface GoalDialogProps {
   readonly initialCheckCommand?: string | null | undefined;
   readonly initialTimeoutMins?: number | null | undefined;
   readonly runtimeMode: RuntimeMode;
+  readonly canStart: boolean;
   readonly onSubmit: (submission: GoalDialogSubmission) => Promise<void>;
   readonly onClose: () => void;
 }
@@ -60,6 +61,7 @@ export function GoalDialog({
   initialCheckCommand,
   initialTimeoutMins,
   runtimeMode,
+  canStart,
   onSubmit,
   onClose,
 }: GoalDialogProps) {
@@ -79,7 +81,9 @@ export function GoalDialog({
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  const starting = useRef(false);
   const submit = async () => {
+    if (!canStart || starting.current) return;
     const trimmed = objective.trim();
     if (trimmed.length === 0) return setError("Describe what the goal should achieve.");
     if (doneWhen.trim().length === 0) {
@@ -88,6 +92,7 @@ export function GoalDialog({
     if (guardEnabled && (!maxPercentPoints || !windowMins)) {
       return setError("Set both burn guard values, or turn the guard off.");
     }
+    starting.current = true;
     setPending(true);
     setError(null);
     try {
@@ -105,6 +110,7 @@ export function GoalDialog({
         noProgressLimit: Math.max(1, Math.round(noProgressLimit ?? 3)),
       });
     } catch (cause) {
+      starting.current = false;
       setError(cause instanceof Error ? cause.message : "Could not start the goal.");
       setPending(false);
     }
@@ -298,7 +304,7 @@ export function GoalDialog({
             <Button type="button" variant="outline" disabled={pending} onClick={onClose}>
               Cancel
             </Button>
-            <Button type="submit" disabled={pending}>
+            <Button type="submit" disabled={!canStart || pending}>
               {pending ? "Starting..." : "Start goal"}
             </Button>
           </DialogFooter>

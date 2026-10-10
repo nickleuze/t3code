@@ -1,3 +1,5 @@
+import { useAtomValue } from "@effect/atom-react";
+import { serverEnvironment } from "../../state/server";
 import { scopeThreadRef } from "@t3tools/client-runtime/environment";
 import type {
   EnvironmentId,
@@ -11,7 +13,11 @@ import type { ReactNode } from "react";
 import { cn } from "../../lib/utils";
 import { useThreadProjection } from "../../state/entities";
 import { buildThreadRouteParams } from "../../threadRoutes";
-import { formatGoalTokens, goalStatusLabel, goalSummaryFromGoal } from "./goalPresentation";
+import {
+  formatGoalTokens,
+  goalStatusLabel,
+  goalSummaryFromGoal,
+} from "@t3tools/client-runtime/state/thread-goals";
 import { ThreadDetailsSection } from "./ThreadDetailsSection";
 import { THREAD_DETAILS_PANEL_ROW_CONTENT_CLASS } from "./threadDetailsPanelStyles";
 
@@ -29,7 +35,7 @@ const OUTCOME_LABELS: Record<OrchestrationV2GoalIterationOutcome, string> = {
 const NOTES_SHOWN = 5;
 
 /**
- * Thread details section for the thread's `/goal` loop: what it is working
+ * Thread details section for the thread's `/t3-goal` loop: what it is working
  * toward, where it stands, recent progress notes, and each iteration's thread.
  */
 export function ThreadGoalPanel(props: {
@@ -38,7 +44,11 @@ export function ThreadGoalPanel(props: {
 }) {
   const projection = useThreadProjection(scopeThreadRef(props.environmentId, props.threadId));
   const navigate = useNavigate();
-  const goal = projection?.projection.thread.goal ?? null;
+  const config = useAtomValue(serverEnvironment.configValueAtom(props.environmentId));
+  const goal =
+    config?.environment.capabilities.t3Goals === true
+      ? (projection?.projection.thread.goal ?? null)
+      : null;
   if (goal === null) return null;
 
   const openThread = (threadId: ThreadId) =>
@@ -50,7 +60,7 @@ export function ThreadGoalPanel(props: {
   return (
     <ThreadDetailsSection
       headingId="thread-details-goal-heading"
-      title="Goal"
+      title="T3 goal"
       data-thread-goal-panel
     >
       <div className={cn("flex flex-col gap-2 py-1", THREAD_DETAILS_PANEL_ROW_CONTENT_CLASS)}>

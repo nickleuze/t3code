@@ -2,9 +2,11 @@ import type { ThreadId } from "@t3tools/contracts";
 import * as Crypto from "effect/Crypto";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
-import { Atom } from "effect/unstable/reactivity";
+import { Atom } from "effect/reactivity";
 import {
   WS_METHODS,
+  ORCHESTRATION_V2_WS_METHODS,
+  type OrchestrationV2Command,
   type EnvironmentId,
   type OrchestrationV2ShellSnapshot,
 } from "@t3tools/contracts";
@@ -21,6 +23,7 @@ import {
   type ThreadCommandInput,
   type ArchiveThreadInput,
   type CancelQueuedRunInput,
+  type RetryWorkspacePreparationInput,
   type CreateThreadInput,
   type DeleteThreadInput,
   type EditQueuedRunInput,
@@ -41,10 +44,6 @@ import {
   type ReorderPinnedThreadInput,
   type ReorderActiveThreadInput,
   type SetThreadAutoSettleInput,
-  type SetThreadGoalInput,
-  type MessageThreadGoalInput,
-  type ControlThreadGoalInput,
-  type DismissThreadGoalProposalInput,
   type SettleThreadInput,
   type SnoozeThreadInput,
   type StartThreadTurnInput,
@@ -52,6 +51,7 @@ import {
   type UnarchiveThreadInput,
   type UnlinkThreadPullRequestInput,
   type UnpinThreadInput,
+  type WatchThreadPullRequestInput,
   type UnsettleThreadInput,
   type UnsnoozeThreadInput,
   type UpdateThreadMetadataInput,
@@ -68,6 +68,7 @@ import {
   promoteQueuedRun,
   reorderQueuedRun,
   resumeThreadQueue,
+  retryWorkspacePreparation,
   linkThreadPullRequest,
   respondToThreadApproval,
   respondToThreadUserInput,
@@ -79,10 +80,6 @@ import {
   reorderPinnedThread,
   reorderActiveThread,
   setThreadAutoSettle,
-  setThreadGoal,
-  messageThreadGoal,
-  controlThreadGoal,
-  dismissThreadGoalProposal,
   settleThread,
   snoozeThread,
   startThreadTurn,
@@ -94,13 +91,20 @@ import {
   unsnoozeThread,
   updateThreadMetadata,
   visitThread,
+  watchThreadPullRequest,
 } from "../operations/commands.ts";
+import {
+  getInitialServerConfig,
+  requestGuarded,
+  EnvironmentRpcUnavailableError,
+} from "../rpc/client.ts";
 import type { EnvironmentRegistry } from "../connection/registry.ts";
 import * as EnvironmentSupervisor from "../connection/supervisor.ts";
 import * as ThreadHistoryController from "./threadHistoryController.ts";
 
 export type LoadEarlierThreadHistoryInput = {
   readonly threadId: ThreadId;
+  readonly throughEntryId?: string;
 };
 
 export type {
@@ -138,6 +142,7 @@ export type {
   UnsnoozeThreadInput,
   UpdateThreadMetadataInput,
   VisitThreadInput,
+  WatchThreadPullRequestInput,
 } from "../operations/commands.ts";
 
 export function createThreadEnvironmentAtoms<R, E>(
@@ -150,7 +155,46 @@ export function createThreadEnvironmentAtoms<R, E>(
     key: ({ environmentId, input }: { environmentId: string; input: { threadId: string } }) =>
       JSON.stringify([environmentId, input.threadId]),
   };
+  const goalCommand = <
+    Type extends
+      | "thread.goal.set"
+      | "thread.goal.control"
+      | "thread.goal.message"
+      | "thread.goal.proposal.dismiss",
+  >(
+    type: Type,
+  ) =>
+    createEnvironmentRpcCommand(runtime, {
+      label: `environment-data:commands:${type}`,
+      tag: ORCHESTRATION_V2_WS_METHODS.dispatchCommand,
+      execute: (input: Extract<OrchestrationV2Command, { type: Type }>) =>
+        Effect.gen(function* () {
+          const supervisor = yield* EnvironmentSupervisor.EnvironmentSupervisor;
+          const config = yield* getInitialServerConfig().pipe(
+            Effect.mapError(
+              () =>
+                new EnvironmentRpcUnavailableError({
+                  environmentId: supervisor.target.environmentId,
+                  message: "This environment is not connected.",
+                }),
+            ),
+          );
+          if (config.environment.capabilities.t3Goals !== true) {
+            return yield* new EnvironmentRpcUnavailableError({
+              environmentId: config.environment.environmentId,
+              message: "This environment does not support T3 goals.",
+            });
+          }
+          return yield* requestGuarded(ORCHESTRATION_V2_WS_METHODS.dispatchCommand, input);
+        }),
+      scheduler,
+      concurrency,
+    });
   const commands = {
+    setGoal: goalCommand("thread.goal.set"),
+    controlGoal: goalCommand("thread.goal.control"),
+    messageGoal: goalCommand("thread.goal.message"),
+    dismissGoalProposal: goalCommand("thread.goal.proposal.dismiss"),
     create: createEnvironmentCommand(runtime, {
       label: "environment-data:commands:thread:create",
       execute: (input: CreateThreadInput) => createThread(input),
@@ -241,30 +285,6 @@ export function createThreadEnvironmentAtoms<R, E>(
       scheduler,
       concurrency,
     }),
-    setGoal: createEnvironmentCommand(runtime, {
-      label: "environment-data:commands:thread:set-goal",
-      execute: (input: SetThreadGoalInput) => setThreadGoal(input),
-      scheduler,
-      concurrency,
-    }),
-    messageGoal: createEnvironmentCommand(runtime, {
-      label: "environment-data:commands:thread:message-goal",
-      execute: (input: MessageThreadGoalInput) => messageThreadGoal(input),
-      scheduler,
-      concurrency,
-    }),
-    controlGoal: createEnvironmentCommand(runtime, {
-      label: "environment-data:commands:thread:control-goal",
-      execute: (input: ControlThreadGoalInput) => controlThreadGoal(input),
-      scheduler,
-      concurrency,
-    }),
-    dismissGoalProposal: createEnvironmentCommand(runtime, {
-      label: "environment-data:commands:thread:dismiss-goal-proposal",
-      execute: (input: DismissThreadGoalProposalInput) => dismissThreadGoalProposal(input),
-      scheduler,
-      concurrency,
-    }),
     updateMetadata: createEnvironmentCommand(runtime, {
       label: "environment-data:commands:thread:update-metadata",
       execute: (input: UpdateThreadMetadataInput) => updateThreadMetadata(input),
@@ -280,6 +300,12 @@ export function createThreadEnvironmentAtoms<R, E>(
     unlinkPullRequest: createEnvironmentCommand(runtime, {
       label: "environment-data:commands:thread:unlink-pull-request",
       execute: (input: UnlinkThreadPullRequestInput) => unlinkThreadPullRequest(input),
+      scheduler,
+      concurrency,
+    }),
+    watchPullRequest: createEnvironmentCommand(runtime, {
+      label: "environment-data:commands:thread:watch-pull-request",
+      execute: (input: WatchThreadPullRequestInput) => watchThreadPullRequest(input),
       scheduler,
       concurrency,
     }),
@@ -380,6 +406,12 @@ export function createThreadEnvironmentAtoms<R, E>(
       scheduler,
       concurrency,
     }),
+    retryWorkspacePreparation: createEnvironmentCommand(runtime, {
+      label: "environment-data:commands:thread:retry-workspace-preparation",
+      execute: (input: RetryWorkspacePreparationInput) => retryWorkspacePreparation(input),
+      scheduler,
+      concurrency,
+    }),
     editQueuedRun: createEnvironmentCommand(runtime, {
       label: "environment-data:commands:thread:edit-queued-run",
       execute: (input: EditQueuedRunInput) => editQueuedRun(input),
@@ -402,6 +434,7 @@ export function createThreadEnvironmentAtoms<R, E>(
           return yield* controller.value.loadEarlier(
             supervisor.target.environmentId,
             input.threadId,
+            input.throughEntryId,
           );
         }),
       scheduler,

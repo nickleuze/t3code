@@ -1,3 +1,4 @@
+import * as McpProviderSessions from "@t3tools/provider-core/server/McpProviderSessions";
 import * as SourceControlProviderRegistry from "../sourceControl/SourceControlProviderRegistry.ts";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, it } from "@effect/vitest";
@@ -26,11 +27,11 @@ import * as TestClock from "effect/testing/TestClock";
 import * as CheckpointStore from "../checkpointing/CheckpointStore.ts";
 import * as ServerConfig from "../config.ts";
 import * as McpSessionRegistryTestkit from "../mcp/McpSessionRegistry.testkit.ts";
-import { SqlitePersistenceMemory } from "../persistence/Layers/Sqlite.ts";
+import * as SqlitePersistence from "../persistence/Sqlite.ts";
 import * as ProjectEnrichmentService from "../project/ProjectEnrichmentService.ts";
 import * as ProjectService from "../project/ProjectService.ts";
-import type { ProviderInstance } from "../provider/ProviderDriver.ts";
-import * as ProviderInstanceRegistry from "../provider/Services/ProviderInstanceRegistry.ts";
+import type { ProviderInstance } from "@t3tools/provider-core/server/driver";
+import * as ProviderInstanceRegistry from "../provider/ProviderInstanceRegistry.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import * as VcsDriverRegistry from "../vcs/VcsDriverRegistry.ts";
 import * as VcsProcess from "../vcs/VcsProcess.ts";
@@ -39,13 +40,9 @@ import { CodexProviderCapabilitiesV2 } from "./Adapters/CodexAdapterV2.ts";
 import * as EventSink from "./EventSink.ts";
 import * as EventStore from "./EventStore.ts";
 import * as Orchestrator from "./Orchestrator.ts";
-import type { ProviderAdapterV2Shape } from "./ProviderAdapter.ts";
-import {
-  OrchestrationV2EventSinkLayerLive,
-  OrchestrationV2LayerLive,
-  ProjectServiceLayerLive,
-} from "./runtimeLayer.ts";
-import { worktreeRepairDependenciesTestLayer } from "./ProviderTurnStartService.testkit.ts";
+import type * as ProviderAdapter from "@t3tools/provider-core/server/ProviderAdapter";
+import { layerEventSink, layer, layerProjectService } from "./runtimeLayer.ts";
+import * as ProviderTurnStartServiceTestkit from "./ProviderTurnStartService.testkit.ts";
 import * as ThreadReportBack from "./ThreadReportBack.ts";
 
 const PlatformTestLayer = Layer.merge(
@@ -78,22 +75,18 @@ const providerInstance = {
     getCapabilities: () => Effect.succeed(CodexProviderCapabilitiesV2),
     planSelectionTransition: () => Effect.succeed({ type: "apply_on_next_turn" }),
     openSession: () => Effect.die("sessions are not used by report-back tests"),
-  } as ProviderAdapterV2Shape,
+  } as ProviderAdapter.ProviderAdapterV2["Service"],
   textGeneration: {} as ProviderInstance["textGeneration"],
 } satisfies ProviderInstance;
 
-const TestLayer = Layer.mergeAll(
-  OrchestrationV2LayerLive,
-  OrchestrationV2EventSinkLayerLive,
-  EventStore.layer,
-).pipe(
-  Layer.provideMerge(ProjectServiceLayerLive),
+const TestLayer = Layer.mergeAll(layer, layerEventSink, EventStore.layer).pipe(
+  Layer.provideMerge(layerProjectService),
   Layer.provide(
     Layer.mock(WorkspacePaths.WorkspacePaths)({
       normalizeWorkspaceRoot: (workspaceRoot) => Effect.succeed(workspaceRoot),
     }),
   ),
-  Layer.provide(worktreeRepairDependenciesTestLayer),
+  Layer.provide(ProviderTurnStartServiceTestkit.layer),
   Layer.provide(
     Layer.succeed(ProjectEnrichmentService.ProjectEnrichmentService, {
       peek: () =>
@@ -114,7 +107,7 @@ const TestLayer = Layer.mergeAll(
     }),
   ),
   Layer.provide(McpSessionRegistryTestkit.layer),
-  Layer.provide(SqlitePersistenceMemory),
+  Layer.provide(SqlitePersistence.layerMemory),
   Layer.provide(
     CheckpointStore.layer.pipe(
       Layer.provide(VcsDriverRegistry.layer),
@@ -136,6 +129,7 @@ const TestLayer = Layer.mergeAll(
     }),
   ),
   Layer.provide(PlatformTestLayer),
+  Layer.provide(McpProviderSessions.layer),
 );
 
 /** A project with a sending thread S and a worker thread X, plus a running reactor. */

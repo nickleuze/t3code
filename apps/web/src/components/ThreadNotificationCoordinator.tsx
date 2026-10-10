@@ -1,8 +1,8 @@
 import { presentThreadShell } from "@t3tools/client-runtime/state/models";
+import { t3GoalOwnsActivity } from "@t3tools/shared/agentAwareness";
 import { useAtomValue } from "@effect/atom-react";
 import { useNavigate, useParams } from "@tanstack/react-router";
-import type { EnvironmentId, ThreadId } from "@t3tools/contracts";
-import { backgroundWorkHoldsCompletion } from "@t3tools/shared/orchestrationV2PendingBackgroundWork";
+import type { EnvironmentId, OrchestrationV2ThreadShell, ThreadId } from "@t3tools/contracts";
 import * as Option from "effect/Option";
 import {
   CircleAlertIcon,
@@ -89,6 +89,13 @@ export function ThreadNotificationCoordinator() {
   ));
 }
 
+interface NotificationState {
+  readonly raw: OrchestrationV2ThreadShell;
+  readonly attention: string | null;
+  readonly completion: number | null;
+  readonly goalCompleted: string | null;
+}
+
 function EnvironmentNotifications({
   environmentId,
   onNotification,
@@ -97,6 +104,10 @@ function EnvironmentNotifications({
   onNotification: (environmentId: EnvironmentId, notification: Notification) => void;
 }) {
   const shell = useAtomValue(environmentShell.stateValueAtom(environmentId));
+  // The shell reducer keeps the thread list and unchanged thread objects
+  // stable, so this only rescans when a thread actually changed.
+  const threads =
+    shell.status === "live" && Option.isSome(shell.snapshot) ? shell.snapshot.value.threads : null;
   const mode = useClientSettings((settings) => settings.notificationMode);
   const inAppNotificationsEnabled = useClientSettings(
     (settings) => settings.inAppNotificationsEnabled,
@@ -105,53 +116,67 @@ function EnvironmentNotifications({
   const { environmentId: activeEnvironmentId, threadId: activeThreadId } = useParams({
     strict: false,
   });
-  const previous = useRef(
-    new Map<
-      ThreadId,
-      { attention: string | null; completion: number | null; goalCompleted: string | null }
-    >(),
-  );
+  const previous = useRef(new Map<ThreadId, NotificationState>());
 
   useEffect(() => {
-    if (shell.status !== "live" || Option.isNone(shell.snapshot)) {
+    if (threads === null) {
       previous.current.clear();
       return;
     }
-    const next = new Map<
-      ThreadId,
-      { attention: string | null; completion: number | null; goalCompleted: string | null }
-    >();
-    for (const rawThread of shell.snapshot.value.threads) {
+    const next = new Map<ThreadId, NotificationState>();
+    for (const rawThread of threads) {
       if (rawThread.lineage.relationshipToParent === "subagent") continue;
-      // Goal iterations report through their goal's thread, not one by one.
       if (rawThread.goalIteration != null) continue;
+      const prior = previous.current.get(rawThread.id);
+      // The same object cannot produce a new notification.
+      if (prior?.raw === rawThread) {
+        next.set(rawThread.id, prior);
+        continue;
+      }
       const thread = presentThreadShell(environmentId, rawThread);
+      const goal = thread.t3Goal ?? null;
+      const goalHoldsRunCompletion = t3GoalOwnsActivity(rawThread);
       let status = resolveSidebarThreadStatus(thread);
-      if (status === "ready" && thread.latestRun?.status === "failed") status = "failed";
-      const prior = previous.current.get(thread.id);
+      if (
+        goal !== null &&
+        goalHoldsRunCompletion &&
+        !thread.hasPendingApprovals &&
+        !thread.hasPendingUserInput
+      ) {
+        status =
+          goal.needsInput ||
+          goal.status === "blocked" ||
+          (goal.status === "paused" && goal.statusReason !== "user")
+            ? "input"
+            : goal.status === "usageLimited"
+              ? "limited"
+              : goal.status === "active"
+                ? "working"
+                : "ready";
+      } else if (status === "ready" && thread.latestRun?.status === "failed") status = "failed";
       const attention =
         status === "input" || status === "approval" || status === "failed" || status === "limited"
-          ? `${thread.latestRun?.runId ?? ""}:${status}`
+          ? `${thread.latestRun?.runId ?? ""}:${status}:${goal?.id ?? ""}:${goal?.status ?? ""}:${goal?.statusReason ?? ""}:${goal?.needsInput ?? false}`
           : null;
       const completedAt = Date.parse(thread.latestRun?.completedAt ?? "");
-      // Waiting only on commands (a dev server) is done; subagents and monitors wake the agent.
-      const settled =
-        status === "ready" ||
-        (status === "waiting" && !backgroundWorkHoldsCompletion(thread.pendingBackgroundTasks));
+      // Commands left running (a dev server) read as ready; subagents and monitors wait.
       const completion =
-        settled && thread.latestRun?.status === "completed" && Number.isFinite(completedAt)
+        (goalHoldsRunCompletion || status === "ready") &&
+        thread.latestRun?.status === "completed" &&
+        Number.isFinite(completedAt)
           ? completedAt
           : (prior?.completion ?? null);
-      const goal = thread.goal ?? null;
       const goalCompleted = goal?.status === "complete" ? goal.id : null;
-      next.set(thread.id, { attention, completion, goalCompleted });
+      next.set(thread.id, { raw: rawThread, attention, completion, goalCompleted });
       if (!prior || thread.archivedAt !== null) continue;
       const finishedGoal = goalCompleted !== null && goalCompleted !== prior.goalCompleted;
-      const kind =
-        attention && attention !== prior.attention
+      const kind = finishedGoal
+        ? "completion"
+        : attention && attention !== prior.attention
           ? "input"
-          : finishedGoal ||
-              (completion !== null && (prior.completion === null || completion > prior.completion))
+          : !goalHoldsRunCompletion &&
+              completion !== null &&
+              (prior.completion === null || completion > prior.completion)
             ? "completion"
             : null;
       if (!kind) continue;
@@ -253,7 +278,7 @@ function EnvironmentNotifications({
     mode,
     navigate,
     onNotification,
-    shell,
+    threads,
   ]);
 
   return null;

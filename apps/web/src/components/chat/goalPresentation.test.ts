@@ -7,7 +7,7 @@ import {
   goalDraftRequestMessage,
   goalStatusLabel,
   parseComposerGoalCommand,
-} from "./goalPresentation";
+} from "@t3tools/client-runtime/state/thread-goals";
 
 const goal: OrchestrationV2ThreadGoalSummary = {
   id: CommandId.make("command:goal"),

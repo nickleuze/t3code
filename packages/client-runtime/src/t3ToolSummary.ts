@@ -203,14 +203,17 @@ export function summarizeT3ToolCalls(
         quantity(countEntities(entityIds("scheduledTaskId")), "scheduled task"),
       );
       break;
-    case "schedule-run":
-      label = phrase("Requested", "request", quantity(selected.length, "scheduled task run"));
-      break;
     case "goal-update":
       label = phrase("Recorded", "record", quantity(selected.length, "goal progress note"));
       break;
     case "goal-complete":
       label = phrase("Reported", "report", "the goal outcome");
+      break;
+    case "goal-propose":
+      label = phrase("Proposed", "propose", quantity(selected.length, "T3 goal"));
+      break;
+    case "schedule-run":
+      label = phrase("Requested", "request", quantity(selected.length, "scheduled task run"));
       break;
     case "thread-configuration":
       label = phrase("Checked", "check", `thread configuration ${times}`);
@@ -274,6 +277,9 @@ export function summarizeT3ToolCalls(
         quantity(countEntities(entityIds("queuedRunId")), "queued message"),
       );
       break;
+    case "question-ask":
+      label = phrase("Asked", "ask", "the user");
+      break;
     case "question-list":
       label = phrase("Listed", "list", `pending questions ${times}`);
       break;
@@ -291,8 +297,8 @@ export function summarizeT3ToolCalls(
         quantity(countEntities(entityIds("requestId")), "pending question request"),
       );
       break;
-    case "question-ask":
-      label = phrase("Asked", "ask", `the user ${times}`);
+    case "secret-request":
+      label = phrase("Asked for", "ask for", quantity(selected.length, "secret"));
       break;
     case "worktree-handoff":
       label = phrase(
@@ -381,6 +387,16 @@ export function summarizeT3ToolCalls(
     case "unlink-pr":
       label = phrase("Unlinked", "unlink", quantity(selected.length, "pull request"));
       break;
+    case "watch-pr":
+      label = phrase("Watching", "watch", quantity(selected.length, "pull request"));
+      break;
+    case "unwatch-pr":
+      label = phrase(
+        "Stopped watching",
+        "stop watching",
+        quantity(selected.length, "pull request"),
+      );
+      break;
     case "list-prs":
       label = phrase(
         "Checked",
@@ -393,6 +409,12 @@ export function summarizeT3ToolCalls(
       break;
     case "device":
       label = phrase("Used", "use", `device controls ${times}`);
+      break;
+    case "html-preview":
+      label = phrase("Previewed", "preview", quantity(selected.length, "HTML page"));
+      break;
+    case "html-render":
+      label = phrase("Rendered", "render", quantity(selected.length, "HTML page"));
       break;
     case "capabilities":
       label = phrase("Checked", "check", `orchestration capabilities ${times}`);

@@ -8,11 +8,12 @@
 # finish), quits Alpha, keeps a backup, installs, relaunches, and rolls back
 # if the new app does not start.
 #
-# Usage: fork/update.sh [--check] [--force] [--wait-mins N] [--version V]
+# Usage: fork/update.sh [--check] [--force] [--wait-mins N] [--version V] [--commit SHA]
 #   --check       only report whether an update is available
 #   --force       swap even if turns are still running after the wait
 #   --wait-mins   how long to wait for running turns (default 60)
 #   --version     install this fork version instead of the latest
+#   --commit      require this exact release commit (requires --version)
 set -euo pipefail
 # Shell setups can wrap rm (one on the mini routes it to the Trash, which
 # frees no space); "command rm" below always means the real one.
@@ -27,6 +28,7 @@ CHECK_ONLY=0
 FORCE=0
 WAIT_MINS=60
 VERSION=""
+EXPECTED_COMMIT=""
 
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -34,14 +36,28 @@ while [ $# -gt 0 ]; do
     --force) FORCE=1 ;;
     --wait-mins) WAIT_MINS="$2"; shift ;;
     --version) VERSION="$2"; shift ;;
+    --commit) EXPECTED_COMMIT="$2"; shift ;;
     *) echo "Unknown option: $1" >&2; exit 64 ;;
   esac
   shift
 done
 
+if [ -n "$EXPECTED_COMMIT" ] && [ -z "$VERSION" ]; then
+  echo "--commit requires --version" >&2
+  exit 64
+fi
+
 host="$(scutil --get LocalHostName 2>/dev/null || hostname -s)"
 say() { printf '[%s] %s\n' "$host" "$*"; }
 json_field() { plutil -extract "$2" raw -o - "$1"; }
+active_turns() {
+  local count
+  count="$(sqlite3 -readonly "$DB" "SELECT count(*) FROM orchestration_v2_projection_runs WHERE status IN ('preparing','starting','running','waiting')" 2>/dev/null)" || return 1
+  case "$count" in
+    ''|*[!0-9]*) return 1 ;;
+  esac
+  printf '%s\n' "$count"
+}
 
 mkdir -p "$WORK"
 if [ -n "$VERSION" ]; then
@@ -53,6 +69,11 @@ curl -fsSL --connect-timeout 20 "$release_url/fork-release.json" -o "$WORK/fork-
   || { say "No fork release found at $release_url"; exit 1; }
 target="$(json_field "$WORK/fork-release.json" version)"
 commit="$(json_field "$WORK/fork-release.json" commit)"
+if { [ -n "$VERSION" ] && [ "$target" != "$VERSION" ]; } || \
+   { [ -n "$EXPECTED_COMMIT" ] && [ "$commit" != "$EXPECTED_COMMIT" ]; }; then
+  say "Release identity mismatch; nothing was changed."
+  exit 1
+fi
 zip="$(json_field "$WORK/fork-release.json" zip)"
 sha256="$(json_field "$WORK/fork-release.json" sha256)"
 installed="$(plutil -extract CFBundleShortVersionString raw -o - "$APP/Contents/Info.plist" 2>/dev/null || echo none)"
@@ -63,6 +84,8 @@ if [ "$installed" = "$target" ]; then
 fi
 say "Update available: $installed -> $target (${commit:0:10})"
 [ "$CHECK_ONLY" = 1 ] && exit 0
+
+busy="$(active_turns)" || { say "Cannot verify active turns; nothing was changed."; exit 1; }
 
 # The zip and its unpacked copy take about 600 MB until the swap.
 free_kb="$(df -k "$HOME" | awk 'NR == 2 { print $4 }')"
@@ -119,18 +142,18 @@ descendants() {
     echo "\$child"; descendants "\$child"
   done
 }
-active_turns() {
-  sqlite3 -readonly "\$DB" "SELECT count(*) FROM orchestration_v2_projection_runs WHERE status IN ('preparing','starting','running','waiting')" 2>/dev/null || echo 0
-}
+$(declare -f active_turns)
 log "Installing fork \$TARGET"
 # Let a reply that started this update finish before checking for work.
 sleep 15
 waited=0
-while [ "\$(active_turns)" != "0" ] && [ "\$waited" -lt "\$WAIT_SECS" ]; do
-  [ \$(( waited % 300 )) -eq 0 ] && log "Waiting for \$(active_turns) running turn(s) to finish"
+busy="\$(active_turns)" || { log "ABORTED: cannot verify active turns; nothing was changed."; exit 1; }
+while [ "\$busy" != "0" ] && [ "\$waited" -lt "\$WAIT_SECS" ]; do
+  [ \$(( waited % 300 )) -eq 0 ] && log "Waiting for \$busy running turn(s) to finish"
   sleep 20; waited=\$(( waited + 20 ))
+  busy="\$(active_turns)" || { log "ABORTED: cannot verify active turns; nothing was changed."; exit 1; }
 done
-if [ "\$(active_turns)" != "0" ] && [ "\$FORCE" != 1 ]; then
+if [ "\$busy" != "0" ] && [ "\$FORCE" != 1 ]; then
   log "ABORTED: turns still running after \$(( WAIT_SECS / 60 )) min; nothing was changed. Rerun with --force to interrupt them."
   exit 1
 fi
@@ -171,7 +194,6 @@ fi
 INSTALLER
 chmod +x "$installer"
 
-busy="$(sqlite3 -readonly "$DB" "SELECT count(*) FROM orchestration_v2_projection_runs WHERE status IN ('preparing','starting','running','waiting')" 2>/dev/null || echo 0)"
 launchctl remove "$LABEL" 2>/dev/null || true
 launchctl submit -l "$LABEL" -- /bin/bash "$installer"
 if [ "$busy" = "0" ]; then

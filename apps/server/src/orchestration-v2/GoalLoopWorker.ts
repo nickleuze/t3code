@@ -1,5 +1,5 @@
 /**
- * Drives `/goal` loops. A scheduler sweep reconciles every thread whose goal
+ * Drives `/t3-goal` loops. A scheduler sweep reconciles every thread whose goal
  * needs attention: it starts the next iteration in a fresh child thread,
  * watches the child, records its outcome, runs the completion check, and
  * enforces the burn guard and iteration timeout. All decisions about what a
@@ -24,16 +24,17 @@ import {
   type OrchestrationV2ThreadShell,
   type ServerProviderUsageWindow,
 } from "@t3tools/contracts";
-import { HostProcessEnvironment, isHostWindows } from "@t3tools/shared/hostProcess";
+import * as HostProcess from "@t3tools/shared/HostProcess";
+import { randomUuidV4 } from "@t3tools/provider-core/server/randomUuid";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
-import * as Encoding from "effect/Encoding";
+import * as Base64Url from "effect/encoding/Base64Url";
 import * as FiberMap from "effect/FiberMap";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 
 import * as ProcessRunner from "../processRunner.ts";
-import * as ProviderRegistry from "../provider/Services/ProviderRegistry.ts";
+import * as ProviderRegistry from "../provider/ProviderRegistry.ts";
 import * as Scheduler from "../scheduling/Scheduler.ts";
 import * as VcsDriverRegistry from "../vcs/VcsDriverRegistry.ts";
 import {
@@ -46,7 +47,7 @@ import { buildGoalIterationPrompt } from "./GoalPrompt.ts";
 import * as Orchestrator from "./Orchestrator.ts";
 import * as ProjectionStore from "./ProjectionStore.ts";
 import * as ProjectStore from "./ProjectStore.ts";
-import { delegatedTaskProgress } from "./SubagentProjection.ts";
+import { delegatedTaskProgress } from "@t3tools/provider-core/server/subagentProjection";
 
 /** How long before its time limit an iteration is asked to wrap up (at most a quarter of it). */
 const WRAP_UP_LEAD_MS = 15 * 60 * 1000;
@@ -151,9 +152,7 @@ const isLiveRun = (run: OrchestrationV2Run) =>
   run.status === "preparing" || run.status === "starting" || run.status === "running";
 
 const goalRef = (goal: OrchestrationV2ThreadGoal, iteration: number, edge: "start" | "end") =>
-  CheckpointRef.make(
-    `${GOAL_REFS_PREFIX}/${Encoding.encodeBase64Url(goal.id)}/${iteration}/${edge}`,
-  );
+  CheckpointRef.make(`${GOAL_REFS_PREFIX}/${Base64Url.encode(goal.id)}/${iteration}/${edge}`);
 
 /** The loop's sweep, plus a way to wait for in-flight completion checks. */
 export const make = Effect.gen(function* () {
@@ -170,22 +169,13 @@ export const make = Effect.gen(function* () {
   // Every dispatch gets a fresh command id. The goal reducer already rejects
   // stale steps, while a reused id would replay a stored rejection forever and
   // wedge the loop after one transient failure.
-  const bootMs = DateTime.toEpochMillis(yield* DateTime.now);
+  const bootId = yield* randomUuidV4;
   let dispatchSequence = 0;
   const commandId = (thread: OrchestrationV2AppThread, key: string) =>
-    CommandId.make(`goal:${thread.id}:${key}:${bootMs}-${++dispatchSequence}`);
+    CommandId.make(`goal:${thread.id}:${key}:${bootId}-${++dispatchSequence}`);
 
   const dispatch = (command: OrchestrationV2ServerCommand) =>
-    orchestrator.dispatch(command).pipe(
-      Effect.asVoid,
-      Effect.catchCause((cause) =>
-        Effect.logWarning("orchestration-v2.goal-loop.dispatch-failed", {
-          commandId: command.commandId,
-          commandType: command.type,
-          cause,
-        }),
-      ),
-    );
+    orchestrator.dispatch(command).pipe(Effect.asVoid);
 
   const advance = (
     thread: OrchestrationV2AppThread,
@@ -297,8 +287,8 @@ export const make = Effect.gen(function* () {
     Effect.gen(function* () {
       const command = goal.checkCommand!;
       const cwd = yield* workspaceCwd(thread);
-      const environment = yield* HostProcessEnvironment;
-      const shell = (yield* isHostWindows)
+      const environment = yield* HostProcess.Environment;
+      const shell = (yield* HostProcess.isWindows)
         ? { command: "cmd.exe", args: ["/d", "/s", "/c", command] }
         : { command: environment.SHELL ?? "/bin/sh", args: ["-lc", command] };
       const output = yield* processRunner
@@ -362,6 +352,9 @@ export const make = Effect.gen(function* () {
       const current = goal.current!;
       if (current.phase === "checking") {
         if (goal.status === "stopped") {
+          // Stop the process before retiring the durable check. A late passing
+          // result must not keep running after Stop or owner deletion.
+          yield* FiberMap.remove(checks, `${goal.id}:${goal.iteration}`);
           return yield* advance(thread, goal, "check", {
             type: "check_finished",
             result: {
@@ -376,9 +369,21 @@ export const make = Effect.gen(function* () {
           });
         }
         if (goal.status === "paused" && goal.statusReason === "check_error") return;
-        yield* FiberMap.run(checks, `${goal.id}:${goal.iteration}`, runCheck(thread, goal), {
-          onlyIfMissing: true,
-        });
+        yield* FiberMap.run(
+          checks,
+          `${goal.id}:${goal.iteration}`,
+          runCheck(thread, goal).pipe(
+            Effect.catchCause((cause) =>
+              Effect.logWarning("orchestration-v2.goal-loop.check-failed", {
+                threadId: thread.id,
+                cause,
+              }),
+            ),
+          ),
+          {
+            onlyIfMissing: true,
+          },
+        );
         return;
       }
 
@@ -451,7 +456,7 @@ export const make = Effect.gen(function* () {
       const progress = delegatedTaskProgress(records);
       const stillWorking =
         progress.state !== "result_available" ||
-        records.runs.some((run) => run.status === "queued");
+        records.runs.some((run) => run.status === "queued" && run.queueHeld !== true);
       const interrupting =
         goal.status === "stopped" ||
         current.timedOutAt != null ||
@@ -461,20 +466,23 @@ export const make = Effect.gen(function* () {
       if (stillWorking) {
         const liveRuns = records.runs.filter(isLiveRun);
         if (interrupting) {
-          if (liveRuns.length > 0) {
-            for (const run of liveRuns) {
-              yield* dispatch({
-                type: "run.interrupt",
-                commandId: commandId(thread, `${goal.iteration}:interrupt:${run.id}`),
-                threadId: current.childThreadId,
-                runId: run.id,
-                reason:
-                  current.timedOutAt != null
-                    ? "This goal iteration reached its time limit."
-                    : "Goal loop stopped this iteration.",
-                holdQueue: true,
-              });
-            }
+          if (
+            records.runs.some(
+              (run) =>
+                isLiveRun(run) ||
+                run.status === "waiting" ||
+                (run.status === "queued" && run.queueHeld !== true),
+            )
+          ) {
+            yield* dispatch({
+              type: "thread.stop",
+              commandId: commandId(thread, `${goal.iteration}:stop-child`),
+              threadId: current.childThreadId,
+              reason:
+                current.timedOutAt != null
+                  ? "This goal iteration reached its time limit."
+                  : "Goal loop stopped this iteration.",
+            });
             return;
           }
           // Nothing left to interrupt (only background work remains): close
@@ -486,7 +494,7 @@ export const make = Effect.gen(function* () {
               type: "message.dispatch",
               commandId: commandId(thread, `${goal.iteration}:user-message`),
               messageId: MessageId.make(
-                `goal-message:${current.childThreadId}:${bootMs}-${dispatchSequence}`,
+                `goal-message:${current.childThreadId}:${bootId}-${dispatchSequence}`,
               ),
               threadId: current.childThreadId,
               text: pendingMessages.map((message) => message.text).join("\n\n"),
@@ -523,7 +531,7 @@ export const make = Effect.gen(function* () {
                 type: "message.dispatch",
                 commandId: commandId(thread, `${goal.iteration}:wrap-up`),
                 messageId: MessageId.make(
-                  `goal-wrap-up:${current.childThreadId}:${bootMs}-${dispatchSequence}`,
+                  `goal-wrap-up:${current.childThreadId}:${bootId}-${dispatchSequence}`,
                 ),
                 threadId: current.childThreadId,
                 text: `Time check from T3 Code: this goal iteration will be stopped in about ${minutesLeft} minutes. Finish or checkpoint the current step, update the handoff file, call t3_goal_update with a short note, and end your turn. The next iteration continues from there.`,
@@ -578,7 +586,7 @@ export const make = Effect.gen(function* () {
       const goal = thread.goal;
       if (goal == null) return;
       if (goal.status !== "active") usageSamples.delete(goal.id);
-      if (thread.archivedAt !== null && isLiveGoal(goal)) {
+      if ((thread.archivedAt !== null || thread.deletedAt !== null) && isLiveGoal(goal)) {
         return yield* advance(thread, goal, "stopped:parent", {
           type: "stopped",
           reason: "parent_unavailable",
@@ -622,10 +630,10 @@ export const make = Effect.gen(function* () {
 
 // Due work is derived from goals persisted on threads, so a restart resumes
 // every loop without restoring timers.
-export const workerLive = Layer.effectDiscard(
+export const layer = Layer.effectDiscard(
   Effect.gen(function* () {
     const { sweep } = yield* make;
     const scheduler = yield* Scheduler.Scheduler;
     yield* scheduler.register("goal-loop", sweep());
   }),
-).pipe(Layer.provide(Scheduler.layer));
+);

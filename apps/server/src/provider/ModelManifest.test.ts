@@ -1,17 +1,16 @@
 import { assert, describe, it } from "@effect/vitest";
 import * as NodeServices from "@effect/platform-node/NodeServices";
-import { ProviderDriverKind, type ServerProviderModel } from "@t3tools/contracts";
+import { ProviderDriverKind } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Path from "effect/Path";
 import * as TestClock from "effect/testing/TestClock";
-import { HttpClient, HttpClientResponse } from "effect/unstable/http";
+import { HttpClient, HttpClientResponse } from "effect/http";
 
 import * as ServerConfig from "../config.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import * as ModelManifest from "./ModelManifest.ts";
-import { resolveProviderCompatibility } from "./providerCompatibility.ts";
 
 /**
  * Test policy: this file covers manifest machinery, not manifest contents.
@@ -20,110 +19,6 @@ import { resolveProviderCompatibility } from "./providerCompatibility.ts";
  * behavior or the provider-neutral resolver semantics change, and use
  * synthetic models for resolver coverage.
  */
-
-const CODEX = ProviderDriverKind.make("codex");
-const model = (overrides: Partial<ServerProviderModel>): ServerProviderModel => ({
-  slug: "gpt-test",
-  name: "GPT Test",
-  isCustom: false,
-  capabilities: null,
-  ...overrides,
-});
-
-describe("classifyModels", () => {
-  it("classifies qualified Codex families without changing their wire ids", () => {
-    const manifest: ModelManifest.ModelManifestData = {
-      version: 1,
-      currentModels: { codex: ["gpt-test"] },
-    };
-    const models = [
-      model({ slug: "openai.gpt-test", isLegacy: true }),
-      model({ slug: "openai.gpt-old" }),
-    ];
-    assert.deepStrictEqual(
-      ModelManifest.classifyModels(models, manifest, CODEX).map((entry) => [
-        entry.slug,
-        entry.isLegacy ?? false,
-      ]),
-      [
-        ["openai.gpt-test", false],
-        ["openai.gpt-old", true],
-      ],
-    );
-  });
-  it("flags non-current models, clears stale flags, and skips custom models", () => {
-    const manifest: ModelManifest.ModelManifestData = {
-      version: 1,
-      currentModels: { codex: ["current-a", "current-b"] },
-    };
-    const models = [
-      model({ slug: "current-a" }),
-      // Stale flag from a previous classification pass must be cleared.
-      model({ slug: "current-b", isLegacy: true }),
-      model({ slug: "old-model" }),
-      // Custom models are user-defined and never reclassified.
-      model({ slug: "my-own-model", isCustom: true }),
-    ];
-    assert.deepStrictEqual(
-      ModelManifest.classifyModels(models, manifest, CODEX).map((entry) => [
-        entry.slug,
-        entry.isLegacy ?? false,
-      ]),
-      [
-        ["current-a", false],
-        ["current-b", false],
-        ["old-model", true],
-        ["my-own-model", false],
-      ],
-    );
-  });
-});
-
-describe("applyManifestDefault", () => {
-  it("resolves the manifest default to the qualified live model", () => {
-    const manifest: ModelManifest.ModelManifestData = {
-      version: 1,
-      currentModels: {},
-      providers: { codex: { models: [], profiles: {}, defaults: { chat: "gpt-test" } } },
-    };
-    const models = [
-      model({ slug: "openai.gpt-old", isDefault: true }),
-      model({ slug: "openai.gpt-test" }),
-    ];
-    assert.strictEqual(
-      ModelManifest.applyManifestDefault(models, manifest, CODEX).find((entry) => entry.isDefault)
-        ?.slug,
-      "openai.gpt-test",
-    );
-  });
-  it("moves the default flag and its aliases to the manifest's chat default", () => {
-    const driver = ProviderDriverKind.make("antigravity");
-    const manifest: ModelManifest.ModelManifestData = {
-      version: 1,
-      currentModels: {},
-      providers: {
-        antigravity: {
-          defaults: { chat: "gemini-new" },
-          profiles: {},
-          models: [{ slug: "gemini-new", name: "New", status: "current" }],
-        },
-      },
-    };
-    const models = [
-      model({ slug: "gemini-old", isDefault: true, aliases: ["antigravity-default"] }),
-      model({ slug: "gemini-new" }),
-    ];
-    assert.deepStrictEqual(ModelManifest.applyManifestDefault(models, manifest, driver), [
-      model({ slug: "gemini-old" }),
-      model({ slug: "gemini-new", isDefault: true, aliases: ["antigravity-default"] }),
-    ]);
-    // The account does not offer the manifest default: keep the runtime's choice.
-    assert.deepStrictEqual(
-      ModelManifest.applyManifestDefault(models.slice(0, 1), manifest, driver),
-      models.slice(0, 1),
-    );
-  });
-});
 
 describe("resolveProviderCatalog", () => {
   it("resolves generic model presentation through a reusable profile", () => {
@@ -167,18 +62,16 @@ describe("resolveProviderCatalog", () => {
       ProviderDriverKind.make("synthetic"),
     );
     assert.deepStrictEqual(catalog?.models[0], {
-      model: {
-        slug: "model-next",
-        name: "Model Next",
-        aliases: ["next"],
-        badge: "new",
-        isCustom: false,
-        isDefault: true,
-        capabilities: manifest.providers!.synthetic!.profiles.standard!.capabilities!,
-      },
+      slug: "model-next",
+      name: "Model Next",
+      aliases: ["next"],
+      badge: "new",
+      status: "current",
+      capabilities: manifest.providers!.synthetic!.profiles.standard!.capabilities!,
       adapter: undefined,
       profileAdapter: { opaque: true },
     });
+    assert.strictEqual(catalog?.defaultChatModel, "model-next");
   });
 
   it("rejects invalid catalog references", () => {
@@ -334,13 +227,13 @@ const INVALID_REMOTE_MANIFESTS: ReadonlyArray<ModelManifest.ModelManifestData> =
   }),
 ];
 
-const httpClientLayer = (handler: () => Response) =>
+const layerHttpClient = (handler: () => Response) =>
   Layer.succeed(
     HttpClient.HttpClient,
     HttpClient.make((request) => Effect.succeed(HttpClientResponse.fromWeb(request, handler()))),
   );
 
-const serviceLayers = (input: {
+const layerService = (input: {
   readonly prefix: string;
   readonly response: () => Response;
   readonly settings?: Parameters<typeof ServerSettings.layerTest>[0];
@@ -348,7 +241,7 @@ const serviceLayers = (input: {
   ServerConfig.layerTest(process.cwd(), { prefix: input.prefix }).pipe(
     Layer.provideMerge(NodeServices.layer),
     Layer.provideMerge(ServerSettings.layerTest(input.settings ?? {})),
-    Layer.provideMerge(httpClientLayer(input.response)),
+    Layer.provideMerge(layerHttpClient(input.response)),
   );
 
 describe("ModelManifest service", () => {
@@ -374,7 +267,7 @@ describe("ModelManifest service", () => {
     }).pipe(
       Effect.scoped,
       Effect.provide(
-        serviceLayers({
+        layerService({
           prefix: "model-manifest-force-refresh-test",
           response: () => Response.json(fetchCount++ === 0 ? REMOTE_MANIFEST : updated),
         }),
@@ -396,7 +289,7 @@ describe("ModelManifest service", () => {
     }).pipe(
       Effect.scoped,
       Effect.provide(
-        serviceLayers({
+        layerService({
           prefix: "model-manifest-force-retry-test",
           response: () =>
             fetchCount++ === 1
@@ -419,7 +312,7 @@ describe("ModelManifest service", () => {
     }).pipe(
       Effect.scoped,
       Effect.provide(
-        serviceLayers({
+        layerService({
           prefix: "model-manifest-force-initial-retry-test",
           response: () =>
             fetchCount++ === 0
@@ -443,7 +336,7 @@ describe("ModelManifest service", () => {
     }).pipe(
       Effect.scoped,
       Effect.provide(
-        serviceLayers({
+        layerService({
           prefix: "model-manifest-fetch-test",
           response: () => Response.json(REMOTE_MANIFEST),
         }),
@@ -467,7 +360,7 @@ describe("ModelManifest service", () => {
     }).pipe(
       Effect.scoped,
       Effect.provide(
-        serviceLayers({
+        layerService({
           prefix: "model-manifest-stale-fetch-test",
           response: () => Response.json(remote),
         }),
@@ -482,7 +375,7 @@ describe("ModelManifest service", () => {
     }).pipe(
       Effect.scoped,
       Effect.provide(
-        serviceLayers({
+        layerService({
           prefix: "model-manifest-malformed-test",
           response: () => Response.json({ version: 999, nonsense: true }),
         }),
@@ -509,7 +402,7 @@ describe("ModelManifest service", () => {
     }).pipe(
       Effect.scoped,
       Effect.provide(
-        serviceLayers({
+        layerService({
           prefix: "model-manifest-last-good-test",
           response: () => Response.json(responses[responseIndex]),
         }),
@@ -549,7 +442,7 @@ describe("ModelManifest service", () => {
     }).pipe(
       Effect.scoped,
       Effect.provide(
-        serviceLayers({
+        layerService({
           prefix: "model-manifest-newer-bundle-test",
           response: () => Response.json(REMOTE_MANIFEST),
         }),
@@ -562,7 +455,7 @@ describe("ModelManifest service", () => {
       let fetchCount = 0;
       const service = yield* ModelManifest.make.pipe(
         Effect.provide(
-          httpClientLayer(() => {
+          layerHttpClient(() => {
             fetchCount += 1;
             return Response.json(REMOTE_MANIFEST);
           }),
@@ -574,7 +467,7 @@ describe("ModelManifest service", () => {
     }).pipe(
       Effect.scoped,
       Effect.provide(
-        serviceLayers({
+        layerService({
           prefix: "model-manifest-optout-test",
           response: () => Response.json(REMOTE_MANIFEST),
           settings: { enableProviderUpdateChecks: false },
@@ -582,62 +475,6 @@ describe("ModelManifest service", () => {
       ),
     ),
   );
-});
-
-// TEMPORARY V2 preview stopgap; remove with `withPreviewCompatibility` (#2829).
-describe("compatibility policy by release channel", () => {
-  const OPENCODE = ProviderDriverKind.make("opencode");
-  // Main's OpenCode policy (#14198): stable and nightly have no OpenCode 2 runtime.
-  const remote: ModelManifest.ModelManifestData = {
-    ...REMOTE_MANIFEST,
-    compatibility: [
-      {
-        driver: OPENCODE,
-        t3CodeRange: ">=0.0.42",
-        recommendedRange: ">=1.14.19 <2.0.0",
-        recommendedVersion: "1.14.19",
-        ranges: [
-          { range: ">=2.0.0", status: "broken" },
-          { range: ">=1.14.19 <2.0.0", status: "supported" },
-          { range: "<1.14.19", status: "broken" },
-        ],
-      },
-    ],
-  };
-
-  for (const [channel, t3CodeVersion, expected, openCode2Status] of [
-    [
-      "preview builds keep the bundled policy",
-      "0.0.44-preview.20260929.1",
-      { ...remote, compatibility: ModelManifest.BUNDLED_MODEL_MANIFEST.compatibility },
-      "supported",
-    ],
-    ["stable builds adopt the fetched policy", "0.0.44", remote, "broken"],
-    ["nightly builds adopt the fetched policy", "0.0.44-nightly.20260929.1", remote, "broken"],
-  ] as const) {
-    it.live(channel, () =>
-      Effect.gen(function* () {
-        const openCode2 = (manifest: ModelManifest.ModelManifestData) =>
-          resolveProviderCompatibility(manifest.compatibility, OPENCODE, "2.0.18", t3CodeVersion)
-            ?.status;
-        const refreshed = yield* (yield* ModelManifest.makeForVersion(t3CodeVersion)).refresh;
-        assert.deepStrictEqual(refreshed, expected);
-        assert.strictEqual(openCode2(refreshed), openCode2Status);
-
-        // A restart reads the fetched manifest back from the disk cache.
-        const rebooted = yield* (yield* ModelManifest.makeForVersion(t3CodeVersion)).current;
-        assert.deepStrictEqual(rebooted, expected);
-      }).pipe(
-        Effect.scoped,
-        Effect.provide(
-          serviceLayers({
-            prefix: "model-manifest-channel-compatibility-test",
-            response: () => Response.json(remote),
-          }),
-        ),
-      ),
-    );
-  }
 });
 
 it.effect("caches valid compatibility policies and keeps them after a malformed refresh", () => {
@@ -664,7 +501,7 @@ it.effect("caches valid compatibility policies and keeps them after a malformed 
   }).pipe(
     Effect.scoped,
     Effect.provide(
-      serviceLayers({
+      layerService({
         prefix: "model-manifest-compatibility-test",
         response: () =>
           Response.json(

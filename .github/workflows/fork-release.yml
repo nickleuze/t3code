@@ -9,9 +9,6 @@ name: Fork release
 on:
   push:
     branches: [nick/v2]
-    # The update scripts are not part of the app.
-    paths-ignore:
-      - "fork/**"
   workflow_dispatch:
 
 permissions:
@@ -22,8 +19,16 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  checks:
+    if: github.repository == 'nickleuze/t3code' && github.ref == 'refs/heads/nick/v2'
+    uses: ./.github/workflows/fork-ci.yml
+    permissions:
+      contents: read
+      pull-requests: read
+
   release:
-    if: github.repository == 'nickleuze/t3code'
+    needs: checks
+    if: github.repository == 'nickleuze/t3code' && github.ref == 'refs/heads/nick/v2' && needs.checks.result == 'success'
     name: Build and publish macOS arm64
     runs-on: macos-15
     timeout-minutes: 75
@@ -31,10 +36,21 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v6
         with:
+          ref: ${{ github.sha }}
           sparse-checkout: |
             /*
             !/.repos/
           sparse-checkout-cone-mode: false
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version-file: package.json
+
+      - name: Verify exact checked commit before building
+        env:
+          CI_RESULT: ${{ needs.checks.result }}
+          CI_CHECKED_SHA: ${{ needs.checks.outputs.checked-sha }}
+        run: node fork/release-gate.mjs release
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
@@ -103,6 +119,12 @@ jobs:
           printf '%s' "$FORK_MAC_SIGNING_P12" | base64 --decode > "$p12"
           FORK_SIGNING_P12="$p12" fork/sign-release.sh "release/T3-Code-${VERSION}-arm64.zip"
           rm -f "$p12"
+
+      - name: Recheck exact checked commit before publication
+        env:
+          CI_RESULT: ${{ needs.checks.result }}
+          CI_CHECKED_SHA: ${{ needs.checks.outputs.checked-sha }}
+        run: node fork/release-gate.mjs release
 
       - name: Publish release
         env:

@@ -12,6 +12,23 @@ becomes an attachment when inserting it would exceed the message limit. On a
 hardware keyboard, use `Cmd+Shift+V` on Apple devices or `Ctrl+Shift+V` elsewhere
 to keep a large paste editable in the composer instead.
 
+## Formatting
+
+The composer writes Markdown and shows it styled as you type. Markers such as
+`**` stay in the text and show beside the styled words when your cursor is on
+them. Lines starting with `- `, `1. `, `- [ ] `, `> `, `# ` or `---` become lists,
+task lists, quotes, headings and rules; ` ``` ` followed by Enter opens a code
+block. What you typed is what the agent receives, markers and numbering
+included, and `#1234` without a space still looks up a pull request.
+
+Enter sends. In a list or quote, **Shift+Enter** continues it, and Shift+Enter
+on an empty line leaves it; **Tab** nests a list item. In a code block, Enter
+starts a new line at the current indentation, **Tab** and **Shift+Tab** indent
+the selected lines, and a closing ` ``` ` followed by Enter, or two blank lines
+at the end, leave the block. **Backspace** at the start of a code block turns it
+back into plain lines. Choose the language in a code block's corner to change
+it. Very large code blocks are shown without syntax highlighting.
+
 ## Attach files
 
 Attach up to 100 files per message. Each image can be up to 10 MiB, with at most
@@ -195,52 +212,16 @@ provider supports it. Web and desktop also offer compaction from the context met
 
 ## Goals
 
-T3 Code uses `/t3-goal`; `/goal` remains available for provider-native commands.
+With Codex and Claude, send `/goal` followed by what "done" means, for example
+`/goal all tests in packages/api pass`. The agent keeps working across turns
+until it judges the goal met. The thread shows **Goal** while it works, and a
+row above the composer shows the goal and its progress.
 
-Send `/t3-goal`, optionally followed by what you want done, to have the agent keep
-working until it is finished. Each iteration starts in a fresh thread in the same
-workspace, so long tasks don't fill up one conversation, and can delegate work to
-subagents.
-
-You don't fill in a form. The thread's agent drafts the goal from your conversation
-and shows it above the composer as a proposed goal with **Start goal**, **Edit**,
-and a dismiss button. Agents also propose goals on their own when a task clearly
-needs more than one session, or when you ask for one in plain words ("make this a
-goal"). Nothing runs until you click **Start goal**.
-
-Iterations don't see the conversation the goal came from, so a goal carries what
-they need. **Edit** opens the form with the agent's draft:
-
-- **Done when**: what finished looks like. Every iteration works toward it, and
-  the agent says when the goal is complete or blocked.
-- **Background**: the decisions, constraints and plan from your conversation that
-  every iteration should know.
-- **Pre-approved actions**: what the agent may do without asking, such as
-  committing and opening pull requests. For anything else it asks and waits.
-- **Completion check**: a command such as `pnpm test`. The goal only completes
-  once it passes; otherwise the failure output goes to the next iteration.
-- **Burn guard**: pauses the goal when one of the provider's usage limits climbs
-  faster than you allow, by default 20% within an hour. It watches the whole
-  account, so other threads count toward it.
-- **Minutes per iteration**: shortly before the limit the agent is asked to wrap
-  up, and at the limit the next iteration takes over from its notes.
-
-Iterations keep a handoff file in the workspace with the detailed state, so the
-next one can pick up without redoing checks.
-
-While a goal runs, its thread is how you talk to it. A message there reaches the
-running iteration, waits for the next one, or, if the goal is blocked or paused,
-resumes it with your message. The goal also pauses after several iterations in a
-row with no progress and when an iteration fails, and waits out usage limits
-before continuing by itself. You get a notification when it needs you or
-finishes.
-
-Iterations nest under the goal's row in the sidebar: the running one first, then
-the most recent. The goal's row shows which iteration is running; on a collapsed row, click the
-iteration count to unfold them all. The banner above the composer has **Pause**, **Resume**, and **Stop**,
-plus **Answer** when an iteration asks a question. The thread details panel lists
-every iteration with its notes and check results. Goals start from web and
-desktop, on threads that already exist.
+- `/goal` alone shows the current goal. `/goal clear` removes it.
+- Codex also supports `/goal pause` and `/goal resume`. Stopping a Codex goal
+  pauses it.
+- Stopping Claude ends the current turn, but the goal stays set. Claude checks it
+  again at the end of your next message.
 
 ## Context in your message
 
@@ -322,6 +303,9 @@ styles, or images from neighboring files.
 On web and desktop, HTML and PDF files open as rendered pages. Switch an HTML
 file to source view to read its markup; a link to a specific line opens source
 automatically. HTML previews cannot access your T3 Code session.
+
+The file viewer recognizes images, HTML, and PDF files by their filename extension,
+including filenames or folders containing `#` or `?`.
 
 On mobile, select a PDF attachment or link to open it. iOS uses the native viewer;
 Android opens a compatible installed file viewer.

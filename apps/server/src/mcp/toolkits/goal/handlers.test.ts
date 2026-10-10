@@ -4,7 +4,6 @@ import {
   type OrchestrationV2ServerCommand,
   type OrchestrationV2ThreadShell,
   ProviderInstanceId,
-  RunId,
   ThreadId,
 } from "@t3tools/contracts";
 import { describe, expect, it } from "@effect/vitest";
@@ -12,11 +11,15 @@ import * as Crypto from "effect/Crypto";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Ref from "effect/Ref";
-import * as Stream from "effect/Stream";
+import { McpServer, McpSchema } from "effect/ai";
+import * as McpHttpServer from "../../McpHttpServer.ts";
 
 import * as ThreadManagementService from "../../../orchestration-v2/ThreadManagementService.ts";
 import * as McpInvocationContext from "../../McpInvocationContext.ts";
-import { GoalHandlersLive } from "./handlers.ts";
+import * as GoalHandlers from "./handlers.ts";
+import * as GoalMcpService from "../../GoalMcpService.ts";
+import * as McpToolAccess from "../../McpToolAccess.ts";
+import { liveThreadShell } from "../../McpToolAccess.testkit.ts";
 import { GoalToolkit } from "./tools.ts";
 
 const PARENT = ThreadId.make("thread:parent");
@@ -29,14 +32,10 @@ const testCrypto = Crypto.make({
   digest: (_algorithm, data) => Effect.succeed(data),
 });
 
-const shell = (fields: Partial<OrchestrationV2ThreadShell>) =>
-  ({
-    providerInstanceId: CODEX,
-    archivedAt: null,
-    deletedAt: null,
-    activeRunId: RunId.make("run:child"),
-    ...fields,
-  }) as OrchestrationV2ThreadShell;
+const shell = (fields: Partial<OrchestrationV2ThreadShell>) => ({
+  ...liveThreadShell(fields.id ?? CHILD),
+  ...fields,
+});
 
 const childShell = (callerId = CHILD) =>
   shell({
@@ -47,7 +46,8 @@ const childShell = (callerId = CHILD) =>
 const parentShell = (currentChildThreadId: ThreadId | null) =>
   shell({
     id: PARENT,
-    goal: {
+    goal: { objective: "Native provider task", status: "active", tokensUsed: 10 },
+    t3Goal: {
       id: GOAL_ID,
       objective: "Ship it",
       status: "active",
@@ -82,25 +82,58 @@ const makeHarness = Effect.fn("makeGoalToolkitHarness")(function* (options: {
     Layer.succeed(Crypto.Crypto, testCrypto),
   );
   const toolkit = yield* GoalToolkit.pipe(
-    Effect.provide(GoalHandlersLive.pipe(Layer.provide(dependencies))),
+    Effect.provide(
+      McpToolAccess.HandlersLayer.layer(GoalHandlers.layer).pipe(
+        Layer.provide(GoalMcpService.layer),
+        Layer.provide(dependencies),
+      ),
+    ),
   );
+  const server = yield* McpServer.McpServer.pipe(
+    Effect.provide(
+      McpHttpServer.layerGoalToolkit.pipe(
+        Layer.provideMerge(McpServer.McpServer.layer),
+        Layer.provide(dependencies),
+      ),
+    ),
+  );
+  const client = McpSchema.McpServerClient.of({
+    clientId: 1,
+    protocolVersion: "2025-06-18",
+    clientCapabilities: {},
+    clientInfo: { name: "goal-test", version: "1" },
+    initializePayload: {
+      protocolVersion: "2025-06-18",
+      capabilities: {},
+      clientInfo: { name: "goal-test", version: "1" },
+    },
+    getClient: Effect.die("unused"),
+  });
   const call = <Name extends keyof typeof GoalToolkit.tools>(
     name: Name,
     params: Parameters<typeof toolkit.handle<Name>>[1],
+    scopeOverrides: Partial<McpInvocationContext.McpInvocationScope> = {},
   ) =>
-    toolkit.handle(name, params).pipe(
-      Stream.unwrap,
-      Stream.runCollect,
-      Effect.map((chunk) => chunk.at(-1)!.result),
+    server.callTool({ name, arguments: params }).pipe(
+      Effect.map(
+        (result) =>
+          result.structuredContent ?? JSON.parse((result.content[0] as { text: string }).text),
+      ),
+      Effect.provideService(McpSchema.McpServerClient, client),
       Effect.provideService(McpInvocationContext.McpInvocationContext, {
         environmentId: EnvironmentId.make("environment-1"),
-        threadId: options.caller.id,
-        providerSessionId: "provider-session-1",
-        providerInstanceId: CODEX,
+        requestNamespace: "provider-session-1",
+        thread: {
+          threadId: options.caller.id,
+          providerSessionId: "provider-session-1",
+          providerInstanceId: CODEX,
+        },
+        client: undefined,
         capabilities: new Set<McpInvocationContext.McpCapability>(["orchestration"]),
         issuedAt: 1,
+        ...scopeOverrides,
       }),
-      Effect.provide(dependencies),
+      Effect.provide(GoalMcpService.layer.pipe(Layer.provideMerge(dependencies))),
     );
   return { commands, call };
 });
@@ -147,3 +180,92 @@ describe("goal toolkit handlers", () => {
     }),
   );
 });
+
+it.effect(
+  "allows reports in restricted/plan mode but refuses ended, missing-capability and client callers",
+  () =>
+    Effect.gen(function* () {
+      const restricted = yield* makeHarness({
+        caller: { ...childShell(), runtimeMode: "approval-required", interactionMode: "plan" },
+        parent: parentShell(CHILD),
+      });
+      expect(yield* restricted.call("t3_goal_update", { note: "Progress" })).toEqual({
+        iteration: 2,
+        recorded: true,
+      });
+      expect(
+        yield* restricted.call("t3_goal_update", { note: "Denied" }, { capabilities: new Set() }),
+      ).toMatchObject({ code: "capability_denied" });
+      expect(
+        yield* restricted.call(
+          "t3_goal_update",
+          { note: "Outside" },
+          {
+            thread: undefined,
+            client: { sessionId: "client", label: "Outside", access: "full-access" },
+          },
+        ),
+      ).toMatchObject({ code: "thread_credential_required" });
+      const ended = yield* makeHarness({
+        caller: { ...childShell(), activeRunId: null },
+        parent: parentShell(CHILD),
+      });
+      expect(
+        yield* ended.call("t3_goal_complete", { status: "complete", summary: "Late" }),
+      ).toMatchObject({ code: "parent_not_active" });
+      expect(yield* Ref.get(restricted.commands)).toHaveLength(1);
+      expect(yield* Ref.get(ended.commands)).toHaveLength(0);
+    }),
+);
+
+it.effect("proposes only descriptive state and rejects blank reports/proposals", () =>
+  Effect.gen(function* () {
+    const harness = yield* makeHarness({ caller: shell({ id: PARENT }), parent: null });
+    expect(
+      yield* harness.call("t3_goal_propose", {
+        objective: "  Ship  ",
+        doneWhen: "  Tests pass  ",
+        background: "context",
+        preApprovedActions: "Local edits",
+        minutesPerIteration: 20,
+      }),
+    ).toEqual({ proposed: true });
+    expect(yield* Ref.get(harness.commands)).toMatchObject([
+      {
+        type: "thread.goal.propose",
+        threadId: PARENT,
+        objective: "Ship",
+        doneWhen: "Tests pass",
+        permissions: "Local edits",
+        iterationTimeoutMins: 20,
+        checkCommand: null,
+      },
+    ]);
+    expect(yield* harness.call("t3_goal_update", { note: "   " })).toMatchObject({
+      code: "invalid_request",
+    });
+    expect(
+      yield* harness.call("t3_goal_propose", { objective: "   ", doneWhen: "Pass" }),
+    ).toMatchObject({ code: "invalid_request" });
+    expect(yield* Ref.get(harness.commands)).toHaveLength(1);
+  }),
+);
+
+it.effect("does not treat a provider-native goal as the T3 owner and refuses deleted owners", () =>
+  Effect.gen(function* () {
+    for (const parent of [
+      shell({
+        id: PARENT,
+        t3Goal: null,
+        goal: { objective: "Native provider task", status: "active", tokensUsed: 10 },
+      }),
+      { ...parentShell(CHILD), deletedAt: parentShell(CHILD).createdAt },
+    ]) {
+      const harness = yield* makeHarness({ caller: childShell(), parent });
+      expect(
+        yield* harness.call("t3_goal_complete", { status: "complete", summary: "Done" }),
+      ).toMatchObject({ code: "invalid_request" });
+      expect(yield* Ref.get(harness.commands)).toHaveLength(0);
+    }
+  }),
+);

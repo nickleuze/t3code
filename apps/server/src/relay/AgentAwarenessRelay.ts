@@ -11,7 +11,7 @@ import {
   type RelayAgentActivityPublishProofPayload,
   type RelayAgentActivityState,
 } from "@t3tools/contracts/relay";
-import { projectThreadAwarenessV2 } from "@t3tools/shared/agentAwareness";
+import { projectThreadAwarenessV2, t3GoalOwnsActivity } from "@t3tools/shared/agentAwareness";
 import { turnItemUpdateCanEndBackgroundWork } from "@t3tools/shared/orchestrationV2PendingBackgroundWork";
 import { makeDrainableWorker } from "@t3tools/shared/DrainableWorker";
 import { withRelayClientTracing } from "@t3tools/shared/relayTracing";
@@ -32,10 +32,10 @@ import * as Queue from "effect/Queue";
 import * as Ref from "effect/Ref";
 import type * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
-import * as FetchHttpClient from "effect/unstable/http/FetchHttpClient";
-import * as HttpClient from "effect/unstable/http/HttpClient";
-import * as HttpClientRequest from "effect/unstable/http/HttpClientRequest";
-import * as HttpApiClient from "effect/unstable/httpapi/HttpApiClient";
+import * as FetchHttpClient from "effect/http/FetchHttpClient";
+import * as HttpClient from "effect/http/HttpClient";
+import * as HttpClientRequest from "effect/http/HttpClientRequest";
+import * as HttpApiClient from "effect/http-api/HttpApiClient";
 
 import * as ServerSecretStore from "../auth/ServerSecretStore.ts";
 import {
@@ -330,6 +330,11 @@ function resolveAgentAwarenessRelayPublishSnapshot(input: {
 }
 
 function terminalWorkSinceStart(thread: OrchestrationV2ThreadShell, startedAt: number): boolean {
+  if (thread.t3Goal?.status === "complete" && t3GoalOwnsActivity(thread)) {
+    // Old summaries have no transition time; only an observed live state can
+    // establish their completion. Thread.updatedAt includes unrelated visits.
+    return thread.t3Goal.updatedAt != null && Date.parse(thread.t3Goal.updatedAt) > startedAt;
+  }
   return (
     thread.latestRunCompletedAt != null &&
     DateTime.toEpochMillis(thread.latestRunCompletedAt) > startedAt
@@ -471,6 +476,8 @@ export const make = Effect.gen(function* () {
     }
     const environmentId = yield* serverEnvironment.getEnvironmentId;
 
+    // Only the relay interaction (signing the proof and the call) is exported;
+    // the reads that decide what to publish are the user's local work.
     const publishState = (input: {
       readonly projectId: string | null;
       readonly state: RelayAgentActivityState | null;
@@ -516,12 +523,23 @@ export const make = Effect.gen(function* () {
           ok: response.ok,
           deliveries: deliveryStats(response.deliveries),
         });
-      });
+      }).pipe(Effect.withSpan("relay.agent_activity.publish"), withRelayClientTracing);
 
     // Per-thread shell read: this publish runs for every activity-relevant
     // domain event, so materializing the full shell here would make the cost
     // of one thread's activity proportional to how many threads exist.
     const threadShell = yield* threads.getThreadShell(threadId);
+    if (
+      (threadShell?.lineage.relationshipToParent === "subagent" ||
+        threadShell?.goalIteration != null) &&
+      !(yield* Ref.get(publishedStateByThreadRef)).has(threadId)
+    ) {
+      // Subagents and goal iterations never project activity, so there is no row to clear.
+      // Their events would otherwise publish a tombstone each, and every
+      // publish re-delivers the user's aggregate. Checked before the archive
+      // filter so archiving one stays quiet too.
+      return;
+    }
     const thread =
       threadShell === null || threadShell.archivedAt !== null
         ? Option.none<OrchestrationV2ThreadShell>()
@@ -649,7 +667,6 @@ export const make = Effect.gen(function* () {
         }).pipe(Effect.andThen(schedulePublishRetry(threadId)));
       }),
       Effect.withSpan("AgentAwarenessRelay.publishThread"),
-      withRelayClientTracing,
     );
   });
 

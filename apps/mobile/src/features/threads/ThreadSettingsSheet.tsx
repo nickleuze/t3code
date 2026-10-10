@@ -1,3 +1,4 @@
+import { createV5StackNavigator as createNativeStackNavigator } from "../../native/createV5StackNavigator";
 import type {
   EnvironmentId,
   ModelSelection,
@@ -15,12 +16,9 @@ import {
   getProviderOptionDescriptors,
 } from "@t3tools/shared/model";
 import { useNavigation, useRoute, type RouteProp } from "@react-navigation/native";
-import {
-  createNativeStackNavigator,
-  type NativeStackNavigationProp,
-} from "@react-navigation/native-stack";
+import { type NativeStackNavigationProp } from "@react-navigation/native-stack";
 import * as Haptics from "expo-haptics";
-import { AsyncResult } from "effect/unstable/reactivity";
+import { AsyncResult } from "effect/reactivity";
 import {
   createContext,
   use,
@@ -75,8 +73,8 @@ import {
 import {
   createNativeMailSearchToolbarItem,
   NATIVE_MAIL_SEARCH_TOOLBAR_CONTENT_INSET,
-  NATIVE_MAIL_SEARCH_TOOLBAR_SUPPORTED,
 } from "../layout/native-mail-search-toolbar";
+import { useNativeMailSearchToolbar } from "../../native/use-native-mail-search-toolbar";
 import { ModelRow, ChoiceRow } from "./ThreadSettingsRows";
 import {
   compatibleRuntimeModeForChoices,
@@ -92,6 +90,7 @@ import {
   providerSectionIsCollapsed,
   toggleModelFavorite,
 } from "./thread-settings-sheet-state";
+import { formatProviderUpdateRequiredNotice } from "@t3tools/client-runtime/providerUpdateRequiredModels";
 
 /**
  * Everyday harnesses start expanded; every other provider (OpenRouter catalogs
@@ -192,7 +191,7 @@ function DisclosureRow(props: {
       accessibilityRole="button"
       onPress={props.onPress}
       className={cn(
-        "min-h-11 flex-row items-center gap-2 bg-card px-4 py-2 active:bg-subtle android:min-h-14",
+        "min-h-11 flex-row items-center gap-2 bg-grouped-card px-4 py-2 active:bg-subtle android:min-h-14",
         !props.isLast && "border-b border-border-subtle",
       )}
     >
@@ -222,7 +221,7 @@ function SwitchRow(props: {
   return (
     <View
       className={cn(
-        "min-h-11 flex-row items-center justify-between bg-card px-4 py-1",
+        "min-h-11 flex-row items-center justify-between bg-grouped-card px-4 py-1",
         !props.isLast && "border-b border-border-subtle",
       )}
     >
@@ -245,6 +244,7 @@ type ThreadSettingsSessionProps = {
   readonly providerInstanceId?: ProviderInstanceId;
   readonly providerGroups: ReadonlyArray<ProviderGroup>;
   readonly selectedModel: ModelSelection | null;
+  readonly reportedModelSelection?: ModelSelection | null;
   readonly onSelectModel: (option: ModelOption) => void;
   readonly optionDescriptors: ReadonlyArray<ProviderOptionDescriptor>;
   readonly onUpdateOptionSelections: (selections: ReadonlyArray<ProviderOptionSelection>) => void;
@@ -304,6 +304,8 @@ type ThreadSettingsSessionValue = {
   readonly runtimeModeChoices: ReturnType<typeof runtimeModeChoicesForSupportedModes>;
   readonly onUpdateRuntimeMode: (mode: RuntimeMode) => void;
   readonly displayedDescriptors: ReadonlyArray<ProviderOptionDescriptor>;
+  readonly displayedModelSelection: ModelSelection | null;
+  readonly reportedModelSelection: ModelSelection | null;
   readonly providerExpansionOverrides: ReadonlySet<string>;
   readonly hasLegacyModels: boolean;
   readonly pendingModel: ModelOption | null;
@@ -476,6 +478,8 @@ function ThreadSettingsSessionProvider(
       runtimeModeChoices,
       onUpdateRuntimeMode: props.onUpdateRuntimeMode,
       displayedDescriptors,
+      displayedModelSelection: pendingModel?.selection ?? props.selectedModel,
+      reportedModelSelection: pendingModel ? null : (props.reportedModelSelection ?? null),
       favoriteKeys,
       favoritesLoaded,
       providerExpansionOverrides,
@@ -507,6 +511,8 @@ function ThreadSettingsSessionProvider(
       isApplied,
       isDisplayed,
       props.environmentId,
+      props.selectedModel,
+      props.reportedModelSelection,
       props.providerInstanceId,
       pendingModel,
       pressModel,
@@ -559,6 +565,11 @@ type ThreadSettingsCatalogItem =
       readonly option: ModelOption;
       readonly isFirst: boolean;
       readonly isLast: boolean;
+    }
+  | {
+      readonly kind: "notice";
+      readonly key: string;
+      readonly text: string;
     }
   | {
       readonly kind: "empty";
@@ -652,7 +663,12 @@ function useThreadSettingsCatalogItems(
           ),
           session.favoriteKeys,
         );
-        if (visibleModels.length === 0) {
+        // Favorites list only selectable models, so it never explains gated ones.
+        const updateRequiredNotice =
+          group.updateRequired && session.providerFilter !== FAVORITES_PROVIDER_FILTER
+            ? formatProviderUpdateRequiredNotice(group.updateRequired, session.searchQuery)
+            : null;
+        if (visibleModels.length === 0 && !updateRequiredNotice) {
           return [];
         }
         const isPrimary = driver !== undefined && PRIMARY_PROVIDER_DRIVERS.has(driver);
@@ -690,6 +706,15 @@ function useThreadSettingsCatalogItems(
             isFirst: index === 0,
             isLast: index === provider.models.length - 1,
           })),
+          ...(!collapsed && updateRequiredNotice
+            ? [
+                {
+                  kind: "notice" as const,
+                  key: `notice:${group.providerKey}`,
+                  text: updateRequiredNotice,
+                },
+              ]
+            : []),
         ];
       }),
     [
@@ -717,17 +742,17 @@ function ThreadSettingsOptionsItem(props: {
         .get(session.environmentId)
         ?.providers.find((provider) => provider.instanceId === session.providerInstanceId) ?? null)
     : null;
-  const bottomToolbarInset =
-    Platform.OS === "ios" && NATIVE_MAIL_SEARCH_TOOLBAR_SUPPORTED
-      ? NATIVE_MAIL_SEARCH_TOOLBAR_CONTENT_INSET
-      : 0;
+  const usesNativeMailSearchToolbar = useNativeMailSearchToolbar();
+  const bottomToolbarInset = usesNativeMailSearchToolbar
+    ? NATIVE_MAIL_SEARCH_TOOLBAR_CONTENT_INSET
+    : 0;
 
   return (
     <View style={{ paddingBottom: insets.bottom + bottomToolbarInset + 12 }}>
       <ChatGptSharingStatus provider={selectedProvider} />
       <Text className="px-5 pb-2 pt-2 text-sm font-t3-medium text-foreground-muted">Options</Text>
       <Animated.View
-        className="mx-4 overflow-hidden rounded-2xl bg-card"
+        className="mx-4 overflow-hidden rounded-2xl bg-grouped-card"
         layout={THREAD_SETTINGS_OPTIONS_LAYOUT_TRANSITION}
       >
         {session.displayedDescriptors.map((descriptor) => {
@@ -743,7 +768,11 @@ function ThreadSettingsOptionsItem(props: {
               >
                 <DisclosureRow
                   label={descriptor.label}
-                  value={getProviderOptionCurrentLabel(descriptor)}
+                  value={getProviderOptionCurrentLabel(
+                    descriptor,
+                    session.displayedModelSelection,
+                    session.reportedModelSelection,
+                  )}
                   onPress={() => props.onOpenSubmenu({ kind: "descriptor", id: descriptor.id })}
                 />
               </Animated.View>
@@ -782,7 +811,7 @@ function ThreadSettingsOptionsItem(props: {
           <Text className="px-5 pb-2 pt-7 text-sm font-t3-medium text-foreground-muted">
             Catalog
           </Text>
-          <View className="mx-4 overflow-hidden rounded-2xl bg-card">
+          <View className="mx-4 overflow-hidden rounded-2xl bg-grouped-card">
             <SwitchRow
               isLast
               label="Legacy models"
@@ -844,6 +873,8 @@ function ThreadSettingsMainContent(props: {
             option={item.option}
           />
         );
+      } else if (item.kind === "notice") {
+        content = <Text className="mx-8 mt-2 text-xs text-foreground-muted">{item.text}</Text>;
       } else if (item.kind === "empty") {
         content = (
           <View className="items-center px-8 py-14">
@@ -997,7 +1028,13 @@ function ThreadSettingsChoiceContent(props: {
               id: choice.id,
               label: choice.label,
               description: undefined,
-              selected: choice.id === getProviderOptionCurrentValue(activeDescriptor),
+              selected:
+                choice.id ===
+                getProviderOptionCurrentValue(
+                  activeDescriptor,
+                  session.displayedModelSelection,
+                  session.reportedModelSelection,
+                ),
               onPress: () => {
                 void Haptics.selectionAsync();
                 session.applyOptionChange(activeDescriptor.id, choice.id);
@@ -1027,7 +1064,7 @@ function ThreadSettingsChoiceContent(props: {
       contentInsetAdjustmentBehavior="automatic"
       showsVerticalScrollIndicator={false}
     >
-      <View className="overflow-hidden rounded-2xl bg-card">
+      <View className="overflow-hidden rounded-2xl bg-grouped-card">
         {submenuContent.rows.map((row, index) => (
           <ChoiceRow
             key={row.id}
@@ -1070,7 +1107,7 @@ function ThreadSettingsModelsScreen() {
   const session = useThreadSettingsSession();
   const presentation = useThreadSettingsPickerPresentation();
   const navigation = useNavigation<NativeStackNavigationProp<ThreadSettingsPickerStackParams>>();
-  const usesNativeMailSearchToolbar = Platform.OS === "ios" && NATIVE_MAIL_SEARCH_TOOLBAR_SUPPORTED;
+  const usesNativeMailSearchToolbar = useNativeMailSearchToolbar();
   const hasCustomCatalogFilter = session.providerFilter !== null || session.showLegacy;
   const commitAndClose = useCallback(() => {
     if (!session.commitPendingModel()) return;

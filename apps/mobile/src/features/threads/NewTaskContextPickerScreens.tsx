@@ -1,7 +1,8 @@
 import { MaterialListRow } from "../../components/MaterialListRow";
 import type { EnvironmentProject } from "@t3tools/client-runtime/state/shell";
+import { shouldCheckoutNewTaskBranch } from "./new-task-context-presentation";
 import type { VcsRef } from "@t3tools/client-runtime/state/vcs";
-import { resolveEnvironmentMachineKind } from "@t3tools/contracts";
+import { AuthSourceControlWriteScope, resolveEnvironmentMachineKind } from "@t3tools/contracts";
 import { LegendList } from "@legendapp/list/react-native";
 import {
   isAtomCommandInterrupted,
@@ -30,13 +31,14 @@ import { ThemedSwitch } from "../../components/ThemedSwitch";
 import { cn } from "../../lib/cn";
 import { NativeHeaderToolbar, NativeStackScreenOptions } from "../../native/StackHeader";
 import { useServerConfigs } from "../../state/entities";
+import { useEnvironmentScope } from "../../state/session";
 import { useAtomCommand } from "../../state/use-atom-command";
 import { vcsEnvironment } from "../../state/vcs";
 import {
   createNativeMailSearchToolbarItem,
   NATIVE_MAIL_SEARCH_TOOLBAR_CONTENT_INSET,
-  NATIVE_MAIL_SEARCH_TOOLBAR_SUPPORTED,
 } from "../layout/native-mail-search-toolbar";
+import { useNativeMailSearchToolbar } from "../../native/use-native-mail-search-toolbar";
 import { branchBadgeLabel, useNewTaskFlow } from "./new-task-flow-provider";
 import { checkoutNewTaskBranch } from "./checkout-new-task-branch";
 
@@ -52,6 +54,7 @@ function SelectionRow(props: {
   if (Platform.OS === "android") {
     return (
       <MaterialListRow
+        className="bg-grouped-card"
         title={props.title}
         subtitle={props.subtitle}
         leading={
@@ -83,7 +86,7 @@ function SelectionRow(props: {
       accessibilityRole="radio"
       accessibilityState={{ checked: props.selected }}
       className={cn(
-        "min-h-14 flex-row items-center gap-3 bg-card px-4 py-3 active:bg-subtle",
+        "min-h-14 flex-row items-center gap-3 bg-grouped-card px-4 py-3 active:bg-subtle",
         !props.isLast && "border-b border-border-subtle",
       )}
       disabled={props.disabled}
@@ -129,7 +132,7 @@ function ToggleRow(props: {
   readonly onValueChange: (value: boolean) => void;
 }) {
   return (
-    <View className="min-h-14 flex-row items-center gap-3 bg-card px-4 py-3">
+    <View className="min-h-14 flex-row items-center gap-3 bg-grouped-card px-4 py-3">
       <Text
         className={cn(
           "min-w-0 flex-1 text-base text-foreground",
@@ -190,8 +193,8 @@ function PickerSurface(props: { readonly children: ReactNode }) {
     <View
       className={
         Platform.OS === "android"
-          ? "overflow-hidden rounded-[28px] bg-card"
-          : "overflow-hidden rounded-2xl bg-card"
+          ? "overflow-hidden rounded-[28px] bg-grouped-card"
+          : "overflow-hidden rounded-2xl bg-grouped-card"
       }
     >
       {props.children}
@@ -204,7 +207,6 @@ export function NewTaskEnvironmentPickerRouteScreen() {
   const navigation = useNavigation();
   const insets = useSafeAreaInsets();
   const serverConfigs = useServerConfigs();
-
   return (
     <View className="flex-1 bg-sheet" collapsable={false}>
       <NativeStackScreenOptions
@@ -244,10 +246,12 @@ export function NewTaskEnvironmentPickerRouteScreen() {
                   />
                 }
                 isLast={index === flow.environments.length - 1}
+                disabled={flow.switchingToEnvironmentId !== null}
                 onPress={() => {
                   void Haptics.selectionAsync();
-                  flow.selectEnvironment(environment.environmentId);
-                  navigation.goBack();
+                  void flow.switchEnvironment(environment.environmentId).then((switched) => {
+                    if (switched) navigation.goBack();
+                  });
                 }}
                 selected={flow.selectedEnvironmentId === environment.environmentId}
                 title={environment.environmentLabel}
@@ -262,6 +266,10 @@ export function NewTaskEnvironmentPickerRouteScreen() {
 
 export function NewTaskBranchPickerRouteScreen() {
   const flow = useNewTaskFlow();
+  const canWriteSourceControl = useEnvironmentScope(
+    flow.selectedProject?.environmentId ?? null,
+    AuthSourceControlWriteScope,
+  );
   const navigation = useNavigation();
   const switchRef = useAtomCommand(vcsEnvironment.switchRef, { reportFailure: false });
   const [switchingBranchName, setSwitchingBranchName] = useState<string | null>(null);
@@ -289,7 +297,12 @@ export function NewTaskBranchPickerRouteScreen() {
 
   const selectBranch = useCallback(
     async (branch: VcsRef) => {
-      if (selectingBranchNameRef.current !== null) {
+      const needsCheckout = shouldCheckoutNewTaskBranch({
+        branchIsCurrent: branch.current,
+        branchWorktreePath: branch.worktreePath,
+        workspaceMode: flow.workspaceMode,
+      });
+      if (selectingBranchNameRef.current !== null || (needsCheckout && !canWriteSourceControl)) {
         return;
       }
       selectingBranchNameRef.current = branch.name;
@@ -334,6 +347,7 @@ export function NewTaskBranchPickerRouteScreen() {
       }
     },
     [
+      canWriteSourceControl,
       flow.selectBranch,
       flow.selectedProject,
       flow.setBranchQuery,
@@ -399,7 +413,7 @@ export function BranchPickerScreen(props: {
 }) {
   const navigation = useNavigation();
   const insets = useSafeAreaInsets();
-  const usesNativeMailSearchToolbar = Platform.OS === "ios" && NATIVE_MAIL_SEARCH_TOOLBAR_SUPPORTED;
+  const usesNativeMailSearchToolbar = useNativeMailSearchToolbar();
   const selectedBranchName =
     props.selectedBranchName ??
     props.branches.find((branch) => branch.current)?.name ??

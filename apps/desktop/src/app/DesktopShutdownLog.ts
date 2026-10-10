@@ -31,13 +31,12 @@ export function shutdownBreadcrumb(message: string): void {
  * the current scope: "releasing" when that teardown starts, "released" once it
  * has finished. A label with no "released" line names the stalled resource.
  */
-export const traceTeardown = <A, E, R>(
+export const traceTeardown = Effect.fnUntraced(function* <A, E, R>(
   label: string,
   effect: Effect.Effect<A, E, R>,
-): Effect.Effect<A, E, R | Scope.Scope> =>
-  Effect.gen(function* () {
-    yield* Effect.addFinalizer(() => Effect.sync(() => shutdownBreadcrumb(`${label}: released`)));
-    const result = yield* effect;
-    yield* Effect.addFinalizer(() => Effect.sync(() => shutdownBreadcrumb(`${label}: releasing`)));
-    return result;
-  });
+): Effect.fn.Return<A, E, R | Scope.Scope> {
+  yield* Effect.addFinalizer(() => Effect.sync(() => shutdownBreadcrumb(`${label}: released`)));
+  const result = yield* effect;
+  yield* Effect.addFinalizer(() => Effect.sync(() => shutdownBreadcrumb(`${label}: releasing`)));
+  return result;
+});

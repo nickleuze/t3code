@@ -23,7 +23,7 @@ import * as Stream from "effect/Stream";
 import { TestClock } from "effect/testing";
 
 import * as Orchestrator from "../Orchestrator.ts";
-import type { ProviderReplayGate } from "./ProviderReplayGate.testkit.ts";
+import type { ProviderReplayGate } from "@t3tools/provider-testing/replayGate";
 
 export type OrchestratorV2ScenarioStep =
   | {
@@ -45,6 +45,11 @@ export type OrchestratorV2ScenarioStep =
     }
   | {
       readonly type: "await_thread_idle";
+      readonly threadId: ThreadId;
+    }
+  | {
+      /** Waits until the thread's Waiting strip lists no background work. */
+      readonly type: "await_no_background_work";
       readonly threadId: ThreadId;
     }
   | {
@@ -148,6 +153,7 @@ function commandThreadIds(command: OrchestrationV2Command): ReadonlyArray<Thread
     case "thread.pull-request.link":
     case "thread.pull-request.unlink":
     case "thread.pull-request-link.sync":
+    case "thread.pull-request.watch":
     case "thread.pull-request.sync":
     case "thread.title.regeneration.complete":
     case "thread.runtime-mode.set":
@@ -163,6 +169,7 @@ function commandThreadIds(command: OrchestrationV2Command): ReadonlyArray<Thread
     case "prepared-run.release":
     case "prepared-run.progress":
     case "prepared-run.fail":
+    case "prepared-run.retry":
     case "run.interrupt":
     case "queued-message.promote-to-steer":
     case "queue.resume":
@@ -350,6 +357,30 @@ export function runOrchestratorV2Scenario(
           }
           yield* yieldToRuntime;
           return yield* waitForThreadIdle(threadId, attemptsRemaining - 1, deadlineAt);
+        });
+
+      const waitForNoBackgroundWork = (
+        threadId: ThreadId,
+        attemptsRemaining = SCENARIO_WAIT_ATTEMPTS,
+        deadlineAt = scenarioWaitDeadline(),
+      ): Effect.Effect<
+        void,
+        Orchestrator.OrchestratorV2Error | OrchestratorV2ScenarioStepError,
+        never
+      > =>
+        Effect.gen(function* () {
+          const pending = (yield* orchestrator.getThreadShell(threadId))?.pendingBackgroundTasks;
+          if ((pending?.length ?? 0) === 0) {
+            return;
+          }
+          if (scenarioWaitExhausted(attemptsRemaining, deadlineAt)) {
+            return yield* new OrchestratorV2ScenarioStepError({
+              scenario: scenario.name,
+              step: `await_no_background_work:${threadId}:pending=${pending?.map((task) => task.taskId).join(",")}`,
+            });
+          }
+          yield* yieldToRuntime;
+          return yield* waitForNoBackgroundWork(threadId, attemptsRemaining - 1, deadlineAt);
         });
 
       const waitForRunSteerable = (
@@ -626,6 +657,9 @@ export function runOrchestratorV2Scenario(
             break;
           case "await_thread_idle":
             yield* waitForThreadIdle(step.threadId);
+            break;
+          case "await_no_background_work":
+            yield* waitForNoBackgroundWork(step.threadId);
             break;
           case "await_run_steerable":
             yield* waitForRunSteerable(step.threadId, step.runId);

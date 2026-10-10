@@ -1,4 +1,4 @@
-import type { EnvironmentId, ForkUpdateStatus } from "@t3tools/contracts";
+import type { EnvironmentId, ForkUpdateInstallInput, ForkUpdateStatus } from "@t3tools/contracts";
 
 /** Fork-only: one machine running a fork desktop build. */
 export interface ForkUpdateMachine {
@@ -14,6 +14,8 @@ export interface ForkUpdatePillView {
   readonly pending: ReadonlyArray<ForkUpdateMachine>;
   readonly installing: ReadonlyArray<ForkUpdateMachine>;
   readonly targetVersion: string;
+  /** Frozen identity sent to every pending destination. Null while installing or conflicted. */
+  readonly target: ForkUpdateInstallInput | null;
   readonly tooltip: string;
 }
 
@@ -32,30 +34,73 @@ export function resolveForkUpdatePillView(
 ): ForkUpdatePillView | null {
   const supported = machines.filter((machine) => machine.status.supported);
   const installing = supported.filter((machine) => machine.status.installingVersion !== null);
-  const pending = supported
-    .filter(
-      (machine) => machine.status.updateAvailable && machine.status.installingVersion === null,
+  if (installing.length > 0) {
+    const targetVersion = installing[0]!.status.installingVersion!;
+    return {
+      pending: [],
+      installing,
+      targetVersion,
+      target: null,
+      tooltip: `Installing fork ${shortForkVersion(targetVersion)} on ${listLabels(installing)} once running turns finish`,
+    };
+  }
+  const buildNumber = (version: string | null) =>
+    Number(/-nick\.(\d+)$/.exec(version ?? "")?.[1] ?? -1);
+  const releases = supported
+    .flatMap((machine) => (machine.status.latest ? [machine.status.latest] : []))
+    .toSorted((left, right) => buildNumber(right.version) - buildNumber(left.version));
+  const target = releases[0];
+  if (!target) return null;
+  if (
+    supported.some(
+      (machine) => buildNumber(machine.status.installedVersion) > buildNumber(target.version),
     )
+  ) {
+    return {
+      pending: [],
+      installing: [],
+      targetVersion: target.version,
+      target: null,
+      tooltip:
+        "A machine has a newer fork build than the available release information. Refresh before updating.",
+    };
+  }
+  const pending = supported
+    .filter((machine) => buildNumber(machine.status.installedVersion) < buildNumber(target.version))
     .toSorted((left, right) => Number(left.isPrimary) - Number(right.isPrimary));
-  if (pending.length === 0 && installing.length === 0) return null;
+  if (pending.length === 0) return null;
+  if (
+    releases.some(
+      (release) =>
+        buildNumber(release.version) === buildNumber(target.version) &&
+        (release.version !== target.version || release.commit !== target.commit),
+    )
+  ) {
+    return {
+      pending: [],
+      installing: [],
+      targetVersion: target.version,
+      target: null,
+      tooltip: "Fork release information differs across machines. Refresh before updating.",
+    };
+  }
 
-  const targetVersion =
-    installing[0]?.status.installingVersion ?? pending[0]?.status.latest?.version ?? "";
-  const target = shortForkVersion(targetVersion);
-  const tooltip =
-    pending.length > 0
-      ? `Fork ${target} is available for ${listLabels(pending)}. Update ${
-          pending.length === 1 ? "it" : "all"
-        }`
-      : `Installing fork ${target} on ${listLabels(installing)} once running turns finish`;
-  return { pending, installing, targetVersion, tooltip };
+  const targetVersion = target.version;
+  const tooltip = `Fork ${shortForkVersion(targetVersion)} is available for ${listLabels(pending)}. Update ${pending.length === 1 ? "it" : "all"}`;
+  return {
+    pending,
+    installing,
+    targetVersion,
+    target: { version: target.version, commit: target.commit },
+    tooltip,
+  };
 }
 
 export function forkUpdateConfirmationMessage(view: ForkUpdatePillView): string {
   const lines = view.pending.map(
     (machine) =>
       `${machine.label}: ${shortForkVersion(machine.status.installedVersion ?? "unknown")} -> ${shortForkVersion(
-        machine.status.latest?.version ?? view.targetVersion,
+        view.targetVersion,
       )}`,
   );
   return [
