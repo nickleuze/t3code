@@ -352,6 +352,9 @@ export const make = Effect.gen(function* () {
       const current = goal.current!;
       if (current.phase === "checking") {
         if (goal.status === "stopped") {
+          // Stop the process before retiring the durable check. A late passing
+          // result must not keep running after Stop or owner deletion.
+          yield* FiberMap.remove(checks, `${goal.id}:${goal.iteration}`);
           return yield* advance(thread, goal, "check", {
             type: "check_finished",
             result: {
@@ -583,7 +586,7 @@ export const make = Effect.gen(function* () {
       const goal = thread.goal;
       if (goal == null) return;
       if (goal.status !== "active") usageSamples.delete(goal.id);
-      if (thread.archivedAt !== null && isLiveGoal(goal)) {
+      if ((thread.archivedAt !== null || thread.deletedAt !== null) && isLiveGoal(goal)) {
         return yield* advance(thread, goal, "stopped:parent", {
           type: "stopped",
           reason: "parent_unavailable",

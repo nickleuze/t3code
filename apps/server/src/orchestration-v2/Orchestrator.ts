@@ -6538,7 +6538,10 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         commandType: command.type,
         cause,
       });
-    if (thread.deletedAt !== null) return yield* reject(`Thread ${command.threadId} is deleted.`);
+    // Deleted owners still need internal reconciliation of their detached iteration.
+    if (thread.deletedAt !== null && command.type !== "thread.goal.advance") {
+      return yield* reject(`Thread ${command.threadId} is deleted.`);
+    }
     const now = yield* DateTime.now;
     const input: GoalCommandInput = (() => {
       switch (command.type) {
@@ -8735,7 +8738,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         run === undefined ||
         rootNode === undefined ||
         run.activeAttemptId !== attempt.id ||
-        run.status !== "running" ||
+        (run.status !== "running" && run.status !== "waiting") ||
         attempt.status !== "running"
       )
         return;
@@ -9205,24 +9208,50 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       // Stop holds the rest of the thread too. A plain interrupt only drops the wakes owed by
       // this run's delegated tasks, or on a wake run, by the cohort that woke it.
       const stopRemainingWork = () =>
-        command.holdQueue === true
-          ? holdStoppedThread({
-              command,
+        Effect.gen(function* () {
+          // Retire questions with the accepted interrupt, even when the provider
+          // ends the turn without emitting cancellation for each request.
+          for (const request of projection.runtimeRequests) {
+            if (
+              request.status !== "pending" ||
+              !projection.nodes.some((node) => node.id === request.nodeId && node.runId === run.id)
+            )
+              continue;
+            yield* emit(
               events,
-              projection,
-              cohortRunIds: [completionCohortRunId],
-              now,
-            })
-          : Effect.gen(function* () {
-              yield* disposeDelegatedCompletionCohort({
+              command,
+            )({
+              type: "runtime-request.updated",
+              threadId: command.threadId,
+              nodeId: request.nodeId,
+              occurredAt: now,
+              payload: {
+                ...request,
+                status: "cancelled",
+                resolvedAt: now,
+                responseCapability: { type: "not_resumable", reason: "The run was interrupted." },
+              },
+            });
+          }
+          yield* command.holdQueue === true
+            ? holdStoppedThread({
                 command,
                 events,
-                projection: yield* getProjectionWithPendingEvents(command.threadId, events),
-                parentRunId: completionCohortRunId,
-                disposition: "stopped",
+                projection,
+                cohortRunIds: [completionCohortRunId],
                 now,
+              })
+            : Effect.gen(function* () {
+                yield* disposeDelegatedCompletionCohort({
+                  command,
+                  events,
+                  projection: yield* getProjectionWithPendingEvents(command.threadId, events),
+                  parentRunId: completionCohortRunId,
+                  disposition: "stopped",
+                  now,
+                });
               });
-            });
+        });
 
       const emitEvent = emit(events, command);
       const interruptRequestItem: OrchestrationV2TurnItem = {
@@ -9545,7 +9574,10 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       const target =
         projection.runs.findLast(
           (run) =>
-            run.status === "preparing" || run.status === "starting" || run.status === "running",
+            run.status === "preparing" ||
+            run.status === "starting" ||
+            run.status === "running" ||
+            run.status === "waiting",
         ) ??
         (derivePendingBackgroundWork({
           latestRun,

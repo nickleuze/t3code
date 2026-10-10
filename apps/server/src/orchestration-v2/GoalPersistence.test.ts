@@ -196,6 +196,13 @@ const discoveryBehavior = Effect.gen(function* () {
     type: "thread.metadata-updated",
     payload: { ...thread, deletedAt: now, goal: { ...t3Goal, current } },
   });
+  // An iteration is top-level, so deletion cannot abandon its cleanup.
+  assert.equal((yield* store.getGoalThreads()).length, 1);
+  yield* store.apply({
+    ...created,
+    type: "thread.metadata-updated",
+    payload: { ...thread, deletedAt: now, goal: { ...t3Goal, current: null } },
+  });
   assert.deepEqual(yield* store.getGoalThreads(), []);
 });
 it.effect("discovers only due goals and unfinished work in SQLite", () =>

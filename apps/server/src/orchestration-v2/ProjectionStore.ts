@@ -5605,11 +5605,8 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
         const rows = yield* sql<PayloadRow>`
           SELECT payload_json
           FROM orchestration_v2_projection_threads
-          WHERE deleted_at IS NULL
-            AND (
-              json_extract(payload_json, '$.goal.status') IN ('active', 'usageLimited')
-              OR json_type(payload_json, '$.goal.current') = 'object'
-            )
+          WHERE (deleted_at IS NULL AND json_extract(payload_json, '$.goal.status') IN ('active', 'usageLimited'))
+            OR json_type(payload_json, '$.goal.current') = 'object'
           ORDER BY updated_at ASC, thread_id ASC
         `;
         return yield* Effect.forEach(rows, (row) => decodeThreadPayload(row.payload_json));
@@ -6106,10 +6103,9 @@ export const layerMemory: Layer.Layer<ProjectionStoreV2> = Layer.effect(
               .map(({ thread }) => thread)
               .filter(
                 (thread) =>
-                  thread.deletedAt === null &&
                   thread.goal != null &&
-                  (thread.goal.status === "active" ||
-                    thread.goal.status === "usageLimited" ||
+                  ((thread.deletedAt === null &&
+                    (thread.goal.status === "active" || thread.goal.status === "usageLimited")) ||
                     thread.goal.current !== null),
               )
               .toSorted(
