@@ -26,6 +26,7 @@ import * as DesktopLinuxUrlHandler from "./DesktopLinuxUrlHandler.ts";
 import * as DesktopObservability from "./DesktopObservability.ts";
 import * as DesktopPreReadyPlatform from "./DesktopPreReadyPlatform.ts";
 import * as DesktopShutdown from "./DesktopShutdown.ts";
+import { watchShutdown } from "./DesktopShutdownWatchdog.ts";
 import * as DesktopServerExposure from "../backend/DesktopServerExposure.ts";
 import * as DesktopAppSettings from "../settings/DesktopAppSettings.ts";
 import * as DesktopShellEnvironment from "../shell/DesktopShellEnvironment.ts";
@@ -365,6 +366,8 @@ const scopedProgram = Effect.scoped(
 
     yield* startup;
     yield* shutdown.awaitRequest;
+    // Scope teardown can stall; the watchdog bounds it.
+    yield* watchShutdown(stopAllPoolInstances).pipe(Effect.forkDetach);
   }),
 );
 
