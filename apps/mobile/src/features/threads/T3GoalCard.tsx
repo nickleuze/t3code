@@ -1,17 +1,17 @@
-import { useAtomValue } from "@effect/atom-react";
 import { useNavigation } from "@react-navigation/native";
 import { squashAtomCommandFailure } from "@t3tools/client-runtime/state/runtime";
 import type { EnvironmentThreadShell } from "@t3tools/client-runtime/state/shell";
 import {
-  formatGoalTokens,
+  formatGoalUsage,
+  GOAL_ITERATION_OUTCOME_LABELS,
   goalControlActions,
   goalIsLive,
   goalStatusLabel,
 } from "@t3tools/client-runtime/state/thread-goals";
 import {
+  AuthOrchestrationOperateScope,
   CommandId,
   type OrchestrationV2GoalProposal,
-  type OrchestrationV2GoalIterationOutcome,
   type OrchestrationV2ThreadGoal,
   type OrchestrationV2Command,
 } from "@t3tools/contracts";
@@ -27,14 +27,15 @@ import {
 } from "react-native";
 import { AppText as Text } from "../../components/AppText";
 import { uuidv4 } from "../../lib/uuid";
+import { useEnvironmentScope } from "../../state/session";
 import { threadEnvironment } from "../../state/threads";
 import { useAtomCommand } from "../../state/use-atom-command";
 import { useThreadProjection } from "../../state/use-thread-detail";
 import { RequestActionButton } from "./RequestActionButton";
 
-type GoalFields = Omit<
+type GoalFields = Pick<
   Extract<OrchestrationV2Command, { type: "thread.goal.set" }>,
-  "type" | "commandId" | "threadId"
+  "objective" | "doneWhen" | "background" | "permissions" | "checkCommand" | "iterationTimeoutMins"
 >;
 
 /** T3-owned goals stay independent from the provider-native goal banner. */
@@ -47,7 +48,7 @@ export function T3GoalCard(props: {
     environmentId: thread.environmentId,
     threadId: thread.id,
   });
-  const canMutate = useAtomValue(threadEnvironment.setGoal.permissionAtom(thread.environmentId));
+  const canMutate = useEnvironmentScope(thread.environmentId, AuthOrchestrationOperateScope);
   const setGoal = useAtomCommand(threadEnvironment.setGoal, { reportFailure: false });
   const controlGoal = useAtomCommand(threadEnvironment.controlGoal, { reportFailure: false });
   const dismissProposal = useAtomCommand(threadEnvironment.dismissGoalProposal, {
@@ -229,16 +230,17 @@ export function T3GoalCard(props: {
         </Text>
       ) : null}
       {editing && showProposal ? (
-        <GoalProposalEditor
+        <GoalBriefEditor
           key={proposal.id}
-          proposal={proposal}
+          mode="start"
+          initial={proposal}
           pending={pending !== null}
-          canStart={canStart}
+          canSubmit={canStart}
           error={error}
           onClose={() => {
             if (pending === null) setEditing(false);
           }}
-          onStart={(fields) => void run("start", () => start(fields))}
+          onSubmit={(fields) => void run("start", () => start(fields))}
         />
       ) : null}
       {details && fullGoal !== null ? (
@@ -280,116 +282,105 @@ function GoalModal(props: { readonly children: React.ReactNode; readonly onClose
   );
 }
 
-function GoalProposalEditor(props: {
-  readonly proposal: OrchestrationV2GoalProposal;
+const BRIEF_LABELS = {
+  objective: "Objective",
+  doneWhen: "Done when",
+  permissions: "Pre-approved actions",
+  background: "Background",
+  iterationTimeoutMins: "Minutes per iteration (15–480)",
+  checkCommand: "Completion check",
+};
+const ADVANCED_FIELDS = [
+  "permissions",
+  "background",
+  "iterationTimeoutMins",
+  "checkCommand",
+] as const;
+
+/** Edits a goal's brief: objective and done-when, with the rest under Advanced. */
+function GoalBriefEditor(props: {
+  /** "start" edits a proposal before it runs; "edit" changes a paused or blocked goal. */
+  readonly mode: "start" | "edit";
+  readonly initial: {
+    readonly objective: string;
+    readonly doneWhen: string | null;
+    readonly background: string | null;
+    readonly permissions: string | null;
+    readonly checkCommand: string | null;
+    readonly iterationTimeoutMins: number | null;
+  };
   readonly pending: boolean;
-  readonly canStart: boolean;
+  readonly canSubmit: boolean;
   readonly error: string | null;
-  readonly onStart: (fields: GoalFields) => void;
+  readonly onSubmit: (fields: Required<GoalFields>) => void;
   readonly onClose: () => void;
 }) {
-  const [guardEnabled, setGuardEnabled] = useState(true);
+  // Editing a goal is mostly about widening what it may do, so open the rest.
+  const [advanced, setAdvanced] = useState(props.mode === "edit");
   const [fields, setFields] = useState(() => ({
-    objective: props.proposal.objective,
-    doneWhen: props.proposal.doneWhen,
-    background: props.proposal.background ?? "",
-    permissions: props.proposal.permissions ?? "",
-    checkCommand: props.proposal.checkCommand ?? "",
-    iterationTimeoutMins: String(props.proposal.iterationTimeoutMins ?? 120),
-    maxPercentPoints: "20",
-    windowMins: "60",
-    noProgressLimit: "3",
+    objective: props.initial.objective,
+    doneWhen: props.initial.doneWhen ?? "",
+    permissions: props.initial.permissions ?? "",
+    background: props.initial.background ?? "",
+    iterationTimeoutMins: String(props.initial.iterationTimeoutMins ?? 120),
+    checkCommand: props.initial.checkCommand ?? "",
   }));
   const timeout = Number(fields.iterationTimeoutMins);
-  const maxPercentPoints = Number(fields.maxPercentPoints);
-  const windowMins = Number(fields.windowMins);
-  const noProgressLimit = Number(fields.noProgressLimit);
   const valid =
     fields.objective.trim().length > 0 &&
     fields.doneWhen.trim().length > 0 &&
     Number.isInteger(timeout) &&
     timeout >= 15 &&
-    timeout <= 480 &&
-    Number.isInteger(noProgressLimit) &&
-    noProgressLimit >= 1 &&
-    noProgressLimit <= 20 &&
-    (!guardEnabled ||
-      (Number.isInteger(maxPercentPoints) &&
-        maxPercentPoints >= 1 &&
-        maxPercentPoints <= 100 &&
-        Number.isInteger(windowMins) &&
-        windowMins >= 5));
-  const labels = {
-    objective: "Objective",
-    doneWhen: "Done when",
-    background: "Background",
-    permissions: "Pre-approved actions",
-    checkCommand: "Completion check",
-    iterationTimeoutMins: "Minutes per iteration (15–480)",
-    maxPercentPoints: "Max usage rise (%)",
-    windowMins: "Burn guard window (minutes)",
-    noProgressLimit: "Idle iterations before pausing (1–20)",
-  };
+    timeout <= 480;
+  const field = (key: keyof typeof fields) => (
+    <View key={key} className="gap-2">
+      <Text className="text-sm">{BRIEF_LABELS[key]}</Text>
+      <TextInput
+        accessibilityLabel={BRIEF_LABELS[key]}
+        value={fields[key]}
+        editable={!props.pending}
+        multiline={key !== "iterationTimeoutMins" && key !== "checkCommand"}
+        keyboardType={key === "iterationTimeoutMins" ? "number-pad" : "default"}
+        className="rounded-xl bg-subtle p-3 text-foreground"
+        onChangeText={(value) => setFields((current) => ({ ...current, [key]: value }))}
+      />
+    </View>
+  );
   return (
     <GoalModal onClose={props.onClose}>
       <Text accessibilityRole="header" className="text-xl font-t3-bold">
-        Edit T3 goal
+        {props.mode === "start" ? "Edit proposed goal" : "Edit goal"}
       </Text>
       <Text className="text-sm text-foreground-secondary">
-        Each iteration receives this brief. Start begins the loop.
+        {props.mode === "start"
+          ? "Each iteration receives this brief. Start begins the loop."
+          : "The next iteration gets the new brief. Resume the goal when you are done."}
       </Text>
-      {(Object.keys(fields) as Array<keyof typeof fields>)
-        .filter((key) => guardEnabled || (key !== "maxPercentPoints" && key !== "windowMins"))
-        .map((key) => (
-          <View key={key} className="gap-2">
-            <Text className="text-sm">{labels[key]}</Text>
-            <TextInput
-              accessibilityLabel={labels[key]}
-              value={fields[key]}
-              editable={!props.pending}
-              multiline={["objective", "doneWhen", "background", "permissions"].includes(key)}
-              keyboardType={
-                [
-                  "iterationTimeoutMins",
-                  "maxPercentPoints",
-                  "windowMins",
-                  "noProgressLimit",
-                ].includes(key)
-                  ? "number-pad"
-                  : "default"
-              }
-              className="rounded-xl bg-subtle p-3 text-foreground"
-              onChangeText={(value) => setFields((current) => ({ ...current, [key]: value }))}
-            />
-          </View>
-        ))}
+      {field("objective")}
+      {field("doneWhen")}
       <RequestActionButton
         tone="secondary"
-        label={guardEnabled ? "Turn burn guard off" : "Turn burn guard on"}
+        label={advanced ? "Hide advanced" : "Advanced"}
         disabled={props.pending}
-        onPress={() => setGuardEnabled((value) => !value)}
+        onPress={() => setAdvanced((value) => !value)}
       />
-      <Text className="text-xs text-foreground-secondary">
-        The burn guard watches account-wide provider usage and pauses a goal if it rises too fast.
-      </Text>
+      {advanced ? ADVANCED_FIELDS.map(field) : null}
       {props.error ? (
         <Text accessibilityRole="alert" className="text-sm text-destructive">
           {props.error}
         </Text>
       ) : null}
       <RequestActionButton
-        label={props.pending ? "Starting…" : "Start goal"}
-        disabled={!props.canStart || props.pending || !valid}
+        label={props.pending ? "Saving…" : props.mode === "start" ? "Start goal" : "Save changes"}
+        disabled={!props.canSubmit || props.pending || !valid}
         onPress={() =>
-          props.onStart({
+          props.onSubmit({
             objective: fields.objective.trim(),
             doneWhen: fields.doneWhen.trim(),
             background: fields.background.trim() || null,
             permissions: fields.permissions.trim() || null,
             checkCommand: fields.checkCommand.trim() || null,
             iterationTimeoutMins: timeout,
-            burnGuard: guardEnabled ? { maxPercentPoints, windowMins } : null,
-            noProgressLimit,
           })
         }
       />
@@ -402,17 +393,6 @@ function GoalProposalEditor(props: {
     </GoalModal>
   );
 }
-
-const OUTCOME_LABELS: Record<OrchestrationV2GoalIterationOutcome, string> = {
-  continued: "Continued",
-  claimed_complete: "Completed",
-  check_failed: "Check failed",
-  blocked: "Blocked",
-  failed: "Failed",
-  interrupted: "Interrupted",
-  usage_limited: "Usage limit",
-  timed_out: "Out of time",
-};
 
 function GoalDetails(props: {
   readonly goal: OrchestrationV2ThreadGoal;
@@ -429,10 +409,7 @@ function GoalDetails(props: {
       </Text>
       <Text>{goal.objective}</Text>
       <Text>
-        {goal.iteration} iterations ·{" "}
-        {goal.usageAccounting === "unavailable"
-          ? "Token usage not reported"
-          : `${goal.usageAccounting === "estimated" ? "~" : ""}${formatGoalTokens(goal.tokensUsed)}`}
+        {goal.iteration} iterations · {formatGoalUsage(goal)}
       </Text>
       {goal.doneWhen ? <Text>Done when: {goal.doneWhen}</Text> : null}
       {goal.permissions ? <Text>Pre-approved: {goal.permissions}</Text> : null}
@@ -464,7 +441,7 @@ function GoalDetails(props: {
         <RequestActionButton
           key={record.iteration}
           tone="secondary"
-          label={`Iteration ${record.iteration}: ${OUTCOME_LABELS[record.outcome]}`}
+          label={`Iteration ${record.iteration}: ${GOAL_ITERATION_OUTCOME_LABELS[record.outcome]}`}
           onPress={() => {
             props.onClose();
             props.onOpen(String(record.childThreadId));

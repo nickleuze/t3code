@@ -1,12 +1,9 @@
 import { describe, expect, it } from "@effect/vitest";
-import { vi } from "vite-plus/test";
 import {
-  AuthOrchestrationOperateScope,
   CommandId,
   EnvironmentId,
   ORCHESTRATION_V2_WS_METHODS,
   ThreadId,
-  type AuthSessionState,
   type OrchestrationV2Command,
 } from "@t3tools/contracts";
 import * as Crypto from "effect/Crypto";
@@ -14,20 +11,13 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as SubscriptionRef from "effect/SubscriptionRef";
-import { AsyncResult, Atom, AtomRegistry } from "effect/reactivity";
+import { Atom, AtomRegistry } from "effect/reactivity";
 import { EnvironmentRegistry } from "../connection/registry.ts";
 import { EnvironmentSupervisor } from "../connection/supervisor.ts";
 import type { RpcSession } from "../rpc/session.ts";
 import { createThreadEnvironmentAtoms } from "./threadCommands.ts";
 
-vi.mock("./session.ts", () => ({
-  createEnvironmentSessionAtoms: () => ({ sessionStateAtom: sessions }),
-}));
-const sessions = Atom.family((_id: EnvironmentId) =>
-  Atom.make<AsyncResult.AsyncResult<AuthSessionState, string>>(AsyncResult.initial()),
-);
 const env = EnvironmentId.make("goal-host");
-const other = EnvironmentId.make("other-host");
 const input = {
   type: "thread.goal.set" as const,
   commandId: CommandId.make("start"),
@@ -35,18 +25,6 @@ const input = {
   objective: "Ship",
   doneWhen: "Tests pass",
 };
-const grant = (allowed: boolean): AuthSessionState => ({
-  authenticated: true,
-  auth: {
-    policy: "remote-reachable",
-    bootstrapMethods: [],
-    sessionMethods: [],
-    sessionCookieName: "test",
-  },
-  scopes: allowed ? [AuthOrchestrationOperateScope] : [],
-  permissions: allowed ? [AuthOrchestrationOperateScope] : [],
-});
-
 const harness = Effect.fnUntraced(function* (supports = true) {
   const sent: OrchestrationV2Command[] = [];
   const supervisor = {
@@ -82,93 +60,61 @@ const harness = Effect.fnUntraced(function* (supports = true) {
   );
   const commands = createThreadEnvironmentAtoms(runtime, () => Atom.make(null));
   const registry = AtomRegistry.make();
-  registry.mount(sessions(env));
-  registry.mount(sessions(other));
   yield* Effect.addFinalizer(() => Effect.sync(() => registry.dispose()));
   return { commands, registry, sent };
 });
 
-describe("guarded T3 goal commands", () => {
-  it.effect("requires the destination grant and preserves the exact command identity", () =>
+describe("T3 goal commands", () => {
+  it.effect("dispatch the exact command to a host that supports goals", () =>
     Effect.gen(function* () {
       const h = yield* harness();
-      h.registry.set(sessions(env), AsyncResult.success(grant(true)));
-      h.registry.set(sessions(other), AsyncResult.success(grant(false)));
-      expect(h.registry.get(h.commands.setGoal.permissionAtom(env))).toBe(true);
-      expect(h.registry.get(h.commands.setGoal.permissionAtom(other))).toBe(false);
-      expect(
-        (yield* Effect.promise(() =>
-          h.commands.setGoal.run(h.registry, { environmentId: other, input }),
-        ))._tag,
-      ).toBe("Failure");
-      expect(h.sent).toEqual([]);
-      expect(
-        (yield* Effect.promise(() =>
+      const control = {
+        type: "thread.goal.control" as const,
+        commandId: CommandId.make("stop"),
+        threadId: input.threadId,
+        goalId: input.commandId,
+        action: "stop" as const,
+      };
+      const reply = {
+        type: "thread.goal.message" as const,
+        commandId: CommandId.make("reply"),
+        threadId: input.threadId,
+        goalId: input.commandId,
+        text: "Use the candidate",
+      };
+      const dismiss = {
+        type: "thread.goal.proposal.dismiss" as const,
+        commandId: CommandId.make("dismiss"),
+        threadId: input.threadId,
+        proposalId: CommandId.make("proposal"),
+      };
+      for (const result of [
+        yield* Effect.promise(() =>
           h.commands.setGoal.run(h.registry, { environmentId: env, input }),
-        ))._tag,
-      ).toBe("Success");
-      expect(h.sent).toEqual([input]);
-      h.registry.set(sessions(env), AsyncResult.success(grant(false)));
-      expect(
-        (yield* Effect.promise(() =>
-          h.commands.controlGoal.run(h.registry, {
-            environmentId: env,
-            input: {
-              type: "thread.goal.control",
-              commandId: CommandId.make("stop"),
-              threadId: input.threadId,
-              goalId: input.commandId,
-              action: "stop",
-            },
-          }),
-        ))._tag,
-      ).toBe("Failure");
-      expect(h.sent).toEqual([input]);
+        ),
+        yield* Effect.promise(() =>
+          h.commands.controlGoal.run(h.registry, { environmentId: env, input: control }),
+        ),
+        yield* Effect.promise(() =>
+          h.commands.messageGoal.run(h.registry, { environmentId: env, input: reply }),
+        ),
+        yield* Effect.promise(() =>
+          h.commands.dismissGoalProposal.run(h.registry, { environmentId: env, input: dismiss }),
+        ),
+      ])
+        expect(result._tag).toBe("Success");
+      expect(h.sent).toEqual([input, control, reply, dismiss]);
     }),
   );
-  it.effect("refuses a downgraded host even when its grant is valid", () =>
+  it.effect("refuses a host without T3 goals before sending", () =>
     Effect.gen(function* () {
       const h = yield* harness(false);
-      h.registry.set(sessions(env), AsyncResult.success(grant(true)));
       expect(
         (yield* Effect.promise(() =>
           h.commands.setGoal.run(h.registry, { environmentId: env, input }),
         ))._tag,
       ).toBe("Failure");
       expect(h.sent).toEqual([]);
-    }),
-  );
-  it.effect("sends replies and proposal dismissal through the same guarded seam", () =>
-    Effect.gen(function* () {
-      const h = yield* harness();
-      h.registry.set(sessions(env), AsyncResult.success(grant(true)));
-      yield* Effect.promise(() =>
-        h.commands.messageGoal.run(h.registry, {
-          environmentId: env,
-          input: {
-            type: "thread.goal.message",
-            commandId: CommandId.make("reply"),
-            threadId: input.threadId,
-            goalId: input.commandId,
-            text: "Use the candidate",
-          },
-        }),
-      );
-      yield* Effect.promise(() =>
-        h.commands.dismissGoalProposal.run(h.registry, {
-          environmentId: env,
-          input: {
-            type: "thread.goal.proposal.dismiss",
-            commandId: CommandId.make("dismiss"),
-            threadId: input.threadId,
-            proposalId: CommandId.make("proposal"),
-          },
-        }),
-      );
-      expect(h.sent.map((c) => c.type)).toEqual([
-        "thread.goal.message",
-        "thread.goal.proposal.dismiss",
-      ]);
     }),
   );
 });

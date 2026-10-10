@@ -1,7 +1,9 @@
-import type { OrchestrationV2GoalBurnGuard, RuntimeMode } from "@t3tools/contracts";
+import type { RuntimeMode } from "@t3tools/contracts";
+import { ChevronRightIcon } from "lucide-react";
 import { useId, useRef, useState } from "react";
 
 import { Button } from "../ui/button";
+import { Collapsible, CollapsiblePanel, CollapsibleTrigger } from "../ui/collapsible";
 import {
   Dialog,
   DialogDescription,
@@ -20,79 +22,68 @@ import {
   NumberFieldIncrement,
   NumberFieldInput,
 } from "../ui/number-field";
-import { Switch } from "../ui/switch";
 import { Textarea } from "../ui/textarea";
 
-export interface GoalDialogSubmission {
+/** The brief every iteration receives. Limits the dialog does not show keep their server values. */
+export interface GoalBrief {
   readonly objective: string;
   readonly doneWhen: string;
   readonly background: string | null;
   readonly permissions: string | null;
   readonly checkCommand: string | null;
-  readonly burnGuard: OrchestrationV2GoalBurnGuard | null;
-  readonly noProgressLimit: number;
   readonly iterationTimeoutMins: number;
 }
 
-/** Background is a brief, not a transcript; longer prefills are cut here. */
-const MAX_BACKGROUND_CHARS = 6_000;
+const DEFAULT_ITERATION_MINS = 120;
 
 interface GoalDialogProps {
-  readonly initialObjective: string;
-  /** This thread's latest plan or answer, offered as background for every iteration. */
-  readonly initialBackground: string | null;
-  /** Fields of the agent's proposal when the dialog edits one. */
-  readonly initialDoneWhen?: string | undefined;
-  readonly initialPermissions?: string | null | undefined;
-  readonly initialCheckCommand?: string | null | undefined;
-  readonly initialTimeoutMins?: number | null | undefined;
+  /** "start" edits a proposal before it runs; "edit" changes a paused or blocked goal. */
+  readonly mode: "start" | "edit";
+  readonly initial: {
+    readonly objective: string;
+    readonly doneWhen: string | null;
+    readonly background: string | null;
+    readonly permissions: string | null;
+    readonly checkCommand: string | null;
+    readonly iterationTimeoutMins: number | null;
+  };
   readonly runtimeMode: RuntimeMode;
-  readonly canStart: boolean;
-  readonly onSubmit: (submission: GoalDialogSubmission) => Promise<void>;
+  readonly canSubmit: boolean;
+  readonly onSubmit: (brief: GoalBrief) => Promise<void>;
   readonly onClose: () => void;
 }
 
-/** Collects a `/t3-goal` objective and its limits before the loop starts. */
+/** Edits a goal's brief: what it achieves and when it is done, with the rest under Advanced. */
 export function GoalDialog({
-  initialObjective,
-  initialBackground,
-  initialDoneWhen,
-  initialPermissions,
-  initialCheckCommand,
-  initialTimeoutMins,
+  mode,
+  initial,
   runtimeMode,
-  canStart,
+  canSubmit,
   onSubmit,
   onClose,
 }: GoalDialogProps) {
   const id = useId();
-  const [objective, setObjective] = useState(initialObjective);
-  const [doneWhen, setDoneWhen] = useState(initialDoneWhen ?? "");
-  const [background, setBackground] = useState(
-    () => initialBackground?.trim().slice(0, MAX_BACKGROUND_CHARS) ?? "",
+  const [objective, setObjective] = useState(initial.objective);
+  const [doneWhen, setDoneWhen] = useState(initial.doneWhen ?? "");
+  const [background, setBackground] = useState(initial.background ?? "");
+  const [permissions, setPermissions] = useState(initial.permissions ?? "");
+  const [checkCommand, setCheckCommand] = useState(initial.checkCommand ?? "");
+  const [timeoutMins, setTimeoutMins] = useState<number | null>(
+    initial.iterationTimeoutMins ?? DEFAULT_ITERATION_MINS,
   );
-  const [permissions, setPermissions] = useState(initialPermissions ?? "");
-  const [timeoutMins, setTimeoutMins] = useState<number | null>(initialTimeoutMins ?? 120);
-  const [checkCommand, setCheckCommand] = useState(initialCheckCommand ?? "");
-  const [guardEnabled, setGuardEnabled] = useState(true);
-  const [maxPercentPoints, setMaxPercentPoints] = useState<number | null>(20);
-  const [windowMins, setWindowMins] = useState<number | null>(60);
-  const [noProgressLimit, setNoProgressLimit] = useState<number | null>(3);
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const submitting = useRef(false);
+  const verb = mode === "start" ? "Start goal" : "Save changes";
 
-  const starting = useRef(false);
   const submit = async () => {
-    if (!canStart || starting.current) return;
+    if (!canSubmit || submitting.current) return;
     const trimmed = objective.trim();
     if (trimmed.length === 0) return setError("Describe what the goal should achieve.");
     if (doneWhen.trim().length === 0) {
       return setError("Say what done looks like, so the goal can finish.");
     }
-    if (guardEnabled && (!maxPercentPoints || !windowMins)) {
-      return setError("Set both burn guard values, or turn the guard off.");
-    }
-    starting.current = true;
+    submitting.current = true;
     setPending(true);
     setError(null);
     try {
@@ -101,17 +92,12 @@ export function GoalDialog({
         doneWhen: doneWhen.trim(),
         background: background.trim() || null,
         permissions: permissions.trim() || null,
-        iterationTimeoutMins: Math.max(15, Math.round(timeoutMins ?? 120)),
         checkCommand: checkCommand.trim() || null,
-        burnGuard:
-          guardEnabled && maxPercentPoints && windowMins
-            ? { maxPercentPoints, windowMins: Math.round(windowMins) }
-            : null,
-        noProgressLimit: Math.max(1, Math.round(noProgressLimit ?? 3)),
+        iterationTimeoutMins: Math.max(15, Math.round(timeoutMins ?? DEFAULT_ITERATION_MINS)),
       });
     } catch (cause) {
-      starting.current = false;
-      setError(cause instanceof Error ? cause.message : "Could not start the goal.");
+      submitting.current = false;
+      setError(cause instanceof Error ? cause.message : "Could not save the goal.");
       setPending(false);
     }
   };
@@ -132,11 +118,11 @@ export function GoalDialog({
           }}
         >
           <DialogHeader>
-            <DialogTitle>Start a goal</DialogTitle>
+            <DialogTitle>{mode === "start" ? "Edit proposed goal" : "Edit goal"}</DialogTitle>
             <DialogDescription>
-              The agent works in repeated iterations until the goal is done. Each iteration starts
-              in a fresh top-level thread in this workspace, sees the goal and earlier progress
-              notes, and can delegate work to subagents.
+              {mode === "start"
+                ? "Each iteration starts in a fresh thread and sees only this brief and earlier progress notes."
+                : "The next iteration gets the new brief. Resume the goal when you are done."}
             </DialogDescription>
           </DialogHeader>
           <DialogPanel>
@@ -148,7 +134,6 @@ export function GoalDialog({
                   rows={3}
                   autoFocus
                   value={objective}
-                  placeholder="Migrate every API route to the new auth middleware, with tests."
                   onChange={(event) => {
                     setObjective(event.target.value);
                     setError(null);
@@ -161,132 +146,72 @@ export function GoalDialog({
                   id={`${id}-done`}
                   rows={2}
                   value={doneWhen}
-                  placeholder="Every route uses the middleware, the old helper is deleted, and CI passes."
                   onChange={(event) => {
                     setDoneWhen(event.target.value);
                     setError(null);
                   }}
                 />
               </div>
-              <div className="flex flex-col gap-1.5">
-                <Label htmlFor={`${id}-background`}>Background (optional)</Label>
-                <Textarea
-                  id={`${id}-background`}
-                  rows={4}
-                  value={background}
-                  placeholder="Context every iteration should know: the plan, constraints, where things live."
-                  onChange={(event) => setBackground(event.target.value)}
-                />
-                <p className="text-xs text-muted-foreground">
-                  Iterations don't see this conversation.
-                  {initialBackground
-                    ? " Filled in from its latest plan or reply; trim it to what matters."
-                    : ""}
-                </p>
-              </div>
-              <div className="flex flex-col gap-1.5">
-                <Label htmlFor={`${id}-permissions`}>Pre-approved actions (optional)</Label>
-                <Textarea
-                  id={`${id}-permissions`}
-                  rows={2}
-                  value={permissions}
-                  placeholder="Commit and push to the goal branch and open PRs. Ask before merging."
-                  onChange={(event) => setPermissions(event.target.value)}
-                />
-                <p className="text-xs text-muted-foreground">
-                  Anything else that needs your approval, the agent asks for and waits.
-                </p>
-              </div>
-              <div className="flex flex-col gap-1.5">
-                <Label htmlFor={`${id}-check`}>Completion check (optional)</Label>
-                <Input
-                  id={`${id}-check`}
-                  value={checkCommand}
-                  placeholder="pnpm test"
-                  onChange={(event) => setCheckCommand(event.target.value)}
-                />
-                <p className="text-xs text-muted-foreground">
-                  Runs in the workspace when the agent says it is done. The goal only completes if
-                  it exits successfully; otherwise the output goes to the next iteration.
-                </p>
-              </div>
-              <div className="flex flex-col gap-2">
-                <div className="flex items-center justify-between gap-3">
-                  <Label htmlFor={`${id}-guard`}>Burn guard</Label>
-                  <Switch
-                    id={`${id}-guard`}
-                    checked={guardEnabled}
-                    onCheckedChange={setGuardEnabled}
-                  />
-                </div>
-                {guardEnabled ? (
-                  <div className="grid grid-cols-2 gap-3">
-                    <NumberField
-                      id={`${id}-points`}
-                      min={1}
-                      max={100}
-                      value={maxPercentPoints}
-                      onValueChange={setMaxPercentPoints}
-                    >
-                      <Label htmlFor={`${id}-points`}>Max usage rise (%)</Label>
-                      <NumberFieldGroup>
-                        <NumberFieldDecrement aria-label="Decrease usage rise" />
-                        <NumberFieldInput />
-                        <NumberFieldIncrement aria-label="Increase usage rise" />
-                      </NumberFieldGroup>
-                    </NumberField>
-                    <NumberField
-                      id={`${id}-window`}
-                      min={5}
-                      step={5}
-                      value={windowMins}
-                      onValueChange={setWindowMins}
-                    >
-                      <Label htmlFor={`${id}-window`}>Within (minutes)</Label>
-                      <NumberFieldGroup>
-                        <NumberFieldDecrement aria-label="Decrease window" />
-                        <NumberFieldInput />
-                        <NumberFieldIncrement aria-label="Increase window" />
-                      </NumberFieldGroup>
-                    </NumberField>
+              {/* Editing a goal is mostly about widening what it may do, so open the rest. */}
+              <Collapsible defaultOpen={mode === "edit"}>
+                <CollapsibleTrigger className="group flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground">
+                  <ChevronRightIcon className="size-4 transition-transform group-data-panel-open:rotate-90" />
+                  Advanced
+                </CollapsibleTrigger>
+                <CollapsiblePanel>
+                  <div className="flex flex-col gap-4 pt-3">
+                    <div className="flex flex-col gap-1.5">
+                      <Label htmlFor={`${id}-permissions`}>Pre-approved actions</Label>
+                      <Textarea
+                        id={`${id}-permissions`}
+                        rows={2}
+                        value={permissions}
+                        placeholder="Commit and push to the goal branch and open PRs. Ask before merging."
+                        onChange={(event) => setPermissions(event.target.value)}
+                      />
+                      <p className="text-xs text-muted-foreground">
+                        Anything else that needs your approval, the agent asks for and waits.
+                      </p>
+                    </div>
+                    <div className="flex flex-col gap-1.5">
+                      <Label htmlFor={`${id}-background`}>Background</Label>
+                      <Textarea
+                        id={`${id}-background`}
+                        rows={4}
+                        value={background}
+                        placeholder="Context every iteration should know: the plan, constraints, where things live."
+                        onChange={(event) => setBackground(event.target.value)}
+                      />
+                    </div>
+                    <div className="grid grid-cols-2 gap-3">
+                      <NumberField
+                        id={`${id}-timeout`}
+                        min={15}
+                        max={480}
+                        step={15}
+                        value={timeoutMins}
+                        onValueChange={setTimeoutMins}
+                      >
+                        <Label htmlFor={`${id}-timeout`}>Minutes per iteration</Label>
+                        <NumberFieldGroup>
+                          <NumberFieldDecrement aria-label="Decrease iteration time limit" />
+                          <NumberFieldInput />
+                          <NumberFieldIncrement aria-label="Increase iteration time limit" />
+                        </NumberFieldGroup>
+                      </NumberField>
+                      <div className="flex flex-col gap-1.5">
+                        <Label htmlFor={`${id}-check`}>Completion check</Label>
+                        <Input
+                          id={`${id}-check`}
+                          value={checkCommand}
+                          placeholder="pnpm test"
+                          onChange={(event) => setCheckCommand(event.target.value)}
+                        />
+                      </div>
+                    </div>
                   </div>
-                ) : null}
-                <p className="text-xs text-muted-foreground">
-                  Pauses the goal if any of the provider's usage limits climbs faster than this. It
-                  watches account-wide usage, so other threads count too.
-                </p>
-              </div>
-              <div className="grid grid-cols-2 gap-3">
-                <NumberField
-                  id={`${id}-timeout`}
-                  min={15}
-                  max={480}
-                  step={15}
-                  value={timeoutMins}
-                  onValueChange={setTimeoutMins}
-                >
-                  <Label htmlFor={`${id}-timeout`}>Minutes per iteration</Label>
-                  <NumberFieldGroup>
-                    <NumberFieldDecrement aria-label="Decrease iteration time limit" />
-                    <NumberFieldInput />
-                    <NumberFieldIncrement aria-label="Increase iteration time limit" />
-                  </NumberFieldGroup>
-                </NumberField>
-                <NumberField
-                  id={`${id}-no-progress`}
-                  min={1}
-                  max={20}
-                  value={noProgressLimit}
-                  onValueChange={setNoProgressLimit}
-                >
-                  <Label htmlFor={`${id}-no-progress`}>Idle iterations before pausing</Label>
-                  <NumberFieldGroup>
-                    <NumberFieldDecrement aria-label="Decrease no-progress limit" />
-                    <NumberFieldInput />
-                    <NumberFieldIncrement aria-label="Increase no-progress limit" />
-                  </NumberFieldGroup>
-                </NumberField>
-              </div>
+                </CollapsiblePanel>
+              </Collapsible>
               {runtimeMode === "approval-required" || runtimeMode === "auto-accept-edits" ? (
                 <p className="text-xs text-warning">
                   This thread asks before running commands, so each iteration will wait for your
@@ -304,8 +229,8 @@ export function GoalDialog({
             <Button type="button" variant="outline" disabled={pending} onClick={onClose}>
               Cancel
             </Button>
-            <Button type="submit" disabled={!canStart || pending}>
-              {pending ? "Starting..." : "Start goal"}
+            <Button type="submit" disabled={!canSubmit || pending}>
+              {pending ? "Saving..." : verb}
             </Button>
           </DialogFooter>
         </form>

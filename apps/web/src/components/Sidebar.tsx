@@ -185,9 +185,6 @@ import {
   animateSidebarLayoutChanges,
   applySidebarThreadDrop,
   filterSidebarV2VisibleThreads,
-  groupGoalIterationsByGoalThread,
-  sidebarGoalStatusLabel,
-  resolveSidebarRouteOwnerKey,
   buildBulkTitleRegenerationContextMenuItem,
   buildBulkUnpinContextMenuItem,
   deleteSelectedThreadEntries,
@@ -291,7 +288,17 @@ import {
   MenuShortcut,
   MenuTrigger,
 } from "./ui/menu";
-import { sortThreads, sortThreadsByLastActivity } from "@t3tools/client-runtime/state/thread-sort";
+import {
+  FLAT_THREAD_SORT_OPTIONS,
+  sortThreadsByFlatOrder,
+} from "@t3tools/client-runtime/state/thread-sort";
+import {
+  goalAwareThreadWorking,
+  goalRouteOwnerKey,
+  goalRowStatusLabel,
+  nestGoalIterations,
+  selectedGoalIterationKey,
+} from "@t3tools/client-runtime/state/thread-goals";
 import { SidebarGoalIterations } from "./sidebar/SidebarGoalIterations";
 import { Tooltip, TooltipPopup, TooltipProvider, TooltipTrigger } from "./ui/tooltip";
 import { MiddleTruncate } from "./ui/middle-truncate";
@@ -312,12 +319,6 @@ const EMPTY_PROVIDER_ENTRIES: ReadonlyMap<string, ProviderInstanceEntry> = new M
 const EMPTY_THREADS: readonly EnvironmentThreadShell[] = [];
 
 const NO_GOAL_ITERATIONS: readonly SidebarThreadSummary[] = [];
-const SIDEBAR_FLAT_THREAD_SORT_LABELS: Record<SidebarFlatThreadSortOrder, string> = {
-  manual: "Manual",
-  last_activity: "Last activity",
-  updated_at: "Last user message",
-  created_at: "Created at",
-};
 const SETTLED_TAIL_INITIAL_COUNT = 10;
 const SETTLED_TAIL_PAGE_COUNT = 25;
 // Fresh keys deliberately reset both shelves to collapsed for existing users.
@@ -1372,7 +1373,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
                         className: "text-success",
                       }
                     : null;
-  const goalStatusLabel = sidebarGoalStatusLabel(thread.t3Goal, status);
+  const goalStatusLabel = goalRowStatusLabel(thread.t3Goal, status);
   const topStatus =
     goalStatusLabel !== null && baseTopStatus !== null
       ? { ...baseTopStatus, label: goalStatusLabel }
@@ -2432,7 +2433,7 @@ export default function Sidebar() {
   const projectOrder = useUiStateStore((store) => store.projectOrder);
   const threads = useThreadShells();
   const goalIterationsByGoalThread = useMemo(
-    () => groupGoalIterationsByGoalThread(threads),
+    () => nestGoalIterations(threads).iterations,
     [threads],
   );
   const router = useRouter();
@@ -2545,7 +2546,7 @@ export default function Sidebar() {
   );
   const routeThreadKey = routeThreadRef ? scopedThreadKey(routeThreadRef) : null;
   const routeOwnerKey = useMemo(
-    () => resolveSidebarRouteOwnerKey(threads, routeThreadKey),
+    () => goalRouteOwnerKey(threads, routeThreadKey),
     [threads, routeThreadKey],
   );
   const routeTargetRef = useRef(routeTarget);
@@ -2836,7 +2837,9 @@ export default function Sidebar() {
     const preciseNow = new Date().toISOString();
     // Subagent child threads live in the parent's Agents surface, not the
     // sidebar roster (v2 models them as real threads with lineage).
-    const visible = filterSidebarV2VisibleThreads(threads, scopedProjectKeys);
+    const visible = nestGoalIterations(
+      filterSidebarV2VisibleThreads(threads, scopedProjectKeys),
+    ).roots;
     inboxReturns.observe(workingShelfEnabled ? threads : null);
     const pinned: EnvironmentThreadShell[] = [];
     const active: EnvironmentThreadShell[] = [];
@@ -2844,7 +2847,9 @@ export default function Sidebar() {
     // Working beta: only inbox threads fold away. Pins stay where the user
     // put them, and snoozed or settled threads keep their shelves.
     const inbox = (thread: EnvironmentThreadShell) =>
-      workingShelfEnabled && isSidebarThreadWorking(thread) ? working : active;
+      workingShelfEnabled && goalAwareThreadWorking(thread.t3Goal, isSidebarThreadWorking(thread))
+        ? working
+        : active;
     const snoozed: EnvironmentThreadShell[] = [];
     const settled: EnvironmentThreadShell[] = [];
     const draggable = new Set<string>();
@@ -2905,11 +2910,7 @@ export default function Sidebar() {
     const sortedPinned = sortPinnedThreadsForSidebar(pinned);
     const sortedActive = workingShelfEnabled
       ? sortInboxThreadsByReturn(active, inboxReturns.returnedAt)
-      : threadSortOrder === "manual"
-        ? sortThreadsForSidebar(active)
-        : threadSortOrder === "last_activity"
-          ? sortThreadsByLastActivity(active)
-          : sortThreads(active, threadSortOrder);
+      : sortThreadsByFlatOrder(active, threadSortOrder, sortThreadsForSidebar);
     return {
       pinnedThreads:
         optimisticDrop?.section !== "pinned" || optimisticDrop.order === null
@@ -5191,7 +5192,7 @@ export default function Sidebar() {
                     <MenuTrigger
                       render={
                         <SidebarHeaderIconButton
-                          label={`Sort threads: ${SIDEBAR_FLAT_THREAD_SORT_LABELS[threadSortOrder]}`}
+                          label={`Sort threads: ${FLAT_THREAD_SORT_OPTIONS.find((option) => option.value === threadSortOrder)?.label}`}
                         />
                       }
                     >
@@ -5208,13 +5209,9 @@ export default function Sidebar() {
                             });
                           }}
                         >
-                          {(
-                            Object.entries(SIDEBAR_FLAT_THREAD_SORT_LABELS) as Array<
-                              [SidebarFlatThreadSortOrder, string]
-                            >
-                          ).map(([value, label]) => (
-                            <MenuRadioItem key={value} value={value}>
-                              {label}
+                          {FLAT_THREAD_SORT_OPTIONS.map((option) => (
+                            <MenuRadioItem key={option.value} value={option.value}>
+                              {option.label}
                             </MenuRadioItem>
                           ))}
                         </MenuRadioGroup>
@@ -5378,11 +5375,12 @@ export default function Sidebar() {
                                 `${thread.environmentId}:${thread.id}`,
                               ) ?? NO_GOAL_ITERATIONS
                             }
-                            activeRouteThreadKey={
-                              goalIterationsByGoalThread.has(`${thread.environmentId}:${thread.id}`)
-                                ? routeThreadKey
-                                : null
-                            }
+                            activeRouteThreadKey={selectedGoalIterationKey(
+                              goalIterationsByGoalThread.get(
+                                `${thread.environmentId}:${thread.id}`,
+                              ),
+                              routeThreadKey,
+                            )}
                             variant={rowVariant}
                             // Snoozed rows wake, settled rows un-settle, and cards settle.
                             variantAction={

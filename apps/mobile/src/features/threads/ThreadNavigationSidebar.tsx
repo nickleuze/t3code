@@ -1,3 +1,4 @@
+import { selectedGoalIterationKey } from "@t3tools/client-runtime/state/thread-goals";
 import { useAndroidControlSizing } from "../../components/useAndroidControlSizing";
 import { useAppearancePreferences } from "../settings/appearance/AppearancePreferencesProvider";
 import { computeThreadMoveAvailability } from "./threadOrder";
@@ -701,7 +702,10 @@ function ThreadNavigationSidebarPane(
               onNewThreadOnBranch={props.onNewThreadOnBranch}
               thread={thread}
               goalIterations={item.item.goalIterations}
-              selectedThreadKey={props.selectedThreadKey}
+              selectedIterationKey={selectedGoalIterationKey(
+                item.item.goalIterations,
+                props.selectedThreadKey,
+              )}
               variant={item.item.variant}
               hasQueuedMessages={item.hasQueuedMessages}
               snoozed={item.item.snoozed}

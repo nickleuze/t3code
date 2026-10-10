@@ -1,4 +1,8 @@
 import type { EnvironmentThreadShell } from "@t3tools/client-runtime/state/shell";
+import {
+  goalIterationLabel,
+  shownGoalIterations,
+} from "@t3tools/client-runtime/state/thread-goals";
 import { useState } from "react";
 import { Pressable, View } from "react-native";
 import { AppText as Text } from "../../components/AppText";
@@ -14,22 +18,16 @@ export function T3GoalHistory(props: {
   const [expanded, setExpanded] = useState(false);
   const [limit, setLimit] = useState(13);
   const currentId = props.owner.t3Goal?.currentChildThreadId;
-  const current = props.iterations.find((thread) => thread.id === currentId);
-  const ordered = [
-    ...(current ? [current] : []),
-    ...props.iterations.filter((thread) => thread !== current),
-  ];
-  const selected = ordered.find(
-    (thread) => `${thread.environmentId}:${thread.id}` === props.selectedThreadKey,
-  );
-  const visible = expanded
-    ? ordered.slice(0, limit)
-    : props.parked
-      ? current
-        ? [current]
-        : []
-      : ordered.slice(0, 3);
-  if (selected && !visible.includes(selected)) visible.push(selected);
+  const visible = shownGoalIterations({
+    iterations: props.iterations,
+    currentThreadId: currentId,
+    selectedKey: props.selectedThreadKey,
+    expanded,
+    parked: props.parked === true,
+    expandedLimit: limit,
+  });
+  const isSelected = (thread: EnvironmentThreadShell) =>
+    `${thread.environmentId}:${thread.id}` === props.selectedThreadKey;
   return (
     <View className="gap-1 pb-2 pl-8 pr-4">
       <Pressable
@@ -40,31 +38,28 @@ export function T3GoalHistory(props: {
         className="min-h-11 justify-center"
       >
         <Text className="text-sm text-foreground-muted">
-          {expanded ? "Hide" : "Show"} iterations ({ordered.length})
+          {expanded ? "Hide" : "Show"} iterations ({props.iterations.length})
         </Text>
       </Pressable>
       {visible.map((thread) => (
         <Pressable
           key={`${thread.environmentId}:${thread.id}`}
           accessibilityRole="button"
-          accessibilityState={{ selected: thread === selected }}
+          accessibilityState={{ selected: isSelected(thread) }}
           accessibilityLabel={`Open goal iteration ${thread.goalIteration?.iteration}: ${thread.title}`}
           onPress={() => props.onSelectThread(thread)}
           className="min-h-11 justify-center rounded-lg px-2 active:bg-subtle"
         >
           <Text
-            className={
-              thread === selected ? "text-sm text-accent" : "text-sm text-foreground-muted"
-            }
+            className={isSelected(thread) ? "text-sm text-accent" : "text-sm text-foreground-muted"}
             numberOfLines={2}
           >
-            #{thread.goalIteration?.iteration}{" "}
-            {thread.title.replace(/^Goal (?:#|iteration )\d+:\s*/, "")}
+            {goalIterationLabel(thread)}
             {thread.id === currentId ? " · Current" : ""}
           </Text>
         </Pressable>
       ))}
-      {expanded && visible.length < ordered.length ? (
+      {expanded && visible.length < props.iterations.length ? (
         <Pressable
           accessibilityRole="button"
           accessibilityLabel="Show more goal iterations"
@@ -72,7 +67,7 @@ export function T3GoalHistory(props: {
           className="min-h-11 justify-center"
         >
           <Text className="text-sm text-foreground-muted">
-            Show more ({ordered.length - visible.length})
+            Show more ({props.iterations.length - visible.length})
           </Text>
         </Pressable>
       ) : null}

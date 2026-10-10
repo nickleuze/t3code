@@ -19,7 +19,7 @@ const fixture = vi.hoisted(() => ({
   dismiss: vi.fn(),
   navigate: vi.fn(),
 }));
-vi.mock("@effect/atom-react", () => ({ useAtomValue: () => fixture.canMutate }));
+vi.mock("../../state/session", () => ({ useEnvironmentScope: () => fixture.canMutate }));
 vi.mock("@react-navigation/native", () => ({
   useNavigation: () => ({ navigate: fixture.navigate }),
 }));
@@ -76,7 +76,7 @@ vi.mock("./RequestActionButton", () => ({
 }));
 vi.mock("../../state/threads", () => ({
   threadEnvironment: {
-    setGoal: { permissionAtom: () => null },
+    setGoal: "set",
     controlGoal: "control",
     dismissGoalProposal: "dismiss",
   },
@@ -264,6 +264,8 @@ it("edits a proposal without starting, validates limits and submits the edited b
   expect(fixture.set).not.toHaveBeenCalled();
   await change("Objective", "Edited objective");
   await change("Done when", "All local checks pass");
+  expect(container.querySelector('[aria-label="Minutes per iteration (15–480)"]')).toBeNull();
+  await act(async () => button("Advanced").click());
   await change("Minutes per iteration (15–480)", "0");
   const start = () =>
     Array.from(container.querySelectorAll<HTMLButtonElement>('[role="dialog"] button')).find(
@@ -271,18 +273,19 @@ it("edits a proposal without starting, validates limits and submits the edited b
     )!;
   expect(start().disabled).toBe(true);
   await change("Minutes per iteration (15–480)", "45");
-  await change("Max usage rise (%)", "15");
-  await change("Burn guard window (minutes)", "30");
-  await change("Idle iterations before pausing (1–20)", "4");
+  await change("Pre-approved actions", "Merge after CI passes");
   await act(async () => start().click());
   expect(fixture.set).toHaveBeenCalledTimes(1);
-  expect(fixture.set.mock.calls[0]![0].input).toMatchObject({
+  const sent = fixture.set.mock.calls[0]![0].input;
+  expect(sent).toMatchObject({
     objective: "Edited objective",
     doneWhen: "All local checks pass",
+    permissions: "Merge after CI passes",
     iterationTimeoutMins: 45,
-    burnGuard: { maxPercentPoints: 15, windowMins: 30 },
-    noProgressLimit: 4,
   });
+  // Limits the editor does not show keep their server defaults.
+  expect(sent).not.toHaveProperty("burnGuard");
+  expect(sent).not.toHaveProperty("noProgressLimit");
 });
 it("exposes historical iterations and progress without starting provider work", async () => {
   fixture.projection = {
@@ -303,7 +306,7 @@ it("exposes historical iterations and progress without starting provider work", 
   await act(async () => button("Goal details").click());
   expect(container.textContent).toContain("The check failed");
   expect(container.textContent).toContain("Assertion failed");
-  expect(container.textContent).toContain("Token usage not reported");
+  expect(container.textContent).toContain("token usage not reported");
   await act(async () => button("Iteration 2: Check failed").click());
   expect(fixture.navigate).toHaveBeenCalledWith("Thread", {
     environmentId: "remote-host",

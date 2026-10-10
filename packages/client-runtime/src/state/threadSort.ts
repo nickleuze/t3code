@@ -1,5 +1,6 @@
 import type { ProjectId } from "@t3tools/contracts";
 import type { SidebarProjectSortOrder, SidebarThreadSortOrder } from "@t3tools/contracts/settings";
+import type { SidebarFlatThreadSortOrder } from "@t3tools/contracts/settings";
 import type { EnvironmentThreadShell } from "./models.ts";
 import * as Arr from "effect/Array";
 import * as Order from "effect/Order";
@@ -400,14 +401,16 @@ export function planPinnedMove(input: {
 }
 
 /**
- * Newest activity first: the later of the last user message and the latest
- * run's completion, so a thread surfaces when the agent finishes a turn too.
- * Lifecycle writes (pin, settle, snooze) bump updatedAt, so it is not used.
+ * Newest activity first: the latest of the last user message, the latest
+ * run's completion and a T3 goal's last transition, so a thread surfaces when
+ * the agent finishes a turn or its goal moves on. Lifecycle writes (pin,
+ * settle, snooze) bump updatedAt, so it is not used.
  */
 export function sortThreadsByLastActivity<
   T extends {
     readonly id: string;
     readonly latestRun?: { readonly completedAt: string | null } | null;
+    readonly t3Goal?: { readonly updatedAt?: string | undefined } | null;
   } & ThreadSortInput,
 >(threads: readonly T[]): T[] {
   if (threads.length < 2) return [...threads];
@@ -417,6 +420,7 @@ export function sortThreadsByLastActivity<
       timestamp: Math.max(
         getLatestUserMessageTimestamp({ ...thread, updatedAt: thread.createdAt }),
         toSortableTimestamp(thread.latestRun?.completedAt ?? undefined) ?? Number.NEGATIVE_INFINITY,
+        toSortableTimestamp(thread.t3Goal?.updatedAt) ?? Number.NEGATIVE_INFINITY,
       ),
     }))
     .sort(
@@ -425,4 +429,37 @@ export function sortThreadsByLastActivity<
         (left.thread.id < right.thread.id ? 1 : left.thread.id > right.thread.id ? -1 : 0),
     )
     .map(({ thread }) => thread);
+}
+
+export const FLAT_THREAD_SORT_OPTIONS: ReadonlyArray<{
+  readonly value: SidebarFlatThreadSortOrder;
+  readonly label: string;
+  readonly description: string;
+}> = [
+  { value: "manual", label: "Manual", description: "Keep your saved arrangement." },
+  {
+    value: "last_activity",
+    label: "Last activity",
+    description: "Newest message, finished turn or goal update first.",
+  },
+  { value: "updated_at", label: "Last message", description: "Newest user message first." },
+  { value: "created_at", label: "Created", description: "Newest threads first." },
+];
+
+/** Orders a flat list's active threads; "manual" defers to the list's own arrangement. */
+export function sortThreadsByFlatOrder<
+  T extends Parameters<typeof sortThreadsByLastActivity>[0][number],
+>(
+  threads: readonly T[],
+  order: SidebarFlatThreadSortOrder,
+  manual: (threads: readonly T[]) => T[],
+): T[] {
+  switch (order) {
+    case "manual":
+      return manual(threads);
+    case "last_activity":
+      return sortThreadsByLastActivity(threads);
+    default:
+      return sortThreads(threads, order);
+  }
 }
