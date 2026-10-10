@@ -399,6 +399,29 @@ export const OrchestrationV2GoalBurnGuard = Schema.Struct({
 });
 export type OrchestrationV2GoalBurnGuard = typeof OrchestrationV2GoalBurnGuard.Type;
 
+/** The burn guard's latest reading of the goal provider's usage windows. */
+export const OrchestrationV2GoalUsageSample = Schema.Struct({
+  at: IsoDateTime,
+  windows: Schema.Array(Schema.Struct({ id: Schema.String, usedPercent: Schema.Number })),
+  /** Largest rise of any window over the guard's trailing window, in percentage points. */
+  risePoints: Schema.Number,
+});
+export type OrchestrationV2GoalUsageSample = typeof OrchestrationV2GoalUsageSample.Type;
+
+/** Iterations get at least this long; shorter saved limits read as this floor. */
+export const MIN_GOAL_ITERATION_TIMEOUT_MINS = 45;
+const DEFAULT_GOAL_ITERATION_TIMEOUT_MINS = 120;
+
+/** The time limit an iteration of this goal runs under. */
+export function goalIterationTimeoutMins(goal: {
+  readonly iterationTimeoutMins?: number | null | undefined;
+}): number {
+  return Math.max(
+    MIN_GOAL_ITERATION_TIMEOUT_MINS,
+    goal.iterationTimeoutMins ?? DEFAULT_GOAL_ITERATION_TIMEOUT_MINS,
+  );
+}
+
 export const OrchestrationV2GoalUsageAccounting = Schema.Literals([
   "exact",
   "estimated",
@@ -444,9 +467,12 @@ export const OrchestrationV2GoalCurrentIteration = Schema.Struct({
   finished: Schema.NullOr(
     Schema.Struct({
       tokens: NonNegativeInt,
+      uncachedTokens: Schema.optional(NonNegativeInt),
       workspaceChanged: Schema.NullOr(Schema.Boolean),
     }),
   ),
+  /** Follow-up turns the loop started in this thread while its context had room. */
+  continuations: Schema.optional(NonNegativeInt),
   /** When the loop asked the child to wrap up ahead of its time limit. */
   wrapUpSentAt: Schema.optional(Schema.NullOr(IsoDateTime)),
   /** When the child ran past its time limit and the loop stopped it. */
@@ -486,8 +512,12 @@ export const OrchestrationV2GoalIterationRecord = Schema.Struct({
   iteration: PositiveInt,
   childThreadId: ThreadId,
   outcome: OrchestrationV2GoalIterationOutcome,
+  /** Context tokens: input including cache reads, plus output. */
   tokens: NonNegativeInt,
+  /** Input not served from cache, plus output; absent before it was tracked. */
+  uncachedTokens: Schema.optional(NonNegativeInt),
   workspaceChanged: Schema.NullOr(Schema.Boolean),
+  continuations: Schema.optional(NonNegativeInt),
   finishedAt: IsoDateTime,
 });
 export type OrchestrationV2GoalIterationRecord = typeof OrchestrationV2GoalIterationRecord.Type;
@@ -521,8 +551,13 @@ export const OrchestrationV2ThreadGoal = Schema.Struct({
   /** Hard ceiling on iterations, independent of the user-facing limits. */
   safetyCap: PositiveInt,
   iteration: NonNegativeInt,
+  /** Context tokens across iterations: input including cache reads, plus output. */
   tokensUsed: NonNegativeInt,
+  /** Input not served from cache, plus output; absent on goals that predate it. */
+  uncachedTokensUsed: Schema.optional(NonNegativeInt),
   usageAccounting: OrchestrationV2GoalUsageAccounting,
+  /** Last usage reading the burn guard took; absent until it sees a usage window. */
+  usageSample: Schema.optional(Schema.NullOr(OrchestrationV2GoalUsageSample)),
   /** Frozen when the goal is set so later thread changes do not alter iterations. */
   modelSelection: ModelSelection,
   runtimeMode: RuntimeMode,
@@ -540,7 +575,7 @@ export const OrchestrationV2ThreadGoal = Schema.Struct({
   background: Schema.optional(Schema.NullOr(Schema.String)),
   /** Actions the user pre-approved, so iterations need not stop to ask. */
   permissions: Schema.optional(Schema.NullOr(Schema.String)),
-  /** Minutes an iteration may run before it is stopped; defaults to 120. */
+  /** Minutes an iteration may run; read it through `goalIterationTimeoutMins`. */
   iterationTimeoutMins: Schema.optional(PositiveInt),
   /** Workspace file iterations keep their detailed handoff in. */
   handoffPath: Schema.optional(Schema.NullOr(Schema.String)),
@@ -559,6 +594,7 @@ export const OrchestrationV2ThreadGoalSummary = Schema.Struct({
   statusReason: Schema.NullOr(OrchestrationV2GoalStatusReason),
   iteration: NonNegativeInt,
   tokensUsed: NonNegativeInt,
+  uncachedTokensUsed: Schema.optional(NonNegativeInt),
   needsInput: Schema.Boolean,
   currentChildThreadId: Schema.NullOr(ThreadId),
   /** Goal transition time, independent of thread visits and other lifecycle writes. */
@@ -607,6 +643,7 @@ export const OrchestrationV2GoalAdvanceStep = Schema.Union([
     type: Schema.Literal("iteration_finished"),
     childOutcome: Schema.Literals(["completed", "failed", "interrupted", "usage_limited"]),
     tokens: NonNegativeInt,
+    uncachedTokens: Schema.optional(NonNegativeInt),
     accounting: OrchestrationV2GoalUsageAccounting,
     workspaceChanged: Schema.NullOr(Schema.Boolean),
     /** When a usage-limited child's provider resets. */
@@ -619,6 +656,9 @@ export const OrchestrationV2GoalAdvanceStep = Schema.Union([
   Schema.Struct({ type: Schema.Literal("wrap_up_sent") }),
   Schema.Struct({ type: Schema.Literal("messages_delivered"), count: PositiveInt }),
   Schema.Struct({ type: Schema.Literal("timed_out") }),
+  /** The child's turn ended with context to spare, so the loop continued it in place. */
+  Schema.Struct({ type: Schema.Literal("turn_continued") }),
+  Schema.Struct({ type: Schema.Literal("usage_sampled"), sample: OrchestrationV2GoalUsageSample }),
 ]);
 export type OrchestrationV2GoalAdvanceStep = typeof OrchestrationV2GoalAdvanceStep.Type;
 
@@ -3148,6 +3188,20 @@ export const OrchestrationV2Command = Schema.Union([
     /** Administrative recovery must not overwrite a subsequent user control. */
     expectedControlCommandId: Schema.optionalKey(CommandId),
     burnGuard: Schema.optional(Schema.NullOr(OrchestrationV2GoalBurnGuard)),
+  }),
+  /**
+   * Edits the brief of a paused or blocked goal. Omitted fields stay as they
+   * are and null clears one; the next iteration starts from the new brief.
+   */
+  Schema.Struct({
+    type: Schema.Literal("thread.goal.update"),
+    commandId: CommandId,
+    threadId: ThreadId,
+    goalId: CommandId,
+    objective: Schema.optional(TrimmedNonEmptyString),
+    doneWhen: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
+    background: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
+    permissions: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
   }),
   /** Discards the goal the thread's agent proposed. */
   Schema.Struct({

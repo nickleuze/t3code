@@ -160,6 +160,7 @@ export function createThreadEnvironmentAtoms<R, E>(
       | "thread.goal.set"
       | "thread.goal.control"
       | "thread.goal.message"
+      | "thread.goal.update"
       | "thread.goal.proposal.dismiss",
   >(
     type: Type,
@@ -194,6 +195,7 @@ export function createThreadEnvironmentAtoms<R, E>(
     setGoal: goalCommand("thread.goal.set"),
     controlGoal: goalCommand("thread.goal.control"),
     messageGoal: goalCommand("thread.goal.message"),
+    updateGoal: goalCommand("thread.goal.update"),
     dismissGoalProposal: goalCommand("thread.goal.proposal.dismiss"),
     create: createEnvironmentCommand(runtime, {
       label: "environment-data:commands:thread:create",
