@@ -10,6 +10,7 @@ import { describe, expect, it } from "vite-plus/test";
 
 import {
   applyGoalCommand,
+  applyGoalProposalCommand,
   DEFAULT_GOAL_BURN_GUARD,
   type GoalCommandInput,
   goalSummary,
@@ -477,5 +478,54 @@ describe("goal state", () => {
       handoffPath: "docs/agent-work/parser/HANDOFF.md",
     });
     expect(goal.handoffPath).toBe("docs/agent-work/parser/HANDOFF.md");
+  });
+});
+
+describe("applyGoalProposalCommand", () => {
+  const proposal = {
+    id: CommandId.make("command:proposal"),
+    objective: "Ship the migration",
+    doneWhen: "Every package uses the new API",
+    background: null,
+    checkCommand: null,
+    permissions: null,
+    iterationTimeoutMins: null,
+    reason: null,
+    proposedAt: NOW,
+  };
+  const withProposal = (thread: GoalThread) => ({ ...thread, goalProposal: null });
+
+  it("stores a proposal on a thread without a live goal", () => {
+    expect(
+      applyGoalProposalCommand(withProposal(rootThread()), { type: "propose", proposal }),
+    ).toEqual({ ok: true, proposal });
+  });
+
+  it("rejects proposals on goal iterations and threads with a live goal", () => {
+    const iteration = {
+      ...withProposal(rootThread()),
+      goalIteration: { parentThreadId: CHILD, goalId: GOAL_ID, iteration: 1 },
+    };
+    expect(applyGoalProposalCommand(iteration, { type: "propose", proposal }).ok).toBe(false);
+    expect(
+      applyGoalProposalCommand(withProposal(rootThread(newGoal())), {
+        type: "propose",
+        proposal,
+      }).ok,
+    ).toBe(false);
+  });
+
+  it("dismisses only the named proposal, and a repeat dismiss succeeds", () => {
+    const thread = { ...rootThread(), goalProposal: proposal };
+    expect(applyGoalProposalCommand(thread, { type: "dismiss", proposalId: proposal.id })).toEqual({
+      ok: true,
+      proposal: null,
+    });
+    expect(
+      applyGoalProposalCommand(thread, {
+        type: "dismiss",
+        proposalId: CommandId.make("command:other"),
+      }),
+    ).toEqual({ ok: true, proposal });
   });
 });

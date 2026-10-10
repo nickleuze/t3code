@@ -904,6 +904,7 @@ export const CLAUDE_READ_ONLY_T3_MCP_ALLOWED_TOOLS: ReadonlyArray<string> = [
   "mcp__t3-code__t3_queue_read",
   "mcp__t3-code__t3_goal_update",
   "mcp__t3-code__t3_goal_complete",
+  "mcp__t3-code__t3_goal_propose",
 ];
 
 // The SDK's `allowedTools` only pre-approves tool calls; availability is the

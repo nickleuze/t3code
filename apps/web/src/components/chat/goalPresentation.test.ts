@@ -4,6 +4,7 @@ import { describe, expect, it } from "vite-plus/test";
 import {
   formatGoalTokens,
   goalComposerPlaceholder,
+  goalDraftRequestMessage,
   goalStatusLabel,
   parseComposerGoalCommand,
 } from "./goalPresentation";
@@ -62,5 +63,14 @@ describe("goal composer placeholder", () => {
     expect(goalComposerPlaceholder({ ...goal, status: "usageLimited" })).toMatch(
       /next goal iteration/,
     );
+  });
+});
+
+describe("goalDraftRequestMessage", () => {
+  it("asks the agent to draft the goal without starting with a slash", () => {
+    const withObjective = goalDraftRequestMessage("fix the flaky tests");
+    expect(withObjective).toMatch(/^Make this a T3 goal: fix the flaky tests\n\n/);
+    expect(withObjective).toContain("t3_goal_propose");
+    expect(goalDraftRequestMessage(null)).toMatch(/^Make the current task a T3 goal\./);
   });
 });

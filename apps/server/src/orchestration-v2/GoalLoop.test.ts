@@ -287,6 +287,70 @@ it.layer(TestLayer)("goal commands", (it) => {
     }),
   );
 
+  it.effect("holds an agent's goal proposal until a goal starts", () =>
+    Effect.gen(function* () {
+      const { orchestrator, threadId, goalId } = yield* setup("goal-proposal");
+      const propose = (suffix: string) =>
+        orchestrator.dispatch({
+          type: "thread.goal.propose",
+          commandId: CommandId.make(`command:goal-proposal:${suffix}`),
+          threadId,
+          objective: "Migrate every package to the new API",
+          doneWhen: "No package imports the old API",
+          background: "The new API lives in packages/api.",
+          checkCommand: null,
+          permissions: null,
+          iterationTimeoutMins: null,
+          reason: null,
+        });
+
+      // A thread that already runs a goal cannot propose another.
+      const rejected = yield* propose("live").pipe(Effect.result);
+      assert.strictEqual(rejected._tag, "Failure");
+
+      yield* orchestrator.dispatch({
+        type: "thread.goal.control",
+        commandId: CommandId.make("command:goal-proposal:stop"),
+        threadId,
+        goalId,
+        action: "stop",
+      });
+      yield* propose("first");
+      assert.deepInclude((yield* orchestrator.getThreadShell(threadId))?.goalProposal, {
+        id: CommandId.make("command:goal-proposal:first"),
+        objective: "Migrate every package to the new API",
+        doneWhen: "No package imports the old API",
+      });
+
+      yield* orchestrator.dispatch({
+        type: "thread.goal.proposal.dismiss",
+        commandId: CommandId.make("command:goal-proposal:dismiss"),
+        threadId,
+        proposalId: CommandId.make("command:goal-proposal:first"),
+      });
+      assert.isNull((yield* orchestrator.getThreadShell(threadId))?.goalProposal);
+
+      yield* propose("second");
+      yield* orchestrator.dispatch({
+        type: "thread.goal.control",
+        commandId: CommandId.make("command:goal-proposal:clear"),
+        threadId,
+        goalId,
+        action: "clear",
+      });
+      yield* orchestrator.dispatch({
+        type: "thread.goal.set",
+        commandId: CommandId.make("command:goal-proposal:start"),
+        threadId,
+        objective: "Migrate every package to the new API",
+        doneWhen: "No package imports the old API",
+      });
+      const shell = yield* orchestrator.getThreadShell(threadId);
+      assert.isNull(shell?.goalProposal);
+      assert.strictEqual(shell?.goal?.status, "active");
+    }),
+  );
+
   it.effect("rejects a stale iteration start", () =>
     Effect.gen(function* () {
       const { orchestrator, threadId, goalId } = yield* setup("goal-stale");

@@ -73,7 +73,12 @@ import { isRestartNoteSource } from "./RestartBackgroundNote.ts";
 import { isUndeliveredMailboxSteer } from "./NotificationMailbox.ts";
 import { EventSinkV2 } from "./EventSink.ts";
 import type { OrchestrationEffectRequestV2, PendingOrchestrationEffectV2 } from "./EffectOutbox.ts";
-import { applyGoalCommand, goalIterationTitle, type GoalCommandInput } from "./GoalState.ts";
+import {
+  applyGoalCommand,
+  applyGoalProposalCommand,
+  goalIterationTitle,
+  type GoalCommandInput,
+} from "./GoalState.ts";
 import { IdAllocatorV2 } from "./IdAllocator.ts";
 import {
   ThreadCommandExecutor,
@@ -346,6 +351,8 @@ function commandThreadId(command: OrchestrationV2ServerCommand): ThreadId {
     case "thread.goal.set":
     case "thread.goal.control":
     case "thread.goal.message":
+    case "thread.goal.proposal.dismiss":
+    case "thread.goal.propose":
     case "thread.goal.iteration.start":
     case "thread.goal.report":
     case "thread.goal.advance":
@@ -6164,8 +6171,64 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       payload: {
         ...thread,
         goal: result.goal,
+        // Starting a goal takes the place of whatever the agent proposed.
+        goalProposal: input.type === "set" ? null : (thread.goalProposal ?? null),
         updatedAt: result.goal?.status === previous?.status ? thread.updatedAt : now,
       },
+    });
+  });
+
+  /**
+   * Goal proposals from the thread's agent (`t3_goal_propose`). They only
+   * describe a goal; the user starts it with `thread.goal.set`.
+   */
+  const dispatchGoalProposal = Effect.fn("orchestrationV2.dispatch.goalProposal")(function* (
+    command: Extract<
+      OrchestrationV2ServerCommand,
+      { readonly type: "thread.goal.propose" | "thread.goal.proposal.dismiss" }
+    >,
+    events: Ref.Ref<Array<OrchestrationV2DomainEvent>>,
+  ) {
+    const thread = yield* projectionStore
+      .getThread(command.threadId)
+      .pipe(mapDispatchError(command));
+    const reject = (cause: string) =>
+      new OrchestratorDispatchError({
+        commandId: command.commandId,
+        commandType: command.type,
+        cause,
+      });
+    if (thread.deletedAt !== null) return yield* reject(`Thread ${command.threadId} is deleted.`);
+    const now = yield* DateTime.now;
+    const result = applyGoalProposalCommand(
+      thread,
+      command.type === "thread.goal.propose"
+        ? {
+            type: "propose",
+            proposal: {
+              id: command.commandId,
+              objective: command.objective,
+              doneWhen: command.doneWhen,
+              background: command.background,
+              checkCommand: command.checkCommand,
+              permissions: command.permissions,
+              iterationTimeoutMins: command.iterationTimeoutMins,
+              reason: command.reason,
+              proposedAt: DateTime.formatIso(now),
+            },
+          }
+        : { type: "dismiss", proposalId: command.proposalId },
+    );
+    if (!result.ok) return yield* reject(result.reason);
+    yield* emit(
+      events,
+      command,
+    )({
+      type: "thread.metadata-updated",
+      threadId: command.threadId,
+      providerInstanceId: thread.providerInstanceId,
+      occurredAt: now,
+      payload: { ...thread, goalProposal: result.proposal },
     });
   });
 
@@ -9292,6 +9355,10 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         break;
       case "thread.goal.iteration.start":
         yield* dispatchGoalIterationStart(command, events, effects);
+        break;
+      case "thread.goal.propose":
+      case "thread.goal.proposal.dismiss":
+        yield* dispatchGoalProposal(command, events);
         break;
       case "message.dispatch": {
         // The provider owns a native subagent's conversation, so a sent

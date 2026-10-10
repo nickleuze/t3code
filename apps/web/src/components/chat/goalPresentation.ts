@@ -13,6 +13,19 @@ export function parseComposerGoalCommand(
   return { objective: objective.length > 0 ? objective : null };
 }
 
+/**
+ * What `/t3-goal` sends to the thread's agent, which drafts the goal with
+ * `t3_goal_propose` for the user to start. It must not start with "/", or
+ * providers would read it as one of their own commands.
+ */
+export function goalDraftRequestMessage(objective: string | null): string {
+  const instruction =
+    "Draft it with the t3_goal_propose tool, inferring the finish line, background and any check command from our conversation and the workspace.";
+  return objective === null
+    ? `Make the current task a T3 goal. ${instruction}`
+    : `Make this a T3 goal: ${objective}\n\n${instruction}`;
+}
+
 const PAUSE_REASONS: Record<
   NonNullable<OrchestrationV2ThreadGoalSummary["statusReason"]>,
   (iteration: number) => string

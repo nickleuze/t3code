@@ -16,6 +16,7 @@ import type {
   OrchestrationV2GoalIterationOutcome,
   OrchestrationV2GoalIterationRecord,
   OrchestrationV2GoalProgressNote,
+  OrchestrationV2GoalProposal,
   OrchestrationV2GoalStatus,
   OrchestrationV2GoalUsageAccounting,
   OrchestrationV2ThreadGoal,
@@ -126,6 +127,48 @@ export function goalIterationTimeoutMins(
   goal: Pick<OrchestrationV2ThreadGoal, "iterationTimeoutMins">,
 ) {
   return goal.iterationTimeoutMins ?? DEFAULT_GOAL_ITERATION_TIMEOUT_MINS;
+}
+
+export type GoalProposalCommandInput =
+  | { readonly type: "propose"; readonly proposal: OrchestrationV2GoalProposal }
+  | { readonly type: "dismiss"; readonly proposalId: CommandId };
+
+export type GoalProposalCommandResult =
+  | { readonly ok: true; readonly proposal: OrchestrationV2GoalProposal | null }
+  | { readonly ok: false; readonly reason: string };
+
+/**
+ * A thread holds at most one proposal, and only while it could start a goal.
+ * A new proposal replaces the old one; dismissing a proposal that is already
+ * gone succeeds so a repeated click does not error.
+ */
+export function applyGoalProposalCommand(
+  thread: Pick<
+    OrchestrationV2AppThread,
+    "goal" | "goalIteration" | "goalProposal" | "lineage" | "archivedAt"
+  >,
+  command: GoalProposalCommandInput,
+): GoalProposalCommandResult {
+  const current = thread.goalProposal ?? null;
+  if (command.type === "dismiss") {
+    return { ok: true, proposal: current?.id === command.proposalId ? null : current };
+  }
+  if (thread.archivedAt !== null)
+    return { ok: false, reason: "Archived threads cannot run a goal." };
+  if (thread.goalIteration != null || thread.lineage.relationshipToParent === "subagent") {
+    return {
+      ok: false,
+      reason: "Goal iterations and subagent threads cannot propose goals of their own.",
+    };
+  }
+  if (isLiveGoal(thread.goal)) {
+    return {
+      ok: false,
+      reason:
+        "This thread already runs a goal. Message it through the goal instead of proposing another.",
+    };
+  }
+  return { ok: true, proposal: command.proposal };
 }
 
 /**

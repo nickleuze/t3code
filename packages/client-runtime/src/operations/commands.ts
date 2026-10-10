@@ -531,6 +531,22 @@ export const controlThreadGoal = Effect.fn("EnvironmentCommands.controlThreadGoa
   });
 });
 
+export type DismissThreadGoalProposalInput = Omit<
+  Extract<OrchestrationV2Command, { type: "thread.goal.proposal.dismiss" }>,
+  "type" | "commandId"
+> &
+  CommandMetadata;
+export const dismissThreadGoalProposal = Effect.fn("EnvironmentCommands.dismissThreadGoalProposal")(
+  function* (input: DismissThreadGoalProposalInput) {
+    return yield* dispatch({
+      type: "thread.goal.proposal.dismiss",
+      commandId: yield* allocateCommandId(input),
+      threadId: input.threadId,
+      proposalId: input.proposalId,
+    });
+  },
+);
+
 export const reorderPinnedThread = Effect.fn("EnvironmentCommands.reorderPinnedThread")(function* (
   input: ReorderPinnedThreadInput,
 ) {

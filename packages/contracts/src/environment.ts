@@ -165,6 +165,9 @@ export const ExecutionEnvironmentCapabilities = Schema.Struct({
   /** Server runs `/goal` loops (thread.goal.set / thread.goal.control).
       Clients hide `/goal` when absent. */
   threadGoals: Schema.optionalKey(Schema.Boolean),
+  /** Agents draft goals with `t3_goal_propose`; `/t3-goal` asks them to.
+      Clients fall back to the goal form when absent. */
+  goalProposals: Schema.optionalKey(Schema.Boolean),
   /** Fork-only: server answers server.forkUpdateStatus / server.installForkUpdate. */
   forkUpdates: Schema.optionalKey(Schema.Boolean),
   pullRequestStackActions: Schema.optionalKey(Schema.Boolean),

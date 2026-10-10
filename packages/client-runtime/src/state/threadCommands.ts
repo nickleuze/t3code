@@ -44,6 +44,7 @@ import {
   type SetThreadGoalInput,
   type MessageThreadGoalInput,
   type ControlThreadGoalInput,
+  type DismissThreadGoalProposalInput,
   type SettleThreadInput,
   type SnoozeThreadInput,
   type StartThreadTurnInput,
@@ -81,6 +82,7 @@ import {
   setThreadGoal,
   messageThreadGoal,
   controlThreadGoal,
+  dismissThreadGoalProposal,
   settleThread,
   snoozeThread,
   startThreadTurn,
@@ -254,6 +256,12 @@ export function createThreadEnvironmentAtoms<R, E>(
     controlGoal: createEnvironmentCommand(runtime, {
       label: "environment-data:commands:thread:control-goal",
       execute: (input: ControlThreadGoalInput) => controlThreadGoal(input),
+      scheduler,
+      concurrency,
+    }),
+    dismissGoalProposal: createEnvironmentCommand(runtime, {
+      label: "environment-data:commands:thread:dismiss-goal-proposal",
+      execute: (input: DismissThreadGoalProposalInput) => dismissThreadGoalProposal(input),
       scheduler,
       concurrency,
     }),

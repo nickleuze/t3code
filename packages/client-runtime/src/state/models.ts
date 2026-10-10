@@ -124,6 +124,8 @@ export interface EnvironmentThreadShell {
   readonly goal?: import("@t3tools/contracts").OrchestrationV2ThreadGoalSummary | null;
   /** Set when this thread runs one iteration of a parent thread's goal. */
   readonly goalIteration?: import("@t3tools/contracts").OrchestrationV2GoalIterationMarker | null;
+  /** A goal the thread's agent drafted, waiting for the user to start it. */
+  readonly goalProposal?: import("@t3tools/contracts").OrchestrationV2GoalProposal | null;
   readonly pinnedAt: string | null;
   readonly autoSettleDisabledAt?: string | null;
   /** Slot in the user-arranged pinned order; null for keyless (legacy) pins. */
@@ -261,6 +263,7 @@ export function presentThreadShell(
     limitRecovery: thread.limitRecovery ?? null,
     goal: thread.goal ?? null,
     goalIteration: thread.goalIteration ?? null,
+    goalProposal: thread.goalProposal ?? null,
     pinnedAt: nullableIso(thread.pinnedAt ?? null),
     autoSettleDisabledAt: nullableIso(thread.autoSettleDisabledAt ?? null),
     pinOrderKey: thread.pinOrderKey ?? null,

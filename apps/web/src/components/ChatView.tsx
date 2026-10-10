@@ -1,9 +1,10 @@
 import { ChatCanvas } from "./chat/ChatCanvas";
 import { usageLimitRecoveryBannerItem } from "./chat/UsageLimitRecoveryBanner";
-import { goalBannerItem, type GoalControlAction } from "./chat/GoalBanner";
+import { goalBannerItem, goalProposalBannerItem, type GoalControlAction } from "./chat/GoalBanner";
 import { GoalDialog, type GoalDialogSubmission } from "./chat/GoalDialog";
 import {
   goalComposerPlaceholder,
+  goalDraftRequestMessage,
   goalIsLive,
   parseComposerGoalCommand,
 } from "./chat/goalPresentation";
@@ -70,6 +71,7 @@ import {
   type ServerProvider,
   type ResolvedKeybindingsConfig,
   type ScopedThreadRef,
+  type OrchestrationV2GoalProposal,
   type ThreadId,
   type ThreadLinkedPullRequest,
   type RunId,
@@ -1547,6 +1549,13 @@ export default function ChatView(props: ChatViewProps) {
   });
   // The objective the open /t3-goal dialog starts with; null while it is closed.
   const [goalDialogObjective, setGoalDialogObjective] = useState<string | null>(null);
+  // The agent's proposal the open dialog edits, if any.
+  const [goalDialogProposal, setGoalDialogProposal] = useState<OrchestrationV2GoalProposal | null>(
+    null,
+  );
+  const dismissGoalProposal = useAtomCommand(threadEnvironment.dismissGoalProposal, {
+    reportFailure: false,
+  });
   const messageThreadGoal = useAtomCommand(threadEnvironment.messageGoal, {
     reportFailure: false,
   });
@@ -2875,6 +2884,8 @@ export default function ChatView(props: ChatViewProps) {
     serverConfig?.environment.capabilities.threadGoals === true &&
     activeThreadShell?.goalIteration == null &&
     activeThread?.lineage.relationshipToParent !== "subagent";
+  // `/t3-goal` asks the agent to draft the goal; older servers get the form.
+  const goalProposalsAvailable = serverConfig?.environment.capabilities.goalProposals === true;
   const attachmentEnvironmentConfig = environmentById.get(environmentId)?.serverConfig ?? null;
   const attachmentUploadsCapabilityKnown = attachmentEnvironmentConfig !== null;
   const supportsQuestionAttachments =
@@ -7167,6 +7178,41 @@ export default function ChatView(props: ChatViewProps) {
           onOpenIteration: openThreadById,
         })
       : null;
+  const goalProposal = activeThreadShell?.goalProposal ?? null;
+  const goalProposalBanner =
+    goalProposal !== null && activeThreadShell && !(activeGoal !== null && goalIsLive(activeGoal))
+      ? goalProposalBannerItem({
+          proposal: goalProposal,
+          onStart: async () => {
+            const result = await setThreadGoal({
+              environmentId,
+              input: {
+                threadId: activeThreadShell.id,
+                objective: goalProposal.objective,
+                doneWhen: goalProposal.doneWhen,
+                background: goalProposal.background,
+                checkCommand: goalProposal.checkCommand,
+                permissions: goalProposal.permissions,
+                ...(goalProposal.iterationTimeoutMins === null
+                  ? {}
+                  : { iterationTimeoutMins: goalProposal.iterationTimeoutMins }),
+              },
+            });
+            if (result._tag === "Failure") throw squashAtomCommandFailure(result);
+          },
+          onEdit: () => {
+            setGoalDialogProposal(goalProposal);
+            setGoalDialogObjective(goalProposal.objective);
+          },
+          onDismiss: async () => {
+            const result = await dismissGoalProposal({
+              environmentId,
+              input: { threadId: activeThreadShell.id, proposalId: goalProposal.id },
+            });
+            if (result._tag === "Failure") throw squashAtomCommandFailure(result);
+          },
+        })
+      : null;
   const goalIteration = activeThreadShell?.goalIteration ?? null;
   const goalIterationBanner: ComposerBannerStackItem | null =
     goalIteration === null
@@ -7190,7 +7236,7 @@ export default function ChatView(props: ChatViewProps) {
         };
   const composerBannerItems = useMemo<ComposerBannerStackItem[]>(() => {
     const limitRecoveryItems = limitRecoveryBanner === null ? [] : [limitRecoveryBanner];
-    const goalItems = [goalBanner, goalIterationBanner].filter(
+    const goalItems = [goalProposalBanner, goalBanner, goalIterationBanner].filter(
       (item): item is ComposerBannerStackItem => item !== null,
     );
     const backgroundWorkItems = backgroundWorkBannerItem === null ? [] : [backgroundWorkBannerItem];
@@ -7272,6 +7318,7 @@ export default function ChatView(props: ChatViewProps) {
     feedbackBannerItems,
     limitRecoveryBanner,
     goalBanner,
+    goalProposalBanner,
     goalIterationBanner,
     handleRestoreThreadBranch,
     isRestoringThreadBranch,
@@ -8189,12 +8236,17 @@ export default function ChatView(props: ChatViewProps) {
       composerRef.current?.resetCursorState();
       return;
     }
-    // `/t3-goal <objective>` opens the goal dialog; the draft stays until the goal starts.
+    // `/t3-goal [objective]` asks the agent to draft the goal, which the user
+    // then starts from the proposal card. Older servers open the goal form,
+    // whose draft stays until the goal starts.
     if (goalCommandAvailable && !directAnnotation && !composerHasNonPromptContent) {
       const goalCommand = parseComposerGoalCommand(promptRef.current);
       if (goalCommand !== null) {
-        setGoalDialogObjective(goalCommand.objective ?? "");
-        return;
+        if (!goalProposalsAvailable) {
+          setGoalDialogObjective(goalCommand.objective ?? "");
+          return;
+        }
+        promptRef.current = goalDraftRequestMessage(goalCommand.objective);
       }
     }
 
@@ -10621,6 +10673,7 @@ export default function ChatView(props: ChatViewProps) {
     });
     if (result._tag === "Failure") throw squashAtomCommandFailure(result);
     setGoalDialogObjective(null);
+    setGoalDialogProposal(null);
     if (parseComposerGoalCommand(promptRef.current) !== null) {
       promptRef.current = "";
       setComposerDraftPrompt(composerDraftTarget, "");
@@ -10636,7 +10689,12 @@ export default function ChatView(props: ChatViewProps) {
       {goalDialogObjective !== null && activeThreadShell ? (
         <GoalDialog
           initialObjective={goalDialogObjective}
+          initialDoneWhen={goalDialogProposal?.doneWhen}
+          initialPermissions={goalDialogProposal?.permissions}
+          initialCheckCommand={goalDialogProposal?.checkCommand}
+          initialTimeoutMins={goalDialogProposal?.iterationTimeoutMins}
           initialBackground={
+            goalDialogProposal?.background ??
             activeProposedPlan?.planMarkdown ??
             serverProjection?.messages.findLast(
               (message) => message.role === "assistant" && message.text.trim().length > 0,
@@ -10645,7 +10703,10 @@ export default function ChatView(props: ChatViewProps) {
           }
           runtimeMode={activeThreadShell.runtimeMode}
           onSubmit={startGoal}
-          onClose={() => setGoalDialogObjective(null)}
+          onClose={() => {
+            setGoalDialogObjective(null);
+            setGoalDialogProposal(null);
+          }}
         />
       ) : null}
       <Dialog
@@ -11033,9 +11094,7 @@ export default function ChatView(props: ChatViewProps) {
                                   ? goalComposerPlaceholder(activeGoal)
                                   : undefined
                               }
-                              onGoalCommand={
-                                goalCommandAvailable ? () => setGoalDialogObjective("") : undefined
-                              }
+                              goalCommandAvailable={goalCommandAvailable}
                               onUsageLimitsCommand={
                                 usageLimitsOffered &&
                                 usageLimitsKey !== null &&

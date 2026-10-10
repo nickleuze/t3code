@@ -45,4 +45,30 @@ const GoalCompleteTool = Tool.make("t3_goal_complete", {
   .annotate(Tool.Readonly, true)
   .annotate(Tool.Destructive, false);
 
-export const GoalToolkit = Toolkit.make(GoalUpdateTool, GoalCompleteTool);
+const text = (max: number) => Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(max));
+
+const GoalProposeTool = Tool.make("t3_goal_propose", {
+  ...shared,
+  description: [
+    "Propose a /t3-goal for this thread: a long-running loop in which T3 Code runs fresh agent iterations, each starting from the goal, its progress notes and a handoff file, until the goal is done. Nothing runs until the user clicks Start on the proposal card, so propose freely when it fits.",
+    "Call it when the user asks to make something a goal or to keep working on it over a long stretch, and on your own when the task clearly needs more than one session: many dependent steps, long build or CI cycles, broad migrations or refactors, or iterating until a test suite passes. Do not propose for work you can finish in this turn.",
+    "Infer every field from the conversation and the workspace instead of asking the user. Write background for a fresh agent that has not seen this conversation: decisions, constraints, relevant files and the plan. Only list preApprovedActions the user already approved here, such as committing or pushing to a branch; never invent permissions. Only set checkCommand when you know a command that exits 0 exactly when the goal is met.",
+    "After proposing, tell the user in one short sentence that the goal is ready to start, and end your turn without starting the work yourself.",
+  ].join(" "),
+  parameters: Schema.Struct({
+    objective: text(500),
+    doneWhen: text(1_000),
+    background: Schema.optional(text(6_000)),
+    checkCommand: Schema.optional(text(500)),
+    preApprovedActions: Schema.optional(text(1_000)),
+    minutesPerIteration: Schema.optional(
+      Schema.Int.check(Schema.isBetween({ minimum: 15, maximum: 480 })),
+    ),
+    reason: Schema.optional(text(300)),
+  }),
+  success: Schema.Struct({ proposed: Schema.Boolean }),
+})
+  .annotate(Tool.Readonly, true)
+  .annotate(Tool.Destructive, false);
+
+export const GoalToolkit = Toolkit.make(GoalUpdateTool, GoalCompleteTool, GoalProposeTool);

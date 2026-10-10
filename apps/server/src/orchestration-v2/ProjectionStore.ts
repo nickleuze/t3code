@@ -1422,6 +1422,7 @@ export function threadShellFromProjection(
     limitRecovery: projection.thread.limitRecovery ?? null,
     goal: goalSummary(projection.thread.goal),
     goalIteration: projection.thread.goalIteration ?? null,
+    goalProposal: projection.thread.goalProposal ?? null,
     deletedAt: projection.thread.deletedAt,
   };
 }
@@ -1648,6 +1649,7 @@ function shellFromState(input: {
     limitRecovery: input.state.thread.limitRecovery ?? null,
     goal: goalSummary(input.state.thread.goal),
     goalIteration: input.state.thread.goalIteration ?? null,
+    goalProposal: input.state.thread.goalProposal ?? null,
     deletedAt: input.state.thread.deletedAt,
   };
 }

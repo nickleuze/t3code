@@ -1,4 +1,8 @@
-import type { OrchestrationV2ThreadGoalSummary, ThreadId } from "@t3tools/contracts";
+import type {
+  OrchestrationV2GoalProposal,
+  OrchestrationV2ThreadGoalSummary,
+  ThreadId,
+} from "@t3tools/contracts";
 import { TargetIcon } from "lucide-react";
 import { useState } from "react";
 
@@ -114,6 +118,72 @@ function GoalBannerActions({ goal, onControl, onOpenIteration }: GoalBannerProps
           {pending === "stop" ? "Stopping..." : "Stop"}
         </Button>
       ) : null}
+      {error ? (
+        <p role="alert" className="basis-full text-xs text-destructive">
+          {error}
+        </p>
+      ) : null}
+    </div>
+  );
+}
+
+interface GoalProposalBannerProps {
+  readonly proposal: OrchestrationV2GoalProposal;
+  readonly onStart: () => Promise<void>;
+  readonly onEdit: () => void;
+  readonly onDismiss: () => Promise<void>;
+}
+
+/** The goal the thread's agent drafted, one click from running. */
+export function goalProposalBannerItem(props: GoalProposalBannerProps): ComposerBannerStackItem {
+  const { proposal } = props;
+  return {
+    id: `goal-proposal:${proposal.id}`,
+    variant: "info",
+    priority: "urgent",
+    icon: <TargetIcon />,
+    title: `Proposed goal: ${proposal.objective}`,
+    description: [
+      `Done when: ${proposal.doneWhen}`,
+      ...(proposal.checkCommand ? [`Check: ${proposal.checkCommand}`] : []),
+      ...(proposal.reason ? [proposal.reason] : []),
+    ].join(" · "),
+    actions: <GoalProposalActions key={proposal.id} {...props} />,
+    dismissLabel: "Dismiss proposed goal",
+    onDismiss: () =>
+      void props.onDismiss().catch((cause: unknown) =>
+        toastManager.add(
+          stackedThreadToast({
+            type: "error",
+            title: "Could not dismiss the proposed goal",
+            description: cause instanceof Error ? cause.message : String(cause),
+          }),
+        ),
+      ),
+  };
+}
+
+function GoalProposalActions({ onStart, onEdit }: GoalProposalBannerProps) {
+  const [pending, setPending] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const start = async () => {
+    setPending(true);
+    setError(null);
+    try {
+      await onStart();
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "Could not start the goal.");
+      setPending(false);
+    }
+  };
+  return (
+    <div className="flex flex-wrap items-center gap-2">
+      <Button size="xs" disabled={pending} onClick={() => void start()}>
+        {pending ? "Starting..." : "Start goal"}
+      </Button>
+      <Button size="xs" variant="ghost" disabled={pending} onClick={onEdit}>
+        Edit
+      </Button>
       {error ? (
         <p role="alert" className="basis-full text-xs text-destructive">
           {error}

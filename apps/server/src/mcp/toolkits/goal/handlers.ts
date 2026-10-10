@@ -50,6 +50,11 @@ const report = (
     return { iteration: marker.iteration, recorded: true };
   });
 
+const trimmedOrNull = (value: string | undefined) => {
+  const trimmed = value?.trim() ?? "";
+  return trimmed === "" ? null : trimmed;
+};
+
 export const GoalHandlersLive = GoalToolkit.toLayer({
   t3_goal_update: ({ note, handoffPath }) =>
     report({
@@ -61,4 +66,42 @@ export const GoalHandlersLive = GoalToolkit.toLayer({
     }),
   t3_goal_complete: ({ status, summary }) =>
     report({ type: "claim", status, summary: summary.trim() }),
+  t3_goal_propose: (input) =>
+    Effect.gen(function* () {
+      const { threads, caller } = yield* readMutationCaller();
+      const crypto = yield* Crypto.Crypto;
+      const objective = trimmedOrNull(input.objective);
+      const doneWhen = trimmedOrNull(input.doneWhen);
+      if (objective === null || doneWhen === null) {
+        return yield* new OrchestratorMcpFailure({
+          code: "invalid_request",
+          message: "A goal proposal needs an objective and a doneWhen.",
+        });
+      }
+      yield* threads
+        .dispatch({
+          type: "thread.goal.propose",
+          commandId: CommandId.make(
+            `goal-propose:${caller.id}:${yield* crypto.randomUUIDv4.pipe(Effect.orDie)}`,
+          ),
+          threadId: caller.id,
+          objective,
+          doneWhen,
+          background: trimmedOrNull(input.background),
+          checkCommand: trimmedOrNull(input.checkCommand),
+          permissions: trimmedOrNull(input.preApprovedActions),
+          iterationTimeoutMins: input.minutesPerIteration ?? null,
+          reason: trimmedOrNull(input.reason),
+        })
+        .pipe(
+          Effect.mapError(
+            (error) =>
+              new OrchestratorMcpFailure({
+                code: "invalid_request",
+                message: error.message,
+              }),
+          ),
+        );
+      return { proposed: true };
+    }),
 });

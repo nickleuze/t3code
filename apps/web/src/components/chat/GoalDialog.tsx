@@ -41,6 +41,11 @@ interface GoalDialogProps {
   readonly initialObjective: string;
   /** This thread's latest plan or answer, offered as background for every iteration. */
   readonly initialBackground: string | null;
+  /** Fields of the agent's proposal when the dialog edits one. */
+  readonly initialDoneWhen?: string | undefined;
+  readonly initialPermissions?: string | null | undefined;
+  readonly initialCheckCommand?: string | null | undefined;
+  readonly initialTimeoutMins?: number | null | undefined;
   readonly runtimeMode: RuntimeMode;
   readonly onSubmit: (submission: GoalDialogSubmission) => Promise<void>;
   readonly onClose: () => void;
@@ -50,19 +55,23 @@ interface GoalDialogProps {
 export function GoalDialog({
   initialObjective,
   initialBackground,
+  initialDoneWhen,
+  initialPermissions,
+  initialCheckCommand,
+  initialTimeoutMins,
   runtimeMode,
   onSubmit,
   onClose,
 }: GoalDialogProps) {
   const id = useId();
   const [objective, setObjective] = useState(initialObjective);
-  const [doneWhen, setDoneWhen] = useState("");
+  const [doneWhen, setDoneWhen] = useState(initialDoneWhen ?? "");
   const [background, setBackground] = useState(
     () => initialBackground?.trim().slice(0, MAX_BACKGROUND_CHARS) ?? "",
   );
-  const [permissions, setPermissions] = useState("");
-  const [timeoutMins, setTimeoutMins] = useState<number | null>(120);
-  const [checkCommand, setCheckCommand] = useState("");
+  const [permissions, setPermissions] = useState(initialPermissions ?? "");
+  const [timeoutMins, setTimeoutMins] = useState<number | null>(initialTimeoutMins ?? 120);
+  const [checkCommand, setCheckCommand] = useState(initialCheckCommand ?? "");
   const [guardEnabled, setGuardEnabled] = useState(true);
   const [maxPercentPoints, setMaxPercentPoints] = useState<number | null>(20);
   const [windowMins, setWindowMins] = useState<number | null>(60);

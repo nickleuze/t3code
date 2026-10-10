@@ -564,6 +564,25 @@ export const OrchestrationV2GoalIterationMarker = Schema.Struct({
 });
 export type OrchestrationV2GoalIterationMarker = typeof OrchestrationV2GoalIterationMarker.Type;
 
+/**
+ * A goal an agent drafted for its thread with `t3_goal_propose`. Nothing runs
+ * until the user starts it, which sends `thread.goal.set` with these fields.
+ */
+export const OrchestrationV2GoalProposal = Schema.Struct({
+  /** Command id of the `thread.goal.propose` that drafted it. */
+  id: CommandId,
+  objective: TrimmedNonEmptyString,
+  doneWhen: TrimmedNonEmptyString,
+  background: Schema.NullOr(Schema.String),
+  checkCommand: Schema.NullOr(TrimmedNonEmptyString),
+  permissions: Schema.NullOr(Schema.String),
+  iterationTimeoutMins: Schema.NullOr(PositiveInt),
+  /** Why the agent thinks this needs a goal rather than one more turn. */
+  reason: Schema.NullOr(Schema.String),
+  proposedAt: IsoDateTime,
+});
+export type OrchestrationV2GoalProposal = typeof OrchestrationV2GoalProposal.Type;
+
 /** Observations the goal loop records; the server reducer decides what follows. */
 export const OrchestrationV2GoalAdvanceStep = Schema.Union([
   Schema.Struct({
@@ -639,6 +658,8 @@ export const OrchestrationV2AppThread = Schema.Struct({
   goal: Schema.optional(Schema.NullOr(OrchestrationV2ThreadGoal)),
   /** Set on child threads that run one iteration of a parent's goal. */
   goalIteration: Schema.optional(Schema.NullOr(OrchestrationV2GoalIterationMarker)),
+  /** A goal the thread's agent drafted, waiting for the user to start it. */
+  goalProposal: Schema.optional(Schema.NullOr(OrchestrationV2GoalProposal)),
   pinnedAt: Schema.optional(Schema.NullOr(Schema.DateTimeUtc)),
   autoSettleDisabledAt: Schema.optional(Schema.NullOr(Schema.DateTimeUtc)),
   // Fractional-index slot in the user-arranged pinned order. Optional so
@@ -1968,6 +1989,8 @@ export const OrchestrationV2ThreadShell = Schema.Struct({
   /** Omitted by servers that predate `/goal`. */
   goal: Schema.optional(Schema.NullOr(OrchestrationV2ThreadGoalSummary)),
   goalIteration: Schema.optional(Schema.NullOr(OrchestrationV2GoalIterationMarker)),
+  /** Omitted by servers that predate goal proposals. */
+  goalProposal: Schema.optional(Schema.NullOr(OrchestrationV2GoalProposal)),
   /** Omitted by servers that predate thread pinning. */
   pinnedAt: Schema.optional(Schema.NullOr(Schema.DateTimeUtc)),
   autoSettleDisabledAt: Schema.optional(Schema.NullOr(Schema.DateTimeUtc)),
@@ -2908,6 +2931,13 @@ export const OrchestrationV2Command = Schema.Union([
     action: Schema.Literals(["pause", "resume", "stop", "clear"]),
     burnGuard: Schema.optional(Schema.NullOr(OrchestrationV2GoalBurnGuard)),
   }),
+  /** Discards the goal the thread's agent proposed. */
+  Schema.Struct({
+    type: Schema.Literal("thread.goal.proposal.dismiss"),
+    commandId: CommandId,
+    threadId: ThreadId,
+    proposalId: CommandId,
+  }),
   Schema.Struct({
     type: Schema.Literal("provider-session.detach"),
     commandId: CommandId,
@@ -3145,6 +3175,19 @@ const OrchestrationV2InternalCommand = Schema.Union([
     runId: RunId,
     requestId: RuntimeRequestId,
     questions: Schema.Array(OrchestrationV2UserInputQuestion),
+  }),
+  /** The thread's agent drafts a goal; it replaces any earlier proposal. */
+  Schema.Struct({
+    type: Schema.Literal("thread.goal.propose"),
+    commandId: CommandId,
+    threadId: ThreadId,
+    objective: TrimmedNonEmptyString,
+    doneWhen: TrimmedNonEmptyString,
+    background: Schema.NullOr(TrimmedNonEmptyString),
+    checkCommand: Schema.NullOr(TrimmedNonEmptyString),
+    permissions: Schema.NullOr(TrimmedNonEmptyString),
+    iterationTimeoutMins: Schema.NullOr(PositiveInt),
+    reason: Schema.NullOr(TrimmedNonEmptyString),
   }),
   /**
    * Creates the child thread for goal iteration `iteration` and starts its

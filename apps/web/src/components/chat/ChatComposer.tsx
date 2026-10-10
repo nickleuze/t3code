@@ -1537,8 +1537,8 @@ export interface ChatComposerProps {
   bannerItems: readonly ComposerBannerStackItem[];
   /** Picking /usage-limits from the menu is the action itself; the draft keeps nothing of it. */
   onUsageLimitsCommand?: (() => void) | undefined;
-  /** Opens the `/t3-goal` dialog; the menu offers `/t3-goal` only when this is set. */
-  onGoalCommand?: (() => void) | undefined;
+  /** The menu offers `/t3-goal` only when the thread can start a goal. */
+  goalCommandAvailable?: boolean | undefined;
   /** Replaces the default placeholder while sends go to the thread's goal. */
   goalPlaceholder?: string | undefined;
   environmentUnavailable: {
@@ -2263,7 +2263,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
 
   const selectedPromptEffort = composerProviderState.promptEffort;
   const selectedModelOptionsForDispatch = composerProviderState.modelOptionsForDispatch;
-  const goalCommandAvailable = props.onGoalCommand !== undefined;
+  const goalCommandAvailable = props.goalCommandAvailable === true;
   const { enabled: planModeUiEnabled, interactionMode } = resolveComposerInteractionMode({
     planModeEnabled: settings.planModeEnabled,
     provider: selectedProviderStatus,
@@ -3875,7 +3875,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     };
   }, [readComposerSnapshot, resolveComposerTrigger]);
 
-  const { onUsageLimitsCommand, onGoalCommand } = props;
+  const { onUsageLimitsCommand } = props;
   const onSelectComposerItem = useCallback(
     (item: ComposerCommandItem) => {
       if (composerSelectLockRef.current) return;
@@ -3904,15 +3904,18 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
         return;
       }
       if (item.type === "slash-command") {
+        // Leaves "/t3-goal " in the draft: add what the goal is about, or
+        // send it as is to make the current task the goal.
         if (item.command === "t3-goal") {
-          const applied = applyPromptReplacement(trigger.rangeStart, trigger.rangeEnd, "", {
-            expectedText: snapshot.value.slice(trigger.rangeStart, trigger.rangeEnd),
-            focusEditorAfterReplace: false,
-          });
-          if (applied) {
-            setComposerHighlightedItemId(null);
-            onGoalCommand?.();
-          }
+          const applied = applyPromptReplacement(
+            trigger.rangeStart,
+            trigger.rangeEnd,
+            "/t3-goal ",
+            {
+              expectedText: snapshot.value.slice(trigger.rangeStart, trigger.rangeEnd),
+            },
+          );
+          if (applied) setComposerHighlightedItemId(null);
           return;
         }
         if (item.command === "model") {
@@ -4047,7 +4050,6 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       handleInteractionModeChange,
       planModeUiEnabled,
       onUsageLimitsCommand,
-      onGoalCommand,
       resolveActiveComposerTrigger,
     ],
   );
