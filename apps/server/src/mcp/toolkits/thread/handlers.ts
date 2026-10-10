@@ -1,6 +1,7 @@
 import {
   type CommandId,
-  type RuntimeRequestId,
+  RuntimeRequestId,
+  ProviderSessionId,
   ThreadId,
   type OrchestrationV2ThreadProjection,
   type RunId,
@@ -229,6 +230,36 @@ export const layer = McpToolAccess.toLayer(ThreadToolkit, {
         })
         .pipe(Effect.mapError(dispatchFailure));
       return { sequence: result.sequence };
+    }),
+  ),
+  t3_ask_user_question: McpToolAccess.actsAsCaller((input) =>
+    Effect.gen(function* () {
+      const { threads, caller, scope } = yield* readCaller();
+      if (caller?.activeRunId == null || scope.thread === undefined) return yield* unavailable();
+      const commandId = yield* newCommandId();
+      const requestId = RuntimeRequestId.make(`${commandId}:question`);
+      yield* threads
+        .dispatch({
+          type: "thread.user-input.request",
+          commandId,
+          threadId: caller.id,
+          runId: caller.activeRunId,
+          providerSessionId: ProviderSessionId.make(scope.thread.providerSessionId),
+          requestId,
+          questions: input.questions.map((question, index) => ({
+            id: String(index + 1),
+            header: question.header,
+            question: question.question,
+            options: question.options.map((option) => ({
+              label: option.label,
+              description: option.description ?? option.label,
+            })),
+            multiSelect: question.multiSelect ?? false,
+            allowCustomAnswer: true,
+          })),
+        })
+        .pipe(Effect.mapError(dispatchFailure));
+      return { requestId };
     }),
   ),
   t3_queue_list: McpToolAccess.reads((input) =>

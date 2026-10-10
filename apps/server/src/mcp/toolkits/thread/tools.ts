@@ -175,6 +175,32 @@ const PendingRequestRespondTool = Tool.make("t3_pending_request_respond", {
   .annotate(Tool.Destructive, true)
   .annotate(Tool.OpenWorld, true);
 
+const AskUserQuestionTool = Tool.make("t3_ask_user_question", {
+  ...commandTool,
+  description:
+    "Ask the user questions in T3 Code's question picker. Only for providers without their own question tool; others are refused. This returns at once: end your turn after calling it. The user's answers arrive as your next user message. Prefer making reasonable assumptions; ask only when a decision is the user's to make.",
+  parameters: Schema.Struct({
+    questions: Schema.Array(
+      Schema.Struct({
+        header: TrimmedNonEmptyString.check(Schema.isMaxLength(12)).annotate({
+          description: "A short label, at most 12 characters.",
+        }),
+        question: TrimmedNonEmptyString,
+        options: Schema.Array(
+          Schema.Struct({
+            label: TrimmedNonEmptyString,
+            description: Schema.optional(TrimmedNonEmptyString),
+          }),
+        ).check(Schema.isMaxLength(6)),
+        multiSelect: Schema.optional(Schema.Boolean),
+      }),
+    ).check(Schema.isMinLength(1), Schema.isMaxLength(4)),
+  }),
+  success: Schema.Struct({ requestId: RuntimeRequestId }),
+})
+  .annotate(Tool.Title, "Ask the user")
+  .annotate(Tool.Destructive, false);
+
 const ThreadConfigurationTool = Tool.make("t3_thread_configuration", {
   ...commandTool,
   description:
@@ -282,6 +308,7 @@ export const ThreadToolkit = Toolkit.make(
   PendingRequestListTool,
   PendingRequestReadTool,
   PendingRequestRespondTool,
+  AskUserQuestionTool,
   ThreadOrganizeTool,
   QueueListTool,
   QueueReadTool,
