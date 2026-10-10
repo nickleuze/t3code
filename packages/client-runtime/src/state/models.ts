@@ -115,6 +115,9 @@ export interface EnvironmentThreadShell {
   readonly providerInstanceHistory: ReadonlyArray<ProviderInstanceId>;
   /** Native `/goal` on the active provider thread. */
   readonly goal: OrchestrationV2ProviderGoal | null;
+  readonly t3Goal?: import("@t3tools/contracts").OrchestrationV2ThreadGoalSummary | null;
+  readonly goalIteration?: import("@t3tools/contracts").OrchestrationV2GoalIterationMarker | null;
+  readonly goalProposal?: import("@t3tools/contracts").OrchestrationV2GoalProposal | null;
   readonly itemCount: number;
   readonly visibleItemCount: number;
   readonly createdAt: string;
@@ -261,6 +264,9 @@ export function presentThreadShell(
     pendingBackgroundTasks: thread.pendingBackgroundTasks ?? [],
     providerInstanceHistory: thread.providerInstanceHistory ?? [],
     goal: thread.goal ?? null,
+    t3Goal: thread.t3Goal ?? null,
+    goalIteration: thread.goalIteration ?? null,
+    goalProposal: thread.goalProposal ?? null,
     itemCount: thread.itemCount,
     visibleItemCount: thread.visibleItemCount,
     createdAt: iso(thread.createdAt),

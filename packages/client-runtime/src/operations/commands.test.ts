@@ -34,6 +34,7 @@ import {
 } from "../connection/model.ts";
 import * as EnvironmentSupervisor from "../connection/supervisor.ts";
 import * as RpcSession from "../rpc/session.ts";
+import { RpcPermissionGuard } from "../rpc/client.ts";
 import type { WsRpcProtocolClient } from "../rpc/protocol.ts";
 import { v2Now, v2Projection, v2ThreadId } from "../state/orchestrationV2TestFixtures.ts";
 import {
@@ -1043,7 +1044,10 @@ it.effect(
       const run = <A, E, R>(
         effect: Effect.Effect<A, E, R | EnvironmentSupervisor.EnvironmentSupervisor>,
       ) =>
-        effect.pipe(Effect.provideService(EnvironmentSupervisor.EnvironmentSupervisor, supervisor));
+        effect.pipe(
+          Effect.provideService(EnvironmentSupervisor.EnvironmentSupervisor, supervisor),
+          Effect.provideService(RpcPermissionGuard, { authorize: () => Effect.void }),
+        );
       yield* run(
         setThreadGoal({
           commandId,
@@ -1110,6 +1114,19 @@ it.effect("does not send goal commands to an environment without the capability"
       Effect.flip,
     );
     expect(result._tag).toBe("EnvironmentRpcUnavailableError");
+    expect(commands).toEqual([]);
+  }).pipe(Effect.provide(layerTestCrypto)),
+);
+
+it.effect("refuses a goal mutation outside the guarded command boundary", () =>
+  Effect.gen(function* () {
+    const commands: OrchestrationV2Command[] = [];
+    const supervisor = yield* makeSupervisor({ commands, projects: [] });
+    const denied = yield* setThreadGoal({ threadId: v2ThreadId, objective: "Ship" }).pipe(
+      Effect.provideService(EnvironmentSupervisor.EnvironmentSupervisor, supervisor),
+      Effect.flip,
+    );
+    expect(denied._tag).toBe("EnvironmentAuthorizationError");
     expect(commands).toEqual([]);
   }).pipe(Effect.provide(layerTestCrypto)),
 );

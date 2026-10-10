@@ -1560,6 +1560,8 @@ export interface ChatComposerProps {
   /** Flips the Compact chip for the active thread. */
   onToggleKeepFullHistory: () => void;
   /** Picking /usage-limits from the menu is the action itself; the draft keeps nothing of it. */
+  goalCommandAvailable?: boolean | undefined;
+  goalPlaceholder?: string | undefined;
   onUsageLimitsCommand?: (() => void) | undefined;
   environmentUnavailable: {
     readonly label: string;
@@ -2716,6 +2718,17 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
               },
             ] as const)
           : []),
+        ...(props.goalCommandAvailable && composerTrigger.rangeStart === 0
+          ? [
+              {
+                id: "slash:t3-goal",
+                type: "slash-command" as const,
+                command: "t3-goal" as const,
+                label: "/t3-goal",
+                description: "Draft a goal to start in fresh iterations",
+              },
+            ]
+          : []),
       ] satisfies ReadonlyArray<Extract<ComposerCommandItem, { type: "slash-command" }>>;
       const slashMenuSkills = getProviderSkillsForSlashMenu(
         selectedProviderSkills,
@@ -2820,6 +2833,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     return [];
   }, [
     activeThreadId,
+    props.goalCommandAvailable,
     compactSlashCommandAvailable,
     composerTrigger,
     environmentId,
@@ -4020,6 +4034,15 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
         return;
       }
       if (item.type === "slash-command") {
+        if (item.command === "t3-goal") {
+          if (
+            applyPromptReplacement(trigger.rangeStart, trigger.rangeEnd, "/t3-goal ", {
+              expectedText: snapshot.value.slice(trigger.rangeStart, trigger.rangeEnd),
+            })
+          )
+            setComposerHighlightedItemId(null);
+          return;
+        }
         if (item.command === "model") {
           const applied = applyPromptReplacement(trigger.rangeStart, trigger.rangeEnd, "", {
             expectedText: snapshot.value.slice(trigger.rangeStart, trigger.rangeEnd),
@@ -7528,7 +7551,8 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                                 ? "Enable a provider in Settings to send a message"
                                 : phase === "disconnected"
                                   ? DISCONNECTED_COMPOSER_PLACEHOLDER
-                                  : "Ask anything, @tag files/folders, $use skills, or / for commands"
+                                  : (props.goalPlaceholder ??
+                                    "Ask anything, @tag files/folders, $use skills, or / for commands")
                     }
                     disabled={
                       isConnecting ||

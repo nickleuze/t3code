@@ -1,5 +1,6 @@
 import {
   EnvironmentId,
+  CommandId,
   ProjectId,
   ThreadId,
   type OrchestrationV2ShellSnapshot,
@@ -222,4 +223,32 @@ describe("v2 thread shell lists", () => {
       harness.registry.dispose();
     }
   });
+});
+
+it("retains T3 loop metadata independently of the provider-native goal", () => {
+  const h = makeHarness();
+  const native = {
+    objective: "Provider goal",
+    status: "active" as const,
+    tokenBudget: null,
+    tokensUsed: 0,
+  };
+  const t3Goal = {
+    id: CommandId.make("t3"),
+    objective: "Fork goal",
+    status: "paused" as const,
+    statusReason: null,
+    iteration: 2,
+    tokensUsed: 42,
+    needsInput: false,
+    currentChildThreadId: null,
+  };
+  h.registry.set(h.snapshotAtom(environmentId), {
+    ...v2ShellSnapshot,
+    threads: [{ ...v2ThreadShell, goal: native, t3Goal }],
+  });
+  const shell = h.registry.get(h.threads.navigationThreadShellsAtom)[0]!;
+  expect(shell.goal).toEqual(native);
+  expect(shell.t3Goal).toEqual(t3Goal);
+  h.registry.dispose();
 });
