@@ -1,7 +1,6 @@
 // The bridge relays opaque JSON-RPC lines verbatim; schema-decoding foreign
 // payloads here would reject traffic it must pass through untouched.
 // @effect-diagnostics nodeBuiltinImport:off preferSchemaOverJson:off
-import { openMcpHttpSession } from "@t3tools/shared/mcpHttpSession";
 import * as NodeReadline from "node:readline";
 
 import * as Cause from "effect/Cause";
@@ -42,6 +41,8 @@ interface JsonRpcEnvelope {
   readonly result?: unknown;
 }
 
+const MCP_PROTOCOL_VERSION = "2025-06-18";
+
 export interface AcpMcpStdioBridgeOptions {
   readonly endpoint: string;
   readonly authorization: string;
@@ -81,11 +82,81 @@ export interface AcpMcpToolCallOptions {
 export function callAcpMcpTool(
   options: AcpMcpToolCallOptions,
 ): Effect.Effect<unknown, AcpMcpBridgeError> {
-  return openMcpHttpSession(options, bridgeError).pipe(
-    Effect.flatMap((session) =>
-      session.request("tools/call", { name: options.tool, arguments: options.arguments }),
-    ),
-  );
+  const fetchImplementation = options.fetchImplementation ?? fetch;
+  return Effect.gen(function* () {
+    // The bridge is single-fibered at creation time; concurrent sends only
+    // read these after the sequential handshake, so plain locals suffice.
+    let sessionId: string | null = null;
+    let protocolVersion: string | null = null;
+
+    const send = (message: unknown): Effect.Effect<ReadonlyArray<unknown>, AcpMcpBridgeError> =>
+      Effect.gen(function* () {
+        const response = yield* Effect.tryPromise({
+          try: () =>
+            fetchImplementation(options.endpoint, {
+              method: "POST",
+              headers: {
+                "content-type": "application/json",
+                accept: "application/json, text/event-stream",
+                authorization: options.authorization,
+                ...(sessionId === null ? {} : { "mcp-session-id": sessionId }),
+                ...(protocolVersion === null ? {} : { "mcp-protocol-version": protocolVersion }),
+              },
+              body: JSON.stringify(message),
+            }),
+          catch: bridgeError,
+        });
+        sessionId = response.headers.get("mcp-session-id") ?? sessionId;
+        if (!response.ok) {
+          yield* discardResponseBody(response);
+          return yield* Effect.fail(
+            new AcpMcpBridgeError(`T3 Code MCP endpoint responded with HTTP ${response.status}.`),
+          );
+        }
+        const payloads = yield* Stream.runCollect(responsePayloads(response, bridgeError));
+        for (const payload of payloads) {
+          protocolVersion = protocolVersionOf(payload) ?? protocolVersion;
+        }
+        return payloads;
+      });
+
+    const initializeId = "t3-acp-cli-initialize";
+    const initialized = yield* send({
+      jsonrpc: "2.0",
+      id: initializeId,
+      method: "initialize",
+      params: {
+        protocolVersion: MCP_PROTOCOL_VERSION,
+        capabilities: {},
+        clientInfo: { name: "t3-code-acp-cli", version: "0.0.0" },
+      },
+    });
+    const initializeResponse = initialized.find((entry) => asEnvelope(entry)?.id === initializeId);
+    if (initializeResponse === undefined || asEnvelope(initializeResponse)?.error !== undefined) {
+      return yield* Effect.fail(
+        new AcpMcpBridgeError("T3 Code MCP endpoint rejected initialization."),
+      );
+    }
+    yield* send({ jsonrpc: "2.0", method: "notifications/initialized" });
+
+    const callId = "t3-acp-cli-tool-call";
+    const responses = yield* send({
+      jsonrpc: "2.0",
+      id: callId,
+      method: "tools/call",
+      params: { name: options.tool, arguments: options.arguments },
+    });
+    const response = responses.find((entry) => asEnvelope(entry)?.id === callId);
+    const envelope = asEnvelope(response);
+    if (envelope === null || envelope.error !== undefined) {
+      return yield* Effect.fail(
+        new AcpMcpBridgeError(
+          `T3 Code MCP tool call failed${envelope?.error === undefined ? "." : `: ${JSON.stringify(envelope.error)}`}`,
+        ),
+      );
+    }
+    return envelope.result;
+  });
 }
 
 export function runAcpMcpStdioBridge(options: AcpMcpStdioBridgeOptions): Effect.Effect<void> {

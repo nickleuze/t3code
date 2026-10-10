@@ -14,10 +14,13 @@ import type {
   SDKJsonValue,
   SDKToolAnnotations,
 } from "@cursor/sdk";
+import { TrimmedNonEmptyString, type OrchestrationV2UserInputQuestion } from "@t3tools/contracts";
+import { toJsonSchemaObject } from "@t3tools/provider-core/server/textGenerationUtils";
 import * as Effect from "effect/Effect";
+import * as Result from "effect/Result";
 import * as Schema from "effect/Schema";
 
-import { openMcpHttpSession, type McpHttpSessionOptions } from "@t3tools/shared/mcpHttpSession";
+import { openMcpHttpSession, type McpHttpSessionOptions } from "./T3McpHttpSession.ts";
 class CursorT3ToolsError extends Schema.TaggedError<CursorT3ToolsError>()("CursorT3ToolsError", {
   cause: Schema.Defect(),
 }) {
@@ -201,5 +204,76 @@ export function makeCursorT3CustomTools(
       closed = true;
       for (const controller of pending) controller.abort();
     }),
+  };
+}
+
+/** Cursor's own `askQuestion` is refused in local SDK runs, so T3 offers this one. */
+export const CURSOR_ASK_USER_QUESTION_TOOL = "t3_ask_user_question";
+
+const AskUserQuestionInput = Schema.Struct({
+  questions: Schema.Array(
+    Schema.Struct({
+      header: TrimmedNonEmptyString.check(Schema.isMaxLength(12)).annotate({
+        description: "A short label, at most 12 characters.",
+      }),
+      question: TrimmedNonEmptyString,
+      options: Schema.Array(
+        Schema.Struct({
+          label: TrimmedNonEmptyString,
+          description: Schema.optional(TrimmedNonEmptyString),
+        }),
+      ).check(Schema.isMaxLength(6)),
+      multiSelect: Schema.optional(Schema.Boolean),
+    }),
+  ).check(Schema.isMinLength(1), Schema.isMaxLength(4)),
+});
+const decodeAskUserQuestionInput = Schema.decodeUnknownResult(AskUserQuestionInput);
+
+/**
+ * A question for the user that is answered by their next message. `ask`
+ * records it on the running turn; the adapter shows it once the turn ends.
+ */
+export function makeCursorAskUserQuestionTool(
+  ask: (
+    questions: ReadonlyArray<OrchestrationV2UserInputQuestion>,
+    toolCallId: string | undefined,
+  ) => void,
+): SDKCustomTool {
+  return {
+    description:
+      "Ask the user questions in T3 Code's question picker. This returns at once: end your turn after calling it. The user's answers arrive as your next user message. Prefer making reasonable assumptions; ask only when a decision is the user's to make.",
+    inputSchema: toJsonSchemaObject(AskUserQuestionInput) as Record<string, SDKJsonValue>,
+    annotations: { title: "Ask the user", readOnlyHint: false, destructiveHint: false },
+    execute: (args, context) => {
+      const decoded = decodeAskUserQuestionInput(args);
+      if (Result.isFailure(decoded)) {
+        return toCustomToolResult({
+          isError: true,
+          content: [{ type: "text", text: `Invalid questions: ${decoded.failure.message}` }],
+        });
+      }
+      ask(
+        decoded.success.questions.map((question, index) => ({
+          id: String(index + 1),
+          header: question.header,
+          question: question.question,
+          options: question.options.map((option) => ({
+            label: option.label,
+            description: option.description ?? option.label,
+          })),
+          multiSelect: question.multiSelect ?? false,
+          allowCustomAnswer: true,
+        })),
+        context.toolCallId,
+      );
+      return toCustomToolResult({
+        content: [
+          {
+            type: "text",
+            text: "The user will see your questions when this turn ends. End your turn now; their answers arrive as your next message.",
+          },
+        ],
+      });
+    },
   };
 }
