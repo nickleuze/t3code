@@ -82,6 +82,13 @@ describe("T3 goal commands", () => {
         goalId: input.commandId,
         text: "Use the candidate",
       };
+      const update = {
+        type: "thread.goal.update" as const,
+        commandId: CommandId.make("update"),
+        threadId: input.threadId,
+        goalId: input.commandId,
+        permissions: "Push and merge after CI",
+      };
       const dismiss = {
         type: "thread.goal.proposal.dismiss" as const,
         commandId: CommandId.make("dismiss"),
@@ -99,11 +106,14 @@ describe("T3 goal commands", () => {
           h.commands.messageGoal.run(h.registry, { environmentId: env, input: reply }),
         ),
         yield* Effect.promise(() =>
+          h.commands.updateGoal.run(h.registry, { environmentId: env, input: update }),
+        ),
+        yield* Effect.promise(() =>
           h.commands.dismissGoalProposal.run(h.registry, { environmentId: env, input: dismiss }),
         ),
       ])
         expect(result._tag).toBe("Success");
-      expect(h.sent).toEqual([input, control, reply, dismiss]);
+      expect(h.sent).toEqual([input, control, reply, update, dismiss]);
     }),
   );
   it.effect("refuses a host without T3 goals before sending", () =>

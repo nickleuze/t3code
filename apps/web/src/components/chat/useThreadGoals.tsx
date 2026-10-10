@@ -3,6 +3,7 @@ import type { EnvironmentThreadShell } from "@t3tools/client-runtime/state/model
 import { squashAtomCommandFailure } from "@t3tools/client-runtime/state/runtime";
 import {
   goalComposerPlaceholder,
+  goalIsEditable,
   goalIsLive,
   resolveGoalComposerIntent,
   type GoalControlAction,
@@ -19,6 +20,7 @@ import { useCallback, useMemo, useRef, useState, type ReactNode } from "react";
 
 import { randomUUID } from "~/lib/utils";
 import { useEnvironmentScope } from "~/state/session";
+import { useThreadProjection } from "../../state/entities";
 import { threadEnvironment } from "../../state/threads";
 import { useAtomCommand } from "../../state/use-atom-command";
 import { buildThreadRouteParams } from "../../threadRoutes";
@@ -58,13 +60,16 @@ export function useThreadGoals(input: {
   const setGoal = useAtomCommand(threadEnvironment.setGoal, { reportFailure: false });
   const controlGoal = useAtomCommand(threadEnvironment.controlGoal, { reportFailure: false });
   const messageGoal = useAtomCommand(threadEnvironment.messageGoal, { reportFailure: false });
+  const updateGoal = useAtomCommand(threadEnvironment.updateGoal, { reportFailure: false });
   const dismissProposal = useAtomCommand(threadEnvironment.dismissGoalProposal, {
     reportFailure: false,
   });
-  const [editing, setEditing] = useState<{
-    readonly threadId: ThreadId;
-    readonly proposal: OrchestrationV2GoalProposal;
-  } | null>(null);
+  // Edits either the agent's proposal before it starts, or a paused or blocked goal's brief.
+  const [editing, setEditing] = useState<
+    | { readonly threadId: ThreadId; readonly proposal: OrchestrationV2GoalProposal }
+    | { readonly threadId: ThreadId; readonly proposal: null }
+    | null
+  >(null);
   const replying = useRef(false);
 
   const threadId = thread?.id ?? null;
@@ -72,6 +77,14 @@ export function useThreadGoals(input: {
   const proposal = supportsGoals ? (thread?.goalProposal ?? null) : null;
   const iteration = supportsGoals ? (thread?.goalIteration ?? null) : null;
   const liveGoal = goal !== null && goalIsLive(goal) ? goal : null;
+  const canEditGoal = goal !== null && goalIsEditable(goal) && canMutate;
+  // The shell summary lacks the brief, so editing reads the full goal.
+  const fullGoal =
+    useThreadProjection(
+      editing?.proposal === null && threadId !== null
+        ? scopeThreadRef(environmentId, threadId)
+        : null,
+    )?.projection.thread.goal ?? null;
   const commandAvailable =
     supportsGoals && canMutate && input.isServerThread && iteration === null && !input.isSubagent;
 
@@ -129,7 +142,7 @@ export function useThreadGoals(input: {
             if (result._tag === "Failure") throw squashAtomCommandFailure(result);
           },
           onOpenIteration: openThread,
-          onEdit: null,
+          onEdit: canEditGoal ? () => setEditing({ threadId, proposal: null }) : null,
         }),
       );
     }
@@ -159,6 +172,7 @@ export function useThreadGoals(input: {
     if (iteration !== null) items.push(goalIterationBannerItem(iteration, openThread));
     return items;
   }, [
+    canEditGoal,
     canMutate,
     commandAvailable,
     controlGoal,
@@ -226,21 +240,59 @@ export function useThreadGoals(input: {
     [environmentId, messageGoal, threadId],
   );
 
-  const dialog =
-    editing !== null && thread !== null && editing.threadId === thread.id ? (
-      <GoalDialog
-        key={editing.proposal.id}
-        mode="start"
-        initial={editing.proposal}
-        runtimeMode={thread.runtimeMode}
-        canSubmit={commandAvailable}
-        onSubmit={async (brief) => {
-          await startGoal(brief);
-          setEditing(null);
-        }}
-        onClose={() => setEditing(null)}
-      />
-    ) : null;
+  const saveBrief = async (brief: GoalBrief) => {
+    if (threadId === null || goal === null) throw new Error("This thread has no goal to edit.");
+    const result = await updateGoal({
+      environmentId,
+      input: {
+        type: "thread.goal.update",
+        commandId: CommandId.make(randomUUID()),
+        threadId,
+        goalId: goal.id,
+        objective: brief.objective,
+        doneWhen: brief.doneWhen,
+        background: brief.background,
+        permissions: brief.permissions,
+      },
+    });
+    if (result._tag === "Failure") throw squashAtomCommandFailure(result);
+  };
+
+  let dialog: ReactNode = null;
+  if (editing !== null && thread !== null && editing.threadId === thread.id) {
+    const close = () => setEditing(null);
+    if (editing.proposal !== null) {
+      dialog = (
+        <GoalDialog
+          key={editing.proposal.id}
+          mode="start"
+          initial={editing.proposal}
+          runtimeMode={thread.runtimeMode}
+          canSubmit={commandAvailable}
+          onSubmit={async (brief) => {
+            await startGoal(brief);
+            close();
+          }}
+          onClose={close}
+        />
+      );
+    } else if (fullGoal !== null && fullGoal.id === goal?.id) {
+      dialog = (
+        <GoalDialog
+          key={fullGoal.id}
+          mode="edit"
+          initial={fullGoal}
+          runtimeMode={thread.runtimeMode}
+          canSubmit={canEditGoal}
+          onSubmit={async (brief) => {
+            await saveBrief(brief);
+            close();
+          }}
+          onClose={close}
+        />
+      );
+    }
+  }
 
   return {
     commandAvailable,

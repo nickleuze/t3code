@@ -127,11 +127,9 @@ export function goalIsLive(goal: OrchestrationV2ThreadGoalSummary): boolean {
   return goal.status !== "complete" && goal.status !== "stopped";
 }
 
-/** A goal that can be edited: live, with no iteration running. */
+/** Whether `thread.goal.update` accepts a brief edit: only while paused or blocked. */
 export function goalIsEditable(goal: OrchestrationV2ThreadGoalSummary): boolean {
-  return (
-    (goal.status === "paused" || goal.status === "blocked") && goal.currentChildThreadId === null
-  );
+  return goal.status === "paused" || goal.status === "blocked";
 }
 
 /** Where a message typed in a goal thread will go. */
@@ -167,6 +165,16 @@ export function formatGoalTokens(tokens: number): string {
 }
 
 /**
+ * Context tokens with the uncached share beside them: "88m tokens (3m
+ * uncached)". Goals recorded before uncached counting show the total alone.
+ */
+export function formatGoalTokensWithUncached(tokens: number, uncached: number | undefined): string {
+  return uncached === undefined
+    ? formatGoalTokens(tokens)
+    : `${formatGoalTokens(tokens)} (${formatTokenCount(uncached)} uncached)`;
+}
+
+/**
  * Status line for a T3 goal, in the native `/goal` row's shape so both render
  * alike. A blocked or finished goal leads with what the agent said.
  */
@@ -177,7 +185,10 @@ export function presentT3Goal(goal: OrchestrationV2ThreadGoalSummary): ProviderG
       (goal.status === "blocked" || goal.status === "complete") && goal.summaryNote
         ? goal.summaryNote
         : goal.objective,
-    usage: goal.iteration > 0 && goal.tokensUsed > 0 ? formatGoalTokens(goal.tokensUsed) : null,
+    usage:
+      goal.iteration > 0 && goal.tokensUsed > 0
+        ? formatGoalTokensWithUncached(goal.tokensUsed, goal.uncachedTokensUsed)
+        : null,
     canResume: goalControlActions(goal).includes("resume"),
   };
 }
@@ -195,10 +206,28 @@ export const GOAL_ITERATION_OUTCOME_LABELS: Record<OrchestrationV2GoalIterationO
 
 /** Token usage of a full goal, marking estimates and missing reports. */
 export function formatGoalUsage(
-  goal: Pick<OrchestrationV2ThreadGoal, "usageAccounting" | "tokensUsed">,
+  goal: Pick<OrchestrationV2ThreadGoal, "usageAccounting" | "tokensUsed" | "uncachedTokensUsed">,
 ): string {
   if (goal.usageAccounting === "unavailable") return "token usage not reported";
-  return `${goal.usageAccounting === "estimated" ? "~" : ""}${formatGoalTokens(goal.tokensUsed)}`;
+  const tokens = formatGoalTokensWithUncached(goal.tokensUsed, goal.uncachedTokensUsed);
+  return `${goal.usageAccounting === "estimated" ? "~" : ""}${tokens}`;
+}
+
+/**
+ * The burn guard's limit and, once it has sampled provider usage, its latest
+ * reading: "burn guard 20% / 60m, now +3 (highest window 41%)".
+ */
+export function formatGoalBurnGuard(
+  goal: Pick<OrchestrationV2ThreadGoal, "burnGuard" | "usageSample">,
+): string {
+  if (goal.burnGuard == null) return "no burn guard";
+  const limit = `burn guard ${goal.burnGuard.maxPercentPoints}% / ${goal.burnGuard.windowMins}m`;
+  const sample = goal.usageSample;
+  if (sample == null) return limit;
+  const reading = `${limit}, now +${Math.round(sample.risePoints)}`;
+  if (sample.windows.length === 0) return reading;
+  const highest = Math.max(...sample.windows.map((window) => window.usedPercent));
+  return `${reading} (highest window ${Math.round(highest)}%)`;
 }
 
 /** The shell-sized view of a full goal, so both render the same status text. */
@@ -212,6 +241,9 @@ export function goalSummaryFromGoal(
     statusReason: goal.statusReason,
     iteration: goal.iteration,
     tokensUsed: goal.tokensUsed,
+    ...(goal.uncachedTokensUsed === undefined
+      ? {}
+      : { uncachedTokensUsed: goal.uncachedTokensUsed }),
     needsInput: goal.current?.waitingOnRequest != null,
     currentChildThreadId: goal.current?.childThreadId ?? null,
   };

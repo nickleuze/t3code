@@ -1,7 +1,11 @@
 import { CommandId, ThreadId, type OrchestrationV2ThreadGoalSummary } from "@t3tools/contracts";
 import { describe, expect, it } from "vite-plus/test";
 import {
+  formatGoalBurnGuard,
   formatGoalTokens,
+  formatGoalTokensWithUncached,
+  formatGoalUsage,
+  goalIsEditable,
   goalAwareThreadWorking,
   goalComposerPlaceholder,
   goalControlActions,
@@ -138,6 +142,53 @@ describe("goal presentation", () => {
     expect(formatGoalTokens(950)).toBe("950 tokens");
     expect(formatGoalTokens(48_000)).toBe("48k tokens");
     expect(formatGoalTokens(2_400_000)).toBe("2.4m tokens");
+  });
+
+  it("shows uncached tokens beside context tokens, and nothing extra for older goals", () => {
+    expect(formatGoalTokensWithUncached(88_000_000, 3_000_000)).toBe("88m tokens (3m uncached)");
+    expect(formatGoalTokensWithUncached(88_000_000, undefined)).toBe("88m tokens");
+    expect(
+      formatGoalUsage({
+        usageAccounting: "estimated",
+        tokensUsed: 12_000,
+        uncachedTokensUsed: 900,
+      }),
+    ).toBe("~12k tokens (900 uncached)");
+    expect(presentT3Goal({ ...goal, tokensUsed: 12_000, uncachedTokensUsed: 2_000 }).usage).toBe(
+      "12k tokens (2k uncached)",
+    );
+  });
+
+  it("reads out the burn guard's latest sample once it has one", () => {
+    const burnGuard = { maxPercentPoints: 20, windowMins: 60 };
+    expect(formatGoalBurnGuard({ burnGuard: null })).toBe("no burn guard");
+    expect(formatGoalBurnGuard({ burnGuard })).toBe("burn guard 20% / 60m");
+    expect(
+      formatGoalBurnGuard({
+        burnGuard,
+        usageSample: {
+          at: "2026-10-11T00:00:00Z",
+          windows: [
+            { id: "5h", usedPercent: 41.4 },
+            { id: "weekly", usedPercent: 12 },
+          ],
+          risePoints: 3.2,
+        },
+      }),
+    ).toBe("burn guard 20% / 60m, now +3 (highest window 41%)");
+    expect(
+      formatGoalBurnGuard({
+        burnGuard,
+        usageSample: { at: "2026-10-11T00:00:00Z", windows: [], risePoints: 0 },
+      }),
+    ).toBe("burn guard 20% / 60m, now +0");
+  });
+
+  it("allows brief edits only while the goal is paused or blocked", () => {
+    expect(goalIsEditable({ ...goal, status: "paused" })).toBe(true);
+    expect(goalIsEditable({ ...goal, status: "blocked" })).toBe(true);
+    for (const status of ["active", "usageLimited", "complete", "stopped"] as const)
+      expect(goalIsEditable({ ...goal, status })).toBe(false);
   });
 
   it("leads blocked and finished goals with the agent's note, and shows usage once work began", () => {

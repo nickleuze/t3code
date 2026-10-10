@@ -1,7 +1,12 @@
 import { useAtomValue } from "@effect/atom-react";
 import { serverEnvironment } from "../../state/server";
 import { scopeThreadRef } from "@t3tools/client-runtime/environment";
-import type { EnvironmentId, OrchestrationV2ThreadGoal, ThreadId } from "@t3tools/contracts";
+import {
+  goalIterationTimeoutMins,
+  type EnvironmentId,
+  type OrchestrationV2ThreadGoal,
+  type ThreadId,
+} from "@t3tools/contracts";
 import { useNavigate } from "@tanstack/react-router";
 import type { ReactNode } from "react";
 
@@ -9,6 +14,7 @@ import { cn } from "../../lib/utils";
 import { useThreadProjection } from "../../state/entities";
 import { buildThreadRouteParams } from "../../threadRoutes";
 import {
+  formatGoalBurnGuard,
   formatGoalTokens,
   formatGoalUsage,
   GOAL_ITERATION_OUTCOME_LABELS,
@@ -121,10 +127,8 @@ function goalFacts(goal: OrchestrationV2ThreadGoal): string {
     goalStatusLabel(goalSummaryFromGoal(goal)),
     goal.iteration === 1 ? "1 iteration" : `${goal.iteration} iterations`,
     formatGoalUsage(goal),
-    goal.burnGuard
-      ? `burn guard ${goal.burnGuard.maxPercentPoints}% / ${goal.burnGuard.windowMins}m`
-      : "no burn guard",
-    `${goal.iterationTimeoutMins ?? 120} min per iteration`,
+    formatGoalBurnGuard(goal),
+    `${goalIterationTimeoutMins(goal)} min per iteration`,
   ].join(" · ");
 }
 

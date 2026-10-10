@@ -2,15 +2,19 @@ import { useNavigation } from "@react-navigation/native";
 import { squashAtomCommandFailure } from "@t3tools/client-runtime/state/runtime";
 import type { EnvironmentThreadShell } from "@t3tools/client-runtime/state/shell";
 import {
+  formatGoalBurnGuard,
   formatGoalUsage,
   GOAL_ITERATION_OUTCOME_LABELS,
   goalControlActions,
+  goalIsEditable,
   goalIsLive,
   goalStatusLabel,
 } from "@t3tools/client-runtime/state/thread-goals";
 import {
   AuthOrchestrationOperateScope,
   CommandId,
+  goalIterationTimeoutMins,
+  MIN_GOAL_ITERATION_TIMEOUT_MINS,
   type OrchestrationV2GoalProposal,
   type OrchestrationV2ThreadGoal,
   type OrchestrationV2Command,
@@ -51,6 +55,7 @@ export function T3GoalCard(props: {
   const canMutate = useEnvironmentScope(thread.environmentId, AuthOrchestrationOperateScope);
   const setGoal = useAtomCommand(threadEnvironment.setGoal, { reportFailure: false });
   const controlGoal = useAtomCommand(threadEnvironment.controlGoal, { reportFailure: false });
+  const updateGoal = useAtomCommand(threadEnvironment.updateGoal, { reportFailure: false });
   const dismissProposal = useAtomCommand(threadEnvironment.dismissGoalProposal, {
     reportFailure: false,
   });
@@ -59,6 +64,7 @@ export function T3GoalCard(props: {
   const [error, setError] = useState<string | null>(null);
   const [details, setDetails] = useState(false);
   const [editing, setEditing] = useState(false);
+  const [editingGoal, setEditingGoal] = useState(false);
   const inFlight = useRef(false);
   const startedProposal = useRef<CommandId | null>(null);
   const [startedProposalId, setStartedProposalId] = useState<CommandId | null>(null);
@@ -157,6 +163,14 @@ export function T3GoalCard(props: {
                 }
               />
             ))}
+            {fullGoal !== null && goalIsEditable(goal) ? (
+              <RequestActionButton
+                tone="secondary"
+                label="Edit"
+                disabled={!canMutate || pending !== null}
+                onPress={() => setEditingGoal(true)}
+              />
+            ) : null}
             {fullGoal !== null ? (
               <RequestActionButton
                 tone="secondary"
@@ -243,6 +257,38 @@ export function T3GoalCard(props: {
           onSubmit={(fields) => void run("start", () => start(fields))}
         />
       ) : null}
+      {editingGoal && goal !== null && fullGoal !== null && fullGoal.id === goal.id ? (
+        <GoalBriefEditor
+          key={fullGoal.id}
+          mode="edit"
+          initial={fullGoal}
+          pending={pending !== null}
+          canSubmit={canMutate && goalIsEditable(goal)}
+          error={error}
+          onClose={() => {
+            if (pending === null) setEditingGoal(false);
+          }}
+          onSubmit={(fields) =>
+            void run("edit", async () => {
+              const result = await updateGoal({
+                environmentId: thread.environmentId,
+                input: {
+                  type: "thread.goal.update",
+                  commandId: CommandId.make(uuidv4()),
+                  threadId: thread.id,
+                  goalId: goal.id,
+                  objective: fields.objective,
+                  doneWhen: fields.doneWhen,
+                  background: fields.background,
+                  permissions: fields.permissions,
+                },
+              });
+              if (result._tag === "Failure") throw squashAtomCommandFailure(result);
+              setEditingGoal(false);
+            })
+          }
+        />
+      ) : null}
       {details && fullGoal !== null ? (
         <GoalDetails goal={fullGoal} onClose={() => setDetails(false)} onOpen={openThread} />
       ) : null}
@@ -287,7 +333,7 @@ const BRIEF_LABELS = {
   doneWhen: "Done when",
   permissions: "Pre-approved actions",
   background: "Background",
-  iterationTimeoutMins: "Minutes per iteration (15–480)",
+  iterationTimeoutMins: `Minutes per iteration (${MIN_GOAL_ITERATION_TIMEOUT_MINS}–480)`,
   checkCommand: "Completion check",
 };
 const ADVANCED_FIELDS = [
@@ -303,11 +349,11 @@ function GoalBriefEditor(props: {
   readonly mode: "start" | "edit";
   readonly initial: {
     readonly objective: string;
-    readonly doneWhen: string | null;
-    readonly background: string | null;
-    readonly permissions: string | null;
-    readonly checkCommand: string | null;
-    readonly iterationTimeoutMins: number | null;
+    readonly doneWhen?: string | null | undefined;
+    readonly background?: string | null | undefined;
+    readonly permissions?: string | null | undefined;
+    readonly checkCommand?: string | null | undefined;
+    readonly iterationTimeoutMins?: number | null | undefined;
   };
   readonly pending: boolean;
   readonly canSubmit: boolean;
@@ -322,7 +368,7 @@ function GoalBriefEditor(props: {
     doneWhen: props.initial.doneWhen ?? "",
     permissions: props.initial.permissions ?? "",
     background: props.initial.background ?? "",
-    iterationTimeoutMins: String(props.initial.iterationTimeoutMins ?? 120),
+    iterationTimeoutMins: String(goalIterationTimeoutMins(props.initial)),
     checkCommand: props.initial.checkCommand ?? "",
   }));
   const timeout = Number(fields.iterationTimeoutMins);
@@ -330,7 +376,7 @@ function GoalBriefEditor(props: {
     fields.objective.trim().length > 0 &&
     fields.doneWhen.trim().length > 0 &&
     Number.isInteger(timeout) &&
-    timeout >= 15 &&
+    timeout >= MIN_GOAL_ITERATION_TIMEOUT_MINS &&
     timeout <= 480;
   const field = (key: keyof typeof fields) => (
     <View key={key} className="gap-2">
@@ -364,7 +410,13 @@ function GoalBriefEditor(props: {
         disabled={props.pending}
         onPress={() => setAdvanced((value) => !value)}
       />
-      {advanced ? ADVANCED_FIELDS.map(field) : null}
+      {/* thread.goal.update edits the brief only; the time limit and check stay as started. */}
+      {advanced
+        ? ADVANCED_FIELDS.filter(
+            (key) =>
+              props.mode === "start" || (key !== "iterationTimeoutMins" && key !== "checkCommand"),
+          ).map(field)
+        : null}
       {props.error ? (
         <Text accessibilityRole="alert" className="text-sm text-destructive">
           {props.error}
@@ -410,6 +462,9 @@ function GoalDetails(props: {
       <Text>{goal.objective}</Text>
       <Text>
         {goal.iteration} iterations · {formatGoalUsage(goal)}
+      </Text>
+      <Text>
+        {goalIterationTimeoutMins(goal)} min per iteration · {formatGoalBurnGuard(goal)}
       </Text>
       {goal.doneWhen ? <Text>Done when: {goal.doneWhen}</Text> : null}
       {goal.permissions ? <Text>Pre-approved: {goal.permissions}</Text> : null}
