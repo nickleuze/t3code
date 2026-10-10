@@ -1,3 +1,7 @@
+import * as NodeServices from "@effect/platform-node/NodeServices";
+import * as NodeSqliteClient from "@t3tools/shared/nodeSqliteClient";
+import * as Path from "effect/Path";
+import { runMigrations } from "../persistence/Migrations.ts";
 import { assert, it } from "@effect/vitest";
 import {
   CommandId,
@@ -39,7 +43,7 @@ const modelSelection = { instanceId, model: "fake-goal-model" };
 
 // The production effect worker, provider session manager, event ingestor and
 // orchestrator run here. Only the provider protocol, VCS and check process are fake.
-it.effect.each(["complete", "stop", "delete", "restart", "usage-limit"] as const)(
+it.effect.each(["complete", "stop", "delete", "restart", "disk-restart", "usage-limit"] as const)(
   "executes a goal through the effect worker and fake provider: %s",
   (outcome) =>
     Effect.scoped(
@@ -189,9 +193,17 @@ it.effect.each(["complete", "stop", "delete", "restart", "usage-limit"] as const
               };
             }),
         };
-        // Hold the database outside both runtime scopes; rebuilding the runtime
-        // must reopen the same durable state, rather than an empty test store.
-        const database = Layer.succeed(SqlClient.SqlClient, yield* SqlClient.SqlClient);
+        // Memory reconstruction borrows the outer connection. Disk reconstruction
+        // acquires and releases a connection inside each runtime scope. A fresh
+        // migration layer avoids memoization of the outer memory setup.
+        const path = yield* Path.Path;
+        const database =
+          outcome === "disk-restart"
+            ? Layer.provideMerge(
+                Layer.effectDiscard(runMigrations()),
+                NodeSqliteClient.layer({ filename: path.join(cwd, "runtime.sqlite") }),
+              ).pipe(Layer.provide(NodeServices.layer))
+            : Layer.succeed(SqlClient.SqlClient, yield* SqlClient.SqlClient);
         const threadId = ThreadId.make(`goal-runtime:${outcome}`);
         const goalId = CommandId.make(`goal-runtime:${outcome}:set`);
         const loopDependencies = Layer.mergeAll(
@@ -293,7 +305,7 @@ it.effect.each(["complete", "stop", "delete", "restart", "usage-limit"] as const
               (yield* orchestrator.getThreadRecords(threadId, [])).thread.goal?.current
                 ?.waitingOnRequest,
             );
-            if (outcome === "restart") return;
+            if (outcome === "restart" || outcome === "disk-restart") return;
             if (outcome === "complete") {
               yield* orchestrator.dispatch({
                 type: "thread.goal.report",
@@ -351,7 +363,7 @@ it.effect.each(["complete", "stop", "delete", "restart", "usage-limit"] as const
             );
           }).pipe(Effect.provide(runtime())),
         );
-        if (outcome === "restart") {
+        if (outcome === "restart" || outcome === "disk-restart") {
           yield* Effect.scoped(
             Effect.gen(function* () {
               const orchestrator = yield* Orchestrator.OrchestratorV2;
@@ -413,6 +425,6 @@ it.effect.each(["complete", "stop", "delete", "restart", "usage-limit"] as const
             }).pipe(Effect.provide(runtime(true))),
           );
         }
-      }).pipe(Effect.provide(SqlitePersistence.layerMemory)),
+      }).pipe(Effect.provide(Layer.merge(SqlitePersistence.layerMemory, NodeServices.layer))),
     ),
 );
