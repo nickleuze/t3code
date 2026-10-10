@@ -19,6 +19,9 @@ export function useThreadListV2ShelfPreferences() {
     loaded && preferencesResult.value.threadListSettledShelfExpanded === true;
   // Working section beta: off until the preference loads and is enabled.
   const workingShelfEnabled = loaded && preferencesResult.value.workingShelfEnabled === true;
+  const flatThreadSortOrder = loaded
+    ? (preferencesResult.value.sidebarFlatThreadSortOrder ?? "manual")
+    : "manual";
   const workingShelfExpanded =
     loaded && preferencesResult.value.threadListWorkingShelfExpanded === true;
   const snoozedShelfExpandedRef = useRef(snoozedShelfExpanded);
@@ -49,6 +52,7 @@ export function useThreadListV2ShelfPreferences() {
 
   return {
     loaded,
+    flatThreadSortOrder,
     settledShelfExpanded,
     snoozedShelfExpanded,
     workingShelfEnabled,

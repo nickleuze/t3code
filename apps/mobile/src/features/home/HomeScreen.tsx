@@ -498,6 +498,7 @@ export function HomeScreen(props: HomeScreenProps) {
     loaded: shelfPreferencesLoaded,
     settledShelfExpanded,
     snoozedShelfExpanded,
+    flatThreadSortOrder,
     workingShelfEnabled,
     workingShelfExpanded,
     toggleSettledShelf,
@@ -558,9 +559,12 @@ export function HomeScreen(props: HomeScreenProps) {
     // The Working beta orders the inbox by time, so only pins can move.
     return new Map([
       ...sectionAvailability("pinned"),
-      ...(workingShelfEnabled ? [] : sectionAvailability("active")),
+      ...(workingShelfEnabled || flatThreadSortOrder !== "manual"
+        ? []
+        : sectionAvailability("active")),
     ]);
   }, [
+    flatThreadSortOrder,
     workingShelfEnabled,
     pinReorderEnvironmentIds,
     activeReorderEnvironmentIds,
@@ -577,6 +581,7 @@ export function HomeScreen(props: HomeScreenProps) {
     // Settled threads are live shells; archived threads keep their original
     // "hidden from lists" meaning.
     return buildThreadListV2Items({
+      flatThreadSortOrder,
       pendingOrder,
       threads: props.threads.filter((thread) => thread.archivedAt === null),
       environmentId: props.selectedEnvironmentId,
@@ -596,6 +601,7 @@ export function HomeScreen(props: HomeScreenProps) {
       selectedThreadKey,
     });
   }, [
+    flatThreadSortOrder,
     workingShelfEnabled,
     workingShelfExpanded,
     pendingOrder,
@@ -794,7 +800,9 @@ export function HomeScreen(props: HomeScreenProps) {
           reorderSupported={
             item.item.pinned
               ? pinReorderEnvironmentIds.has(thread.environmentId)
-              : !workingShelfEnabled && activeReorderEnvironmentIds.has(thread.environmentId)
+              : !workingShelfEnabled &&
+                flatThreadSortOrder === "manual" &&
+                activeReorderEnvironmentIds.has(thread.environmentId)
           }
           canMoveUp={item.canMoveUp}
           canMoveDown={item.canMoveDown}
@@ -870,7 +878,8 @@ export function HomeScreen(props: HomeScreenProps) {
       searchQuery: props.searchQuery,
       selectedThreadKey,
       threadSearchMatchByKey,
-      // Rows read it for their reorder menu items.
+      // Rows read these for their reorder menu items.
+      flatThreadSortOrder,
       workingShelfEnabled,
     }),
     [

@@ -9,11 +9,13 @@ import { Pressable, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import { DEFAULT_SERVER_SETTINGS } from "@t3tools/contracts";
+import { FLAT_THREAD_SORT_OPTIONS } from "@t3tools/client-runtime/state/thread-sort";
 import { supportsSharedSettingsSync } from "@t3tools/client-runtime/state/shared-settings";
 import { AppText as Text } from "../../components/AppText";
 import { mobilePreferencesAtom, updateMobilePreferencesAtom } from "../../state/preferences";
 import { serverEnvironment } from "../../state/server";
 import { useAtomCommand } from "../../state/use-atom-command";
+import { SettingsChoiceRow } from "./components/SettingsChoiceRow";
 import { SettingsSection } from "./components/SettingsSection";
 import { SettingsProjectOverridesSection } from "./components/SettingsProjectOverridesSection";
 import { SettingsSwitchRow } from "./components/SettingsSwitchRow";
@@ -47,6 +49,7 @@ export function SettingsThreadsRouteScreen() {
           contentContainerStyle={{ paddingBottom: Math.max(insets.bottom, 18) + 18 }}
         >
           <AutoSettleSettingsRows />
+          <ThreadSortSettingsSection />
           <BetaSettingsSection />
           <LegacySettingsSection />
         </ScrollView>
@@ -315,5 +318,32 @@ function LegacySettingsSection() {
         control; otherwise every task runs in Build mode.
       </Text>
     </View>
+  );
+}
+
+function ThreadSortSettingsSection() {
+  const savePreferences = useAtomSet(updateMobilePreferencesAtom);
+  const preferences = useAtomValue(mobilePreferencesAtom);
+  const ready = AsyncResult.isSuccess(preferences) && !preferences.waiting;
+  const selected = AsyncResult.isSuccess(preferences)
+    ? (preferences.value.sidebarFlatThreadSortOrder ?? "manual")
+    : null;
+  // The Working beta orders the inbox by time, so the choice would have no effect.
+  if (AsyncResult.isSuccess(preferences) && preferences.value.workingShelfEnabled === true)
+    return null;
+  return (
+    <SettingsSection title="Thread order">
+      {FLAT_THREAD_SORT_OPTIONS.map((option, index) => (
+        <SettingsChoiceRow
+          key={option.value}
+          label={option.label}
+          description={option.description}
+          selected={selected === option.value}
+          separated={index > 0}
+          disabled={!ready}
+          onPress={() => savePreferences({ sidebarFlatThreadSortOrder: option.value })}
+        />
+      ))}
+    </SettingsSection>
   );
 }

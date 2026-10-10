@@ -2,6 +2,7 @@ import { appAtomRegistry } from "../../state/atom-registry";
 import { useAtomValue } from "@effect/atom-react";
 import type { EnvironmentThreadShell } from "@t3tools/client-runtime/state/shell";
 import { effectiveSnoozed } from "@t3tools/client-runtime/state/thread-settled";
+import { sortThreadsByFlatOrder } from "@t3tools/client-runtime/state/thread-sort";
 import { sortInboxThreadsByReturn } from "@t3tools/client-runtime/state/thread-inbox";
 import { type ReactNode, useEffect, useMemo, useRef, useState } from "react";
 import { Animated, FlatList, Modal, Pressable, View } from "react-native";
@@ -156,7 +157,7 @@ export function ThreadArrangementSheet(props: { onClose: () => void }) {
   const pendingOrder = useAtomValue(pendingThreadOrderAtom);
   const dropBusy = useAtomValue(threadDropBusyAtom);
   const { moveThread } = useThreadListActions();
-  const { workingShelfEnabled } = useThreadListV2ShelfPreferences();
+  const { workingShelfEnabled, flatThreadSortOrder } = useThreadListV2ShelfPreferences();
   const [now, setNow] = useState(() => new Date().toISOString());
   const [expanded, setExpanded] = useState({ snoozed: false, settled: false });
   useEffect(() => {
@@ -201,11 +202,19 @@ export function ThreadArrangementSheet(props: { onClose: () => void }) {
       // The Working beta orders the inbox by time; show that order here too.
       active: workingShelfEnabled
         ? sortInboxThreadsByReturn(active, threadListInboxReturns.returnedAt)
-        : active,
+        : sortThreadsByFlatOrder(active, flatThreadSortOrder, (threads) => [...threads]),
       snoozed: parked.filter((thread) => effectiveSnoozed(thread, { now })),
       settled: parked.filter((thread) => !effectiveSnoozed(thread, { now })),
     };
-  }, [threads, configs, now, queuedThreadKeys, pendingOrder, workingShelfEnabled]);
+  }, [
+    threads,
+    configs,
+    now,
+    queuedThreadKeys,
+    pendingOrder,
+    workingShelfEnabled,
+    flatThreadSortOrder,
+  ]);
   const planners = useMemo(() => {
     const planner = (section: "pinned" | "active") =>
       createThreadMovePlanner({
@@ -219,7 +228,9 @@ export function ThreadArrangementSheet(props: { onClose: () => void }) {
             (
               section === "pinned"
                 ? config.environment.capabilities.threadPinReorder
-                : !workingShelfEnabled && config.environment.capabilities.threadActiveReorder
+                : !workingShelfEnabled &&
+                  flatThreadSortOrder === "manual" &&
+                  config.environment.capabilities.threadActiveReorder
             )
               ? [id]
               : [],
@@ -227,7 +238,7 @@ export function ThreadArrangementSheet(props: { onClose: () => void }) {
         ),
       });
     return { pinned: planner("pinned"), active: planner("active") };
-  }, [sections, threads, configs, workingShelfEnabled]);
+  }, [sections, threads, configs, workingShelfEnabled, flatThreadSortOrder]);
   const rows = useMemo(() => {
     const result: Row[] = [];
     let offset = 0;

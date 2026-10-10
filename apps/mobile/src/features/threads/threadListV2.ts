@@ -19,11 +19,12 @@ import {
 } from "@t3tools/client-runtime/state/thread-inbox";
 import {
   sortActiveThreadsByOrderKey,
+  sortThreadsByFlatOrder,
   resolveSettledThreadTimestamp,
   sortPinnedThreadsByOrderKey,
   sortSettledThreads,
 } from "@t3tools/client-runtime/state/thread-sort";
-import type { EnvironmentId, ProjectId } from "@t3tools/contracts";
+import type { SidebarFlatThreadSortOrder, EnvironmentId, ProjectId } from "@t3tools/contracts";
 
 import type { ThreadListProvider } from "../../state/thread-list-environments";
 import type { ThreadMoveAvailability } from "./threadOrder";
@@ -640,6 +641,7 @@ function sortSettledThreadsReusingLast(
  * the settled recency tail, matching the web v2 list.
  */
 export function buildThreadListV2Items(input: {
+  readonly flatThreadSortOrder?: SidebarFlatThreadSortOrder;
   readonly pendingOrder?: PendingThreadOrder | null;
   readonly threads: ReadonlyArray<EnvironmentThreadShell>;
   readonly environmentId: EnvironmentId | null;
@@ -760,7 +762,9 @@ export function buildThreadListV2Items(input: {
   // flight) is kept but not applied until the beta is off again.
   const orderedActive = workingShelfEnabled
     ? sortInboxThreadsByReturn(active, input.inboxReturnAt)
-    : applyPendingThreadOrder(sortThreadsForListV2(active), "active", pending);
+    : sortThreadsByFlatOrder(active, input.flatThreadSortOrder ?? "manual", (threads) =>
+        applyPendingThreadOrder(sortThreadsForListV2(threads), "active", pending),
+      );
   // Newest send first; finishing and waking again do not move a row.
   const orderedWorking = sortWorkingThreadsBySend(working);
   const orderedSnoozed = [...snoozed].sort(
