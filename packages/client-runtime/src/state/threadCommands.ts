@@ -93,11 +93,7 @@ import {
   visitThread,
   watchThreadPullRequest,
 } from "../operations/commands.ts";
-import {
-  getInitialServerConfig,
-  requestGuarded,
-  EnvironmentRpcUnavailableError,
-} from "../rpc/client.ts";
+import { getInitialServerConfig, request, EnvironmentRpcUnavailableError } from "../rpc/client.ts";
 import type { EnvironmentRegistry } from "../connection/registry.ts";
 import * as EnvironmentSupervisor from "../connection/supervisor.ts";
 import * as ThreadHistoryController from "./threadHistoryController.ts";
@@ -165,28 +161,20 @@ export function createThreadEnvironmentAtoms<R, E>(
   >(
     type: Type,
   ) =>
-    createEnvironmentRpcCommand(runtime, {
+    // Like other orchestration commands, the server authorizes these; UIs gate
+    // on the operate scope. Older servers without T3 goals are refused here.
+    createEnvironmentCommand(runtime, {
       label: `environment-data:commands:${type}`,
-      tag: ORCHESTRATION_V2_WS_METHODS.dispatchCommand,
       execute: (input: Extract<OrchestrationV2Command, { type: Type }>) =>
         Effect.gen(function* () {
-          const supervisor = yield* EnvironmentSupervisor.EnvironmentSupervisor;
-          const config = yield* getInitialServerConfig().pipe(
-            Effect.mapError(
-              () =>
-                new EnvironmentRpcUnavailableError({
-                  environmentId: supervisor.target.environmentId,
-                  message: "This environment is not connected.",
-                }),
-            ),
-          );
+          const config = yield* getInitialServerConfig();
           if (config.environment.capabilities.t3Goals !== true) {
             return yield* new EnvironmentRpcUnavailableError({
               environmentId: config.environment.environmentId,
               message: "This environment does not support T3 goals.",
             });
           }
-          return yield* requestGuarded(ORCHESTRATION_V2_WS_METHODS.dispatchCommand, input);
+          return yield* request(ORCHESTRATION_V2_WS_METHODS.dispatchCommand, input);
         }),
       scheduler,
       concurrency,
