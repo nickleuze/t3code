@@ -8,12 +8,13 @@ import { useRef, useState } from "react";
 import { Pressable, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
-import { DEFAULT_SERVER_SETTINGS } from "@t3tools/contracts";
+import { type SidebarFlatThreadSortOrder, DEFAULT_SERVER_SETTINGS } from "@t3tools/contracts";
 import { supportsSharedSettingsSync } from "@t3tools/client-runtime/state/shared-settings";
 import { AppText as Text } from "../../components/AppText";
 import { mobilePreferencesAtom, updateMobilePreferencesAtom } from "../../state/preferences";
 import { serverEnvironment } from "../../state/server";
 import { useAtomCommand } from "../../state/use-atom-command";
+import { SettingsChoiceRow } from "./components/SettingsChoiceRow";
 import { SettingsSection } from "./components/SettingsSection";
 import { SettingsProjectOverridesSection } from "./components/SettingsProjectOverridesSection";
 import { SettingsSwitchRow } from "./components/SettingsSwitchRow";
@@ -47,6 +48,7 @@ export function SettingsThreadsRouteScreen() {
           contentContainerStyle={{ paddingBottom: Math.max(insets.bottom, 18) + 18 }}
         >
           <AutoSettleSettingsRows />
+          <ThreadSortSettingsSection />
           <BetaSettingsSection />
           <LegacySettingsSection />
         </ScrollView>
@@ -315,5 +317,43 @@ function LegacySettingsSection() {
         control; otherwise every task runs in Build mode.
       </Text>
     </View>
+  );
+}
+
+function ThreadSortSettingsSection() {
+  const savePreferences = useAtomSet(updateMobilePreferencesAtom);
+  const preferences = useAtomValue(mobilePreferencesAtom);
+  const ready = AsyncResult.isSuccess(preferences) && !preferences.waiting;
+  const selected = AsyncResult.isSuccess(preferences)
+    ? (preferences.value.sidebarFlatThreadSortOrder ?? "manual")
+    : null;
+  const options: readonly {
+    value: SidebarFlatThreadSortOrder;
+    label: string;
+    description: string;
+  }[] = [
+    { value: "manual", label: "Manual", description: "Keep your saved arrangement." },
+    {
+      value: "last_activity",
+      label: "Last activity",
+      description: "Newest message or completed turn first.",
+    },
+    { value: "updated_at", label: "Last message", description: "Newest user message first." },
+    { value: "created_at", label: "Created", description: "Newest threads first." },
+  ];
+  return (
+    <SettingsSection title="Thread order">
+      {options.map((option, index) => (
+        <SettingsChoiceRow
+          key={option.value}
+          label={option.label}
+          description={option.description}
+          selected={selected === option.value}
+          separated={index > 0}
+          disabled={!ready}
+          onPress={() => savePreferences({ sidebarFlatThreadSortOrder: option.value })}
+        />
+      ))}
+    </SettingsSection>
   );
 }

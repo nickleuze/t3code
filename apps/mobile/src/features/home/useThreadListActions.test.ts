@@ -12,6 +12,10 @@ import { AsyncResult } from "effect/reactivity";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 
 const state = vi.hoisted(() => ({
+  preferences: {} as {
+    sidebarFlatThreadSortOrder?: "manual" | "last_activity";
+    workingShelfEnabled?: boolean;
+  },
   pendingOrder: null as object | null,
   dropBusy: false,
   scopes: new Map<string, Set<string>>(),
@@ -53,6 +57,7 @@ vi.mock("../../state/session", () => ({
   readEnvironmentScope: (environmentId: string, scope: string) =>
     state.scopes.get(environmentId)?.has(scope) === true,
 }));
+vi.mock("../../state/preferences", () => ({ mobilePreferencesAtom: "preferences" }));
 vi.mock("../../state/server", () => ({
   environmentServerConfigsAtom: "server-configs",
 }));
@@ -62,28 +67,31 @@ vi.mock("../../state/atom-registry", () => ({
       state.dropBusy = value;
     },
     get: (atom: string) =>
-      atom === "thread-drop-busy"
-        ? state.dropBusy
-        : atom === "thread-shells"
-          ? state.shells
-          : atom === "queued-thread-keys"
-            ? new Set<string>()
-            : new Map(
-                [...state.scopes.keys()].map((environmentId) => [
-                  environmentId,
-                  {
-                    environment: {
-                      capabilities: {
-                        threadSettlement: true,
-                        threadSnooze: true,
-                        threadPinning: true,
-                        threadPinReorder: true,
-                        threadTitleRegeneration: true,
+      atom === "preferences"
+        ? AsyncResult.success(state.preferences)
+        : atom === "thread-drop-busy"
+          ? state.dropBusy
+          : atom === "thread-shells"
+            ? state.shells
+            : atom === "queued-thread-keys"
+              ? new Set<string>()
+              : new Map(
+                  [...state.scopes.keys()].map((environmentId) => [
+                    environmentId,
+                    {
+                      environment: {
+                        capabilities: {
+                          threadSettlement: true,
+                          threadSnooze: true,
+                          threadPinning: true,
+                          threadPinReorder: true,
+                          threadActiveReorder: true,
+                          threadTitleRegeneration: true,
+                        },
                       },
                     },
-                  },
-                ]),
-              ),
+                  ]),
+                ),
   },
 }));
 vi.mock("../../state/use-atom-command", () => ({
@@ -123,6 +131,7 @@ vi.mock("../../state/threads", () => ({
       "pin",
       "unpin",
       "reorderPin",
+      "reorderActive",
       "updateMetadata",
     ].map((action) => [
       action,
@@ -169,6 +178,7 @@ const mutationCases = [
 ] as const;
 
 beforeEach(() => {
+  state.preferences = {};
   state.pendingOrder = null;
   state.dropBusy = false;
   state.scopes = new Map([
@@ -323,4 +333,24 @@ describe("pinned thread operation permissions", () => {
     expect(await useThreadListActions().moveThread(moved, "up")).toBe(false);
     expect(state.requests).toHaveLength(1);
   });
+});
+
+it("refuses an active move after the saved order becomes time-based", async () => {
+  const first = makeThreadShellFixture({
+    environmentId: primaryEnvironmentId,
+    id: ThreadId.make("first"),
+    activeOrderKey: "b",
+  });
+  const moved = makeThreadShellFixture({
+    environmentId: primaryEnvironmentId,
+    id: ThreadId.make("active"),
+    activeOrderKey: "z",
+  });
+  state.shells = [first, moved];
+  expect(await useThreadListActions().moveThread(moved, "up")).toBe(true);
+  expect(state.requests).toContainEqual(expect.objectContaining({ action: "reorderActive" }));
+  state.requests = [];
+  state.preferences = { sidebarFlatThreadSortOrder: "last_activity" };
+  expect(await useThreadListActions().moveThread(moved, "up")).toBe(false);
+  expect(state.requests).toEqual([]);
 });

@@ -1,3 +1,5 @@
+import { T3GoalHistory } from "./T3GoalHistory";
+import { goalStatusLabel } from "@t3tools/client-runtime/state/thread-goals";
 import type { ThreadRowProviderInstance } from "./thread-provider-instance";
 import {
   THREAD_LIST_V2_MONO_FONT as MONO_FONT,
@@ -495,6 +497,8 @@ export const ThreadListV2PendingRow = memo(function ThreadListV2PendingRow(props
 
 export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
   readonly thread: EnvironmentThreadShell;
+  readonly goalIterations?: readonly EnvironmentThreadShell[];
+  readonly selectedThreadKey?: string | null;
   readonly variant: "card" | "slim";
   /** A message for this thread is waiting in the outbox. */
   readonly hasQueuedMessages?: boolean;
@@ -636,7 +640,18 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
     // A native /goal keeps the agent going across turns until it is met.
     (status === "working" && workingLabel !== undefined && thread.goal?.status === "active"
       ? { ...workingLabel, label: "Goal" }
-      : workingLabel) ?? (isUnread ? DONE_STATUS_LABEL : undefined);
+      : workingLabel) ??
+    (isUnread
+      ? DONE_STATUS_LABEL
+      : thread.t3Goal?.status === "paused"
+        ? STATUS_LABEL_BY_STATUS.waiting
+        : undefined);
+  const t3StatusLabel =
+    status !== "approval" &&
+    thread.t3Goal != null &&
+    !["complete", "stopped"].includes(thread.t3Goal.status)
+      ? goalStatusLabel(thread.t3Goal)
+      : null;
   const recede = shouldRecedeThreadRow({ status, selected });
   // The timestamp is precomputed on the list item (same stamps the settled
   // tail sorts by) so a minute tick only re-renders rows that draw it.
@@ -1019,7 +1034,7 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
                 selected ? selectedThreadRowColors.foregroundClassName : statusLabel.className,
               )}
             >
-              {statusLabel.label}
+              {t3StatusLabel ?? statusLabel.label}
             </Text>
           </View>
         ) : (
@@ -1301,7 +1316,23 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
       </RowPressable>
     );
 
-  if (!canOperateThread) return rowContent(() => {});
+  const history = props.goalIterations?.length ? (
+    <T3GoalHistory
+      key={`${thread.environmentId}:${thread.id}`}
+      owner={thread}
+      parked={variant === "slim"}
+      iterations={props.goalIterations}
+      selectedThreadKey={props.selectedThreadKey}
+      onSelectThread={onSelectThread}
+    />
+  ) : null;
+  if (!canOperateThread)
+    return (
+      <View>
+        {rowContent(() => {})}
+        {history}
+      </View>
+    );
 
   return (
     <View collapsable={false}>
@@ -1358,6 +1389,7 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
           </ControlPillMenu>
         )}
       </ThreadSwipeable>
+      {history}
     </View>
   );
 });

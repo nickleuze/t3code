@@ -19,11 +19,13 @@ import {
 } from "@t3tools/client-runtime/state/thread-inbox";
 import {
   sortActiveThreadsByOrderKey,
+  sortThreads,
+  sortThreadsByLastActivity,
   resolveSettledThreadTimestamp,
   sortPinnedThreadsByOrderKey,
   sortSettledThreads,
 } from "@t3tools/client-runtime/state/thread-sort";
-import type { EnvironmentId, ProjectId } from "@t3tools/contracts";
+import type { SidebarFlatThreadSortOrder, EnvironmentId, ProjectId } from "@t3tools/contracts";
 
 import type { ThreadListProvider } from "../../state/thread-list-environments";
 import type { ThreadMoveAvailability } from "./threadOrder";
@@ -183,20 +185,29 @@ export function threadHasUnseenCompletion(
 }
 
 export function resolveThreadListV2Status(
-  thread: Pick<EnvironmentThreadShell, "hasPendingApprovals" | "hasPendingUserInput" | "runtime">,
+  thread: Pick<EnvironmentThreadShell, "hasPendingApprovals" | "hasPendingUserInput" | "runtime"> &
+    Partial<Pick<EnvironmentThreadShell, "t3Goal">>,
 ): ThreadListV2Status {
   if (thread.hasPendingApprovals) {
     return "approval";
   }
-  if (thread.hasPendingUserInput) {
+  if (
+    thread.hasPendingUserInput ||
+    (thread.t3Goal != null &&
+      (thread.t3Goal.needsInput ||
+        thread.t3Goal.status === "blocked" ||
+        (thread.t3Goal.status === "paused" && thread.t3Goal.statusReason !== "user")))
+  ) {
     return "input";
   }
   if (
-    thread.runtime !== null &&
-    ["preparing", "queued", "starting", "running", "waiting"].includes(thread.runtime.status)
+    (thread.runtime !== null &&
+      ["preparing", "queued", "starting", "running", "waiting"].includes(thread.runtime.status)) ||
+    thread.t3Goal?.status === "active"
   ) {
     return "working";
   }
+  if (thread.t3Goal?.status === "usageLimited") return "limited";
   if (thread.runtime?.status === "idle") {
     return "waiting";
   }
@@ -204,6 +215,57 @@ export function resolveThreadListV2Status(
     return thread.runtime.lastErrorClass === "usage_limit" ? "limited" : "failed";
   }
   return "ready";
+}
+
+/** Scoped top-level owners hide only iterations that remain reachable beneath them. */
+export function goalThreadNavigation(threads: readonly EnvironmentThreadShell[]): {
+  roots: EnvironmentThreadShell[];
+  iterations: ReadonlyMap<string, readonly EnvironmentThreadShell[]>;
+} {
+  const visible = threads.filter(
+    (thread) => thread.archivedAt === null && thread.lineage.relationshipToParent !== "subagent",
+  );
+  const owners = new Set(
+    visible
+      .filter((thread) => thread.goalIteration == null)
+      .map((thread) => `${thread.environmentId}:${thread.id}`),
+  );
+  const iterations = new Map<string, EnvironmentThreadShell[]>();
+  const roots: EnvironmentThreadShell[] = [];
+  for (const thread of visible) {
+    const marker = thread.goalIteration;
+    const key = marker == null ? null : `${thread.environmentId}:${marker.parentThreadId}`;
+    if (key === null || !owners.has(key)) roots.push(thread);
+    else {
+      const group = iterations.get(key) ?? [];
+      group.push(thread);
+      iterations.set(key, group);
+    }
+  }
+  for (const group of iterations.values())
+    group.sort(
+      (left, right) =>
+        (right.goalIteration?.iteration ?? 0) - (left.goalIteration?.iteration ?? 0) ||
+        right.createdAt.localeCompare(left.createdAt) ||
+        left.id.localeCompare(right.id),
+    );
+  return { roots, iterations };
+}
+
+/** A selected historical iteration reveals its owner even on collapsed/paged shelves. */
+function goalRouteOwnerKey(threads: readonly EnvironmentThreadShell[], routeKey: string | null) {
+  const iteration = threads.find((thread) => `${thread.environmentId}:${thread.id}` === routeKey);
+  if (iteration?.goalIteration == null) return routeKey;
+  const ownerKey = `${iteration.environmentId}:${iteration.goalIteration.parentThreadId}`;
+  return threads.some(
+    (thread) =>
+      `${thread.environmentId}:${thread.id}` === ownerKey &&
+      thread.archivedAt === null &&
+      thread.goalIteration == null &&
+      thread.lineage.relationshipToParent !== "subagent",
+  )
+    ? ownerKey
+    : routeKey;
 }
 
 /** NaN-safe Date.parse for sort comparators: a malformed timestamp must not
@@ -239,7 +301,7 @@ export function getThreadListV2OrderedSection(input: {
 }): EnvironmentThreadShell[] {
   // An empty set is treated as absent so `?.` skips building the key.
   const queuedThreadKeys = input.queuedThreadKeys?.size ? input.queuedThreadKeys : undefined;
-  const threads = input.threads.filter((thread) => {
+  const threads = goalThreadNavigation(input.threads).roots.filter((thread) => {
     if (thread.archivedAt !== null || thread.lineage.relationshipToParent === "subagent")
       return false;
     if (
@@ -276,6 +338,7 @@ export interface ThreadListV2Item {
   /** Pinned-block row: renders the pin glyph and offers Unpin. */
   readonly pinned: boolean;
   readonly isLast: boolean;
+  readonly goalIterations?: readonly EnvironmentThreadShell[];
 }
 
 export interface ThreadListV2Layout {
@@ -413,6 +476,10 @@ export function threadListV2ListItemsAreEqual(
         previous.item.variant === item.item.variant &&
         previous.item.snoozed === item.item.snoozed &&
         previous.item.pinned === item.item.pinned &&
+        (previous.item.goalIterations?.length ?? 0) === (item.item.goalIterations?.length ?? 0) &&
+        (previous.item.goalIterations ?? []).every(
+          (thread, index) => thread === item.item.goalIterations?.[index],
+        ) &&
         previous.snoozeWakeLabelText === item.snoozeWakeLabelText &&
         previous.timeLabel === item.timeLabel &&
         previous.snoozePresetMinute === item.snoozePresetMinute &&
@@ -640,6 +707,7 @@ function sortSettledThreadsReusingLast(
  * the settled recency tail, matching the web v2 list.
  */
 export function buildThreadListV2Items(input: {
+  readonly flatThreadSortOrder?: SidebarFlatThreadSortOrder;
   readonly pendingOrder?: PendingThreadOrder | null;
   readonly threads: ReadonlyArray<EnvironmentThreadShell>;
   readonly environmentId: EnvironmentId | null;
@@ -707,28 +775,26 @@ export function buildThreadListV2Items(input: {
   let nextSnoozeWakeAt: string | null = null;
   // An empty set is treated as absent so `?.` skips building the key.
   const queuedThreadKeys = input.queuedThreadKeys?.size ? input.queuedThreadKeys : undefined;
-  for (const thread of input.threads) {
-    if (thread.archivedAt !== null || thread.lineage.relationshipToParent === "subagent") continue;
-    // The server stamps settledOverride for the tail.
-    if (input.environmentId !== null && thread.environmentId !== input.environmentId) continue;
-    if (projectKeys !== null && !projectKeys.has(`${thread.environmentId}:${thread.projectId}`)) {
-      continue;
-    }
-    if (
-      query.length > 0 &&
-      !thread.title.toLocaleLowerCase().includes(query) &&
-      !threadPullRequestSearchTerms(thread).some((term) =>
-        term.toLocaleLowerCase().includes(query),
-      ) &&
-      input.matchedThreadKeys?.has(
-        threadSearchMatchKey({
-          environmentId: thread.environmentId,
-          threadId: thread.id,
-        }),
-      ) !== true
-    ) {
-      continue;
-    }
+  const scopedThreads = input.threads.filter(
+    (thread) =>
+      (input.environmentId === null || thread.environmentId === input.environmentId) &&
+      (projectKeys === null || projectKeys.has(`${thread.environmentId}:${thread.projectId}`)),
+  );
+  const { roots, iterations } = goalThreadNavigation(scopedThreads);
+  const searchMatches = (thread: EnvironmentThreadShell) =>
+    query.length === 0 ||
+    thread.title.toLocaleLowerCase().includes(query) ||
+    threadPullRequestSearchTerms(thread).some((term) => term.toLocaleLowerCase().includes(query)) ||
+    input.matchedThreadKeys?.has(
+      threadSearchMatchKey({ environmentId: thread.environmentId, threadId: thread.id }),
+    ) === true;
+  const nestedIterations = new Map<string, readonly EnvironmentThreadShell[]>();
+  for (const thread of roots) {
+    const key = `${thread.environmentId}:${thread.id}`;
+    const group = iterations.get(key) ?? [];
+    const matches = searchMatches(thread);
+    nestedIterations.set(key, matches ? group : group.filter(searchMatches));
+    if (!matches && (nestedIterations.get(key)?.length ?? 0) === 0) continue;
     const supportsSettlement = input.settlementEnvironmentIds?.has(thread.environmentId) ?? true;
     const supportsSnooze = input.snoozeEnvironmentIds?.has(thread.environmentId) ?? true;
     // Snooze outranks settlement and pinning until the thread wakes.
@@ -749,7 +815,11 @@ export function buildThreadListV2Items(input: {
       settled.push(thread);
     } else if (thread.pinnedAt != null) {
       pinned.push(thread);
-    } else if (workingShelfEnabled && isThreadWorking(thread)) {
+    } else if (
+      workingShelfEnabled &&
+      !["input", "approval"].includes(resolveThreadListV2Status(thread)) &&
+      (isThreadWorking(thread) || resolveThreadListV2Status(thread) === "working")
+    ) {
       working.push(thread);
     } else {
       active.push(thread);
@@ -760,14 +830,18 @@ export function buildThreadListV2Items(input: {
   // flight) is kept but not applied until the beta is off again.
   const orderedActive = workingShelfEnabled
     ? sortInboxThreadsByReturn(active, input.inboxReturnAt)
-    : applyPendingThreadOrder(sortThreadsForListV2(active), "active", pending);
+    : input.flatThreadSortOrder === undefined || input.flatThreadSortOrder === "manual"
+      ? applyPendingThreadOrder(sortThreadsForListV2(active), "active", pending)
+      : input.flatThreadSortOrder === "last_activity"
+        ? sortThreadsByLastActivity(active)
+        : sortThreads(active, input.flatThreadSortOrder);
   // Newest send first; finishing and waking again do not move a row.
   const orderedWorking = sortWorkingThreadsBySend(working);
   const orderedSnoozed = [...snoozed].sort(
     (left, right) =>
       parseTimestampMs(left.snoozedUntil ?? "") - parseTimestampMs(right.snoozedUntil ?? ""),
   );
-  const selectedThreadKey = input.selectedThreadKey ?? null;
+  const selectedThreadKey = goalRouteOwnerKey(scopedThreads, input.selectedThreadKey ?? null);
   const visibleWorking =
     input.workingShelfExpanded === true
       ? orderedWorking
@@ -851,6 +925,11 @@ export function buildThreadListV2Items(input: {
       pinned: false,
       isLast: false,
     });
+  }
+  for (let index = 0; index < items.length; index += 1) {
+    const item = items[index]!;
+    const group = nestedIterations.get(`${item.thread.environmentId}:${item.thread.id}`);
+    if (group?.length) items[index] = { ...item, goalIterations: group };
   }
   const last = items.at(-1);
   if (last) {

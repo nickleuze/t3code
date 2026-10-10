@@ -293,6 +293,7 @@ function ThreadNavigationSidebarPane(
     loaded: shelfPreferencesLoaded,
     settledShelfExpanded,
     snoozedShelfExpanded,
+    flatThreadSortOrder,
     workingShelfEnabled,
     workingShelfExpanded,
     toggleSettledShelf,
@@ -351,9 +352,12 @@ function ThreadNavigationSidebarPane(
     // The Working beta orders the inbox by time, so only pins can move.
     return new Map([
       ...sectionAvailability("pinned"),
-      ...(workingShelfEnabled ? [] : sectionAvailability("active")),
+      ...(workingShelfEnabled || flatThreadSortOrder !== "manual"
+        ? []
+        : sectionAvailability("active")),
     ]);
   }, [
+    flatThreadSortOrder,
     workingShelfEnabled,
     pinReorderEnvironmentIds,
     activeReorderEnvironmentIds,
@@ -368,6 +372,7 @@ function ThreadNavigationSidebarPane(
   const threadListV2Layout = useMemo(() => {
     threadListInboxReturns.observe(workingShelfEnabled ? threads : null);
     return buildThreadListV2Items({
+      flatThreadSortOrder,
       pendingOrder,
       threads: threads.filter((thread) => thread.archivedAt === null),
       environmentId: options.selectedEnvironmentId,
@@ -387,6 +392,7 @@ function ThreadNavigationSidebarPane(
       selectedThreadKey: props.selectedThreadKey ?? null,
     });
   }, [
+    flatThreadSortOrder,
     workingShelfEnabled,
     workingShelfExpanded,
     pendingOrder,
@@ -607,7 +613,8 @@ function ThreadNavigationSidebarPane(
       savedConnectionsById,
       listEnvironments,
       threadSearchMatchByKey,
-      // Rows read it for their reorder menu items.
+      // Rows read these for their reorder menu items.
+      flatThreadSortOrder,
       workingShelfEnabled,
     }),
     [
@@ -617,6 +624,7 @@ function ThreadNavigationSidebarPane(
       savedConnectionsById,
       listEnvironments,
       threadSearchMatchByKey,
+      flatThreadSortOrder,
       workingShelfEnabled,
     ],
   );
@@ -692,6 +700,8 @@ function ThreadNavigationSidebarPane(
             <ThreadListV2Row
               onNewThreadOnBranch={props.onNewThreadOnBranch}
               thread={thread}
+              goalIterations={item.item.goalIterations}
+              selectedThreadKey={props.selectedThreadKey}
               variant={item.item.variant}
               hasQueuedMessages={item.hasQueuedMessages}
               snoozed={item.item.snoozed}
@@ -735,7 +745,9 @@ function ThreadNavigationSidebarPane(
               reorderSupported={
                 item.item.pinned
                   ? pinReorderEnvironmentIds.has(thread.environmentId)
-                  : !workingShelfEnabled && activeReorderEnvironmentIds.has(thread.environmentId)
+                  : !workingShelfEnabled &&
+                    flatThreadSortOrder === "manual" &&
+                    activeReorderEnvironmentIds.has(thread.environmentId)
               }
               canMoveUp={item.canMoveUp}
               canMoveDown={item.canMoveDown}
@@ -834,6 +846,7 @@ function ThreadNavigationSidebarPane(
       unpinThread,
       unsettleThread,
       unsnoozeThread,
+      flatThreadSortOrder,
       workingShelfEnabled,
     ],
   );

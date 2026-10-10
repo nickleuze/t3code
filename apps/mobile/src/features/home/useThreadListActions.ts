@@ -2,6 +2,8 @@ import type { ThreadMoveDestination } from "../threads/threadOrder";
 import type { EnvironmentThreadShell } from "@t3tools/client-runtime/state/shell";
 import { canSnooze, effectiveSnoozed } from "@t3tools/client-runtime/state/thread-settled";
 import { AuthOrchestrationOperateScope } from "@t3tools/contracts";
+import { AsyncResult } from "effect/reactivity";
+import { mobilePreferencesAtom } from "../../state/preferences";
 import * as Cause from "effect/Cause";
 import * as Haptics from "expo-haptics";
 import { useCallback, useRef } from "react";
@@ -610,6 +612,14 @@ export function useThreadListActions(): {
           appAtomRegistry.set(threadDropBusyAtom, false);
         }
       }
+      const preferences = appAtomRegistry.get(mobilePreferencesAtom);
+      if (
+        section === "active" &&
+        (!AsyncResult.isSuccess(preferences) ||
+          preferences.value.workingShelfEnabled === true ||
+          (preferences.value.sidebarFlatThreadSortOrder ?? "manual") !== "manual")
+      )
+        return false;
       const configs = appAtomRegistry.get(environmentServerConfigsAtom);
       const supportsReorder = (environmentId: EnvironmentThreadShell["environmentId"]) => {
         const capabilities = configs.get(environmentId)?.environment.capabilities;
