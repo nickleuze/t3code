@@ -410,7 +410,7 @@ export type OrchestrationV2GoalUsageSample = typeof OrchestrationV2GoalUsageSamp
 
 /** Iterations get at least this long; shorter saved limits read as this floor. */
 export const MIN_GOAL_ITERATION_TIMEOUT_MINS = 45;
-const DEFAULT_GOAL_ITERATION_TIMEOUT_MINS = 120;
+export const DEFAULT_GOAL_ITERATION_TIMEOUT_MINS = 120;
 
 /** The time limit an iteration of this goal runs under. */
 export function goalIterationTimeoutMins(goal: {
