@@ -467,6 +467,7 @@ function commandThreadId(command: OrchestrationV2ServerCommand): ThreadId {
     case "thread.goal.set":
     case "thread.goal.control":
     case "thread.goal.message":
+    case "thread.goal.update":
     case "thread.goal.proposal.dismiss":
     case "thread.goal.propose":
     case "thread.goal.iteration.start":
@@ -6524,6 +6525,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           | "thread.goal.set"
           | "thread.goal.control"
           | "thread.goal.message"
+          | "thread.goal.update"
           | "thread.goal.report"
           | "thread.goal.advance";
       }
@@ -6570,6 +6572,17 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           };
         case "thread.goal.message":
           return { type: "message", goalId: command.goalId, text: command.text };
+        case "thread.goal.update":
+          return {
+            type: "update",
+            goalId: command.goalId,
+            brief: {
+              objective: command.objective,
+              doneWhen: command.doneWhen,
+              background: command.background,
+              permissions: command.permissions,
+            },
+          };
         case "thread.goal.control":
           return {
             type: "control",
@@ -10914,6 +10927,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       case "thread.goal.set":
       case "thread.goal.control":
       case "thread.goal.message":
+      case "thread.goal.update":
       case "thread.goal.report":
       case "thread.goal.advance":
         yield* dispatchGoalCommand(command, events);
