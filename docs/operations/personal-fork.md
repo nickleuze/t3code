@@ -69,15 +69,15 @@ At a sync, keep the personal behavior, use an adequate upstream equivalent, or
 retire it with a deliberate decision. Check inherited preview differences too;
 do not reimplement the project-folder behavior already in official v2.
 
-| Behavior to preserve                                                                                      | Upstream-sensitive integration points                                                                                                               | Acceptance evidence                                                                                                                                                                                      |
-| --------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Durable `/t3-goal` loops, in-place continuation, rollover, brief edits, pause/resume/stop and handoff     | [GoalLoopWorker](../../apps/server/src/orchestration-v2/GoalLoopWorker.ts), command/event contracts, projection and provider turn lifecycle         | `GoalState.test.ts`, `GoalLoopWorker.test.ts`, `GoalLoop.test.ts`, `GoalPersistence.test.ts`; continuation/rollover, brief edits, restart/replay of old goals                                            |
-| Agent-drafted goal proposals that run only after the user starts them                                     | [GoalState](../../apps/server/src/orchestration-v2/GoalState.ts), MCP goal toolkit, ChatView/composer and goal banner                               | Goal proposal coverage in `GoalState.test.ts` and `GoalLoop.test.ts`, plus `goalPresentation.test.ts`; proposing starts no turn, dismissal is repeatable, Start creates exactly one goal                 |
-| Goal replies/control channel, nested iteration rows, unfolding parked iterations and flat sidebar sorting | [Sidebar.logic](../../apps/web/src/components/Sidebar.logic.ts), client state and settings schemas                                                  | `Sidebar.goals.test.ts` and `packages/contracts/src/settings.test.ts`; persisted `last_activity`, goal/iteration visibility and selection, including stopped/parked goals                                |
-| Reports from ordinary threads launched or messaged from auto mode (launch gate is upstream)               | [ThreadReportBack](../../apps/server/src/orchestration-v2/ThreadReportBack.ts), project/thread MCP handlers, launch authorization and notifications | `ThreadReportBack.test.ts` and `OrchestratorMcpToolkit.integration.test.ts`; one report to the initiating thread and bounded runtime permissions                                                         |
-| Cursor questions and T3 tools in supported permission modes                                               | [CursorT3Tools](../../packages/provider-cursor/src/server/CursorT3Tools.ts), Cursor adapter, MCP bridge and RPC authorization                       | `CursorT3Tools.test.ts` and provider-cursor `adapter.test.ts`; question/reply completion, restricted-mode tool availability and cancellation                                                             |
-| One fork release and coordinated updates, stable signing identity and T3 Connect configuration            | [Fork release workflow](../../.github/workflows/fork-release.yml), `fork/update*.sh`, signing, server update checks and sidebar update UI           | `ForkUpdate.test.ts`, update pill logic tests, built artifact inspection and installation/reconnect evidence on each Mac; same accepted commit/version, valid Connect configuration and signing identity |
-| Desktop shutdown finishes and stalled shutdowns leave useful diagnostics                                  | [DesktopLifecycle](../../apps/desktop/src/app/DesktopLifecycle.ts), app/server teardown and updater handoff                                         | `DesktopLifecycle.test.ts` and a real quit/update pass after active turns finish; preserve in-flight work and verify relaunch/reconnection separately                                                    |
+| Behavior to preserve                                                                                                 | Upstream-sensitive integration points                                                                                                                                                                                        | Acceptance evidence                                                                                                                                                                                              |
+| -------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Durable `/t3-goal` loops, in-place continuation, rollover, brief edits, pause/resume/stop and handoff                | [GoalLoopWorker](../../apps/server/src/orchestration-v2/GoalLoopWorker.ts), command/event contracts, projection and provider turn lifecycle                                                                                  | `GoalState.test.ts`, `GoalLoopWorker.test.ts`, `GoalLoop.test.ts`, `GoalPersistence.test.ts`; continuation/rollover, brief edits, restart/replay of old goals                                                    |
+| Agent-drafted goal proposals that run only after the user starts them                                                | [GoalState](../../apps/server/src/orchestration-v2/GoalState.ts), MCP goal toolkit, ChatView/composer and goal banner                                                                                                        | Goal proposal coverage in `GoalState.test.ts` and `GoalLoop.test.ts`, plus `goalPresentation.test.ts`; proposing starts no turn, dismissal is repeatable, Start creates exactly one goal                         |
+| Goal replies/control channel, nested iteration rows, unfolding parked iterations and flat sidebar sorting            | [Sidebar.logic](../../apps/web/src/components/Sidebar.logic.ts), client state and settings schemas                                                                                                                           | `Sidebar.goals.test.ts` and `packages/contracts/src/settings.test.ts`; persisted `last_activity`, goal/iteration visibility and selection, including stopped/parked goals                                        |
+| Reports from ordinary threads launched or messaged from auto mode, also after a restart (launch gate is upstream)    | [ThreadReportBack](../../apps/server/src/orchestration-v2/ThreadReportBack.ts), project/thread MCP handlers, launch authorization and notifications                                                                          | `ThreadReportBack.test.ts` (includes the restart sweep) and `OrchestratorMcpToolkit.integration.test.ts`; one report to the initiating thread, none duplicated after reopening the database                      |
+| Cursor questions and T3 tools in supported permission modes (Cursor-only, registered per send)                       | [CursorT3Tools](../../packages/provider-cursor/src/server/CursorT3Tools.ts), [T3McpHttpSession](../../packages/provider-cursor/src/server/T3McpHttpSession.ts) and the Cursor adapter                                        | `CursorT3Tools.test.ts`, `T3McpHttpSession.test.ts`, provider-cursor `adapter.test.ts`, the Cursor replay fixtures (identical to upstream) and `LegacyUserInputRequest.integration.test.ts` for stored questions |
+| One fork release per `nick/v2` push, built-in Electron updates, stable signing identity and T3 Connect configuration | [Fork release workflow](../../.github/workflows/fork-release.yml), generated [fork CI](../../.github/workflows/fork-ci.yml) via `fork/sync-ci.mjs`, `fork/update*.sh` (first install/recovery), signing and `versionSkew.ts` | `node --test fork/*.test.mjs` (including the `fork-ci.yml` drift test), `versionSkew` tests, the release `app-update.yml` check and installation/reconnect evidence on each Mac                                  |
+| Desktop shutdown finishes; a stalled quit is forced after a deadline                                                 | [DesktopShutdownWatchdog](../../apps/desktop/src/app/DesktopShutdownWatchdog.ts), forked once from `DesktopApp.ts`                                                                                                           | `DesktopShutdownWatchdog.test.ts` and a real quit/update pass after active turns finish                                                                                                                          |
 
 A goal iteration keeps its thread while each turn ends with a note recorded and
 under about 60 % of the model's context window in use, up to its time limit
@@ -145,27 +145,24 @@ Decide applicability for web/desktop/mobile, providers, permissions and
 local/remote/Connect modes. Capture a real-client acceptance pass for visible
 changes when authorized.
 
-The fork's [CI workflow](../../.github/workflows/fork-ci.yml) runs the full
-upstream checks on GitHub-hosted runners, including candidate branches, and is
-reusable by the [release workflow](../../.github/workflows/fork-release.yml).
-Only `nick/v2` can publish, including manual dispatch. Release checks always run
-for the exact triggering SHA. Their aggregate rejects failed, cancelled, missing
-or accidentally skipped jobs and emits that SHA only after success. Native
-mobile lint may skip only after successful explicit change detection says no
-native code changed.
-
-Before building and again before publishing, `fork/release-gate.mjs` requires the
-successful CI output, checkout HEAD and release SHA to match exactly. Fork-only
-changes also trigger checks and releases, so changes to signing or installation
-scripts cannot bypass validation. `node --test fork/*.test.mjs` covers the gate's
-failure cases and workflow connections. Local tests do not establish remote CI,
-repository permissions, signing, Connect configuration or artifact acceptance.
-No remote workflow has been triggered during candidate preparation. Keep
-publication, promotion and installation as separate approval gates.
+The fork's [CI workflow](../../.github/workflows/fork-ci.yml) is generated from
+upstream's `ci.yml` by `fork/sync-ci.mjs`. Regenerate it after a sync;
+`fork/sync-ci.test.mjs` fails while it is stale or when upstream reshapes the
+file. It runs the full upstream checks on GitHub-hosted runners, including
+candidate branches, and is reusable by the
+[release workflow](../../.github/workflows/fork-release.yml). Only `nick/v2` can
+publish, including manual dispatch. Checks and release run in one workflow run
+on the same `github.sha`; the release job requires the checks' aggregate to
+succeed and its checkout HEAD to equal that SHA. The aggregate rejects failed,
+cancelled or unexpectedly skipped jobs. Fork-only changes also trigger checks
+and releases, so changes to signing or installation scripts cannot bypass
+validation. Local tests do not establish remote CI, repository permissions,
+signing, Connect configuration or artifact acceptance. Keep publication,
+promotion and installation as separate approval gates.
 
 Build once from the accepted commit and use the same artifact/version on both
-Macs. Verify T3 Connect client configuration, signing identity, the fork updater
-and each host's installation/reconnection. Preserve the old app and a consistent
+Macs. Verify T3 Connect client configuration, signing identity, the built-in updater
+feed (`app-update.yml` points at the fork) and each host's installation/reconnection. Preserve the old app and a consistent
 state/settings backup before state-changing upgrades: an old binary may not
 read a new schema or event kind. Define the compatible restore path before
 shipping, and wait for active turns to finish before restarting either host.
