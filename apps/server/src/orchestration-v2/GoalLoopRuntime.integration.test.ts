@@ -1,7 +1,5 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
-import * as NodeSqliteClient from "@t3tools/shared/nodeSqliteClient";
-import * as Path from "effect/Path";
-import { runMigrations } from "../persistence/Migrations.ts";
+import * as NodeSqlite from "node:sqlite";
 import { assert, it } from "@effect/vitest";
 import {
   CommandId,
@@ -17,6 +15,10 @@ import {
 } from "@t3tools/contracts";
 import type * as ProviderAdapter from "@t3tools/provider-core/server/ProviderAdapter";
 import { checkpointWorkspace } from "@t3tools/provider-testing/replayWorkspace";
+import * as NodeSqliteClient from "@t3tools/shared/nodeSqliteClient";
+import { runMigrations } from "../persistence/Migrations.ts";
+import * as FileSystem from "effect/FileSystem";
+import * as Path from "effect/Path";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -31,11 +33,47 @@ import * as ProjectStore from "./ProjectStore.ts";
 import * as SqlitePersistence from "../persistence/Sqlite.ts";
 import * as EffectWorker from "./EffectWorker.ts";
 import * as EventSink from "./EventSink.ts";
+import * as EventStore from "./EventStore.ts";
 import * as GoalLoopWorker from "./GoalLoopWorker.ts";
 import * as Orchestrator from "./Orchestrator.ts";
 import * as ProviderAdapterRegistry from "./ProviderAdapterRegistry.ts";
 import * as ProviderReplayHarness from "./testkit/ProviderReplayHarness.ts";
 import { CodexProviderCapabilitiesV2 } from "./Adapters/CodexAdapterV2.ts";
+
+// Opt-in private evidence only. Normal CI always runs the synthetic disk-reopen case.
+// The marker and empty executable/auth tables reject an unsanitized live snapshot.
+const copiedDatabase = process.env.T3_FORK_COPIED_RUNTIME_DB;
+const copiedFixture = (() => {
+  if (copiedDatabase === undefined) return undefined;
+  assert.isTrue(copiedDatabase.endsWith("/sanitized-goal-runtime.sqlite"));
+  const db = new NodeSqlite.DatabaseSync(copiedDatabase, { readOnly: true });
+  try {
+    for (const table of [
+      "auth_sessions",
+      "auth_pairing_links",
+      "scheduled_tasks",
+      "provider_session_runtime",
+      "orchestration_v2_thread_launch_workflows",
+      "orchestration_v2_effect_outbox",
+    ]) {
+      assert.strictEqual(db.prepare(`SELECT count(*) AS count FROM ${table}`).get()!.count, 0);
+    }
+    const row = db.prepare("SELECT * FROM fork_runtime_fixture").get()!;
+    assert.isString(row.owner_id);
+    assert.isString(row.goal_id);
+    assert.isString(row.workspace);
+    assert.isNumber(row.historical_iteration);
+    const workspace = String(row.workspace);
+    return {
+      threadId: ThreadId.make(String(row.owner_id)),
+      goalId: CommandId.make(String(row.goal_id)),
+      cwd: workspace,
+      iteration: Number(row.historical_iteration),
+    };
+  } finally {
+    db.close();
+  }
+})();
 
 const driver = ProviderDriverKind.make("codex");
 const instanceId = ProviderInstanceId.make("codex");
@@ -43,12 +81,31 @@ const modelSelection = { instanceId, model: "fake-goal-model" };
 
 // The production effect worker, provider session manager, event ingestor and
 // orchestrator run here. Only the provider protocol, VCS and check process are fake.
-it.effect.each(["complete", "stop", "delete", "restart", "disk-restart", "usage-limit"] as const)(
+const outcomes = [
+  "complete",
+  "stop",
+  "delete",
+  "restart",
+  "disk-restart",
+  "usage-limit",
+  ...(copiedFixture === undefined ? [] : ["copied-restart"]),
+] as const;
+it.effect.each(outcomes)(
   "executes a goal through the effect worker and fake provider: %s",
   (outcome) =>
     Effect.scoped(
       Effect.gen(function* () {
-        const cwd = yield* checkpointWorkspace(`goal-runtime-${outcome}`);
+        const path = yield* Path.Path;
+        const fs = yield* FileSystem.FileSystem;
+        const copied = outcome === "copied-restart" ? copiedFixture : undefined;
+        const restart = outcome === "restart" || outcome === "disk-restart" || copied !== undefined;
+        const cwd = copied?.cwd ?? (yield* checkpointWorkspace(`goal-runtime-${outcome}`));
+        if (copied !== undefined) {
+          assert.strictEqual(
+            yield* fs.realPath(cwd),
+            path.join(yield* fs.realPath(path.dirname(copiedDatabase!)), "workspace"),
+          );
+        }
         const started: ProviderAdapter.ProviderAdapterV2TurnInput[] = [];
         let answers = 0;
         let interrupts = 0;
@@ -193,19 +250,34 @@ it.effect.each(["complete", "stop", "delete", "restart", "disk-restart", "usage-
               };
             }),
         };
-        // Memory reconstruction borrows the outer connection. Disk reconstruction
-        // acquires and releases a connection inside each runtime scope. A fresh
-        // migration layer avoids memoization of the outer memory setup.
-        const path = yield* Path.Path;
+        // Memory reconstruction borrows the outer connection. Disk cases acquire
+        // and release a separate connection in each runtime scope. Use a fresh
+        // migration layer so the outer memory setup cannot memoize it away.
+        let diskConnections = 0;
         const database =
-          outcome === "disk-restart"
+          outcome === "disk-restart" || copied !== undefined
             ? Layer.provideMerge(
-                Layer.effectDiscard(runMigrations()),
-                NodeSqliteClient.layer({ filename: path.join(cwd, "runtime.sqlite") }),
+                Layer.effectDiscard(
+                  Effect.gen(function* () {
+                    diskConnections += 1;
+                    yield* Effect.addFinalizer(() =>
+                      Effect.sync(() => {
+                        diskConnections -= 1;
+                      }),
+                    );
+                    yield* runMigrations();
+                  }),
+                ),
+                NodeSqliteClient.layer({
+                  filename:
+                    copiedDatabase && copied !== undefined
+                      ? copiedDatabase
+                      : path.join(cwd, "runtime.sqlite"),
+                }),
               ).pipe(Layer.provide(NodeServices.layer))
             : Layer.succeed(SqlClient.SqlClient, yield* SqlClient.SqlClient);
-        const threadId = ThreadId.make(`goal-runtime:${outcome}`);
-        const goalId = CommandId.make(`goal-runtime:${outcome}:set`);
+        const threadId = copied?.threadId ?? ThreadId.make(`goal-runtime:${outcome}`);
+        const goalId = copied?.goalId ?? CommandId.make(`goal-runtime:${outcome}:set`);
         const loopDependencies = Layer.mergeAll(
           Layer.mock(ProviderRegistry.ProviderRegistry)({
             getProviders: Effect.succeed([] as ServerProvider[]),
@@ -226,41 +298,74 @@ it.effect.each(["complete", "stop", "delete", "restart", "disk-restart", "usage-
             ),
             ProjectionStore.layer.pipe(Layer.provide(database)),
             ProjectStore.layer.pipe(Layer.provide(database)),
+            EventStore.layer.pipe(Layer.provide(database)),
           );
         yield* Effect.scoped(
           Effect.gen(function* () {
             const orchestrator = yield* Orchestrator.OrchestratorV2;
             const worker = yield* EffectWorker.OrchestrationEffectWorkerV2;
             const sink = yield* EventSink.EventSinkV2;
-            // Replays persisted events before subscribing, so no sleep or race with provider ingestion.
+            const eventStore = yield* EventStore.EventStoreV2;
+            const afterSequence = yield* eventStore.latestSequence();
+            // Replays new persisted events before subscribing, without rescanning
+            // the private historical transcript or racing provider ingestion.
             const wait = (predicate: (event: OrchestrationV2DomainEvent) => boolean) =>
-              sink.stream().pipe(
+              sink.stream({ afterSequence }).pipe(
                 Stream.filter(({ event }) => predicate(event)),
                 Stream.take(1),
                 Stream.runDrain,
               );
-            yield* orchestrator.dispatch({
-              type: "thread.create",
-              commandId: CommandId.make("create"),
-              threadId,
-              projectId: ProjectId.make("goal-runtime"),
-              title: "Runtime goal",
-              modelSelection,
-              runtimeMode: "full-access",
-              interactionMode: "default",
-              branch: null,
-              worktreePath: cwd,
-              createdBy: "user",
-              creationSource: "web",
-            });
-            yield* orchestrator.dispatch({
-              type: "thread.goal.set",
-              commandId: goalId,
-              threadId,
-              objective: "Exercise fake provider lifecycle",
-              burnGuard: null,
-            });
             const loop = yield* GoalLoopWorker.make.pipe(Effect.provide(loopDependencies));
+            if (copied === undefined) {
+              yield* orchestrator.dispatch({
+                type: "thread.create",
+                commandId: CommandId.make("create"),
+                threadId,
+                projectId: ProjectId.make("goal-runtime"),
+                title: "Runtime goal",
+                modelSelection,
+                runtimeMode: "full-access",
+                interactionMode: "default",
+                branch: null,
+                worktreePath: cwd,
+                createdBy: "user",
+                creationSource: "web",
+              });
+              yield* orchestrator.dispatch({
+                type: "thread.goal.set",
+                commandId: goalId,
+                threadId,
+                objective: "Exercise fake provider lifecycle",
+                burnGuard: null,
+              });
+            } else {
+              const historical = (yield* orchestrator.getThreadRecords(threadId, [])).thread.goal!;
+              assert.strictEqual(historical.iteration, copied.iteration);
+              const oldChild = yield* orchestrator.getThreadProjection(
+                historical.current!.childThreadId,
+              );
+              assert.isTrue(
+                oldChild.runs.every(
+                  (run) => !["running", "starting", "waiting", "preparing"].includes(run.status),
+                ),
+              );
+              assert.isTrue(
+                oldChild.runtimeRequests.every((request) => request.status !== "pending"),
+              );
+              yield* worker.drain();
+              yield* loop.sweep();
+              const recovered = (yield* orchestrator.getThreadRecords(threadId, [])).thread.goal!;
+              assert.strictEqual(recovered.status, "paused");
+              assert.isNull(recovered.current);
+              assert.lengthOf(started, 0);
+              yield* orchestrator.dispatch({
+                type: "thread.goal.control",
+                commandId: CommandId.make("resume-copied-history"),
+                threadId,
+                goalId,
+                action: "resume",
+              });
+            }
             yield* loop.sweep();
             const owner = (yield* orchestrator.getThreadRecords(threadId, [])).thread;
             const childId = owner.goal!.current!.childThreadId;
@@ -300,12 +405,17 @@ it.effect.each(["complete", "stop", "delete", "restart", "disk-restart", "usage-
             assert.lengthOf(started, 1);
             assert.isNull(child.thread.lineage.parentThreadId);
             assert.strictEqual(child.thread.goalIteration?.parentThreadId, threadId);
-            assert.strictEqual((yield* orchestrator.getThreadProjection(threadId)).runs.length, 0);
+            if (copied === undefined)
+              assert.strictEqual(
+                (yield* orchestrator.getThreadProjection(threadId)).runs.length,
+                0,
+              );
+            assert.isTrue(started.every((turn) => turn.threadId !== threadId));
             assert.isNotNull(
               (yield* orchestrator.getThreadRecords(threadId, [])).thread.goal?.current
                 ?.waitingOnRequest,
             );
-            if (outcome === "restart" || outcome === "disk-restart") return;
+            if (restart) return;
             if (outcome === "complete") {
               yield* orchestrator.dispatch({
                 type: "thread.goal.report",
@@ -361,16 +471,21 @@ it.effect.each(["complete", "stop", "delete", "restart", "disk-restart", "usage-
               (yield* orchestrator.getThreadProjection(childId)).runtimeRequests[0]?.status,
               outcome === "complete" ? "resolved" : "cancelled",
             );
-          }).pipe(Effect.provide(runtime())),
+          }).pipe(Effect.provide(runtime(copied !== undefined))),
         );
-        if (outcome === "restart" || outcome === "disk-restart") {
+        if (restart) {
+          assert.strictEqual(diskConnections, 0);
           yield* Effect.scoped(
             Effect.gen(function* () {
               const orchestrator = yield* Orchestrator.OrchestratorV2;
               const worker = yield* EffectWorker.OrchestrationEffectWorkerV2;
               const sink = yield* EventSink.EventSinkV2;
+              const eventStore = yield* EventStore.EventStoreV2;
+              const afterSequence = yield* eventStore.latestSequence();
+              if (outcome === "disk-restart" || copied !== undefined)
+                assert.strictEqual(diskConnections, 1);
               const before = (yield* orchestrator.getThreadRecords(threadId, [])).thread.goal!;
-              assert.strictEqual(before.iteration, 1);
+              assert.strictEqual(before.iteration, (copied?.iteration ?? 0) + 1);
               const oldChild = yield* orchestrator.getThreadProjection(
                 before.current!.childThreadId,
               );
@@ -398,11 +513,11 @@ it.effect.each(["complete", "stop", "delete", "restart", "disk-restart", "usage-
               });
               yield* loop.sweep();
               const second = (yield* orchestrator.getThreadRecords(threadId, [])).thread.goal!;
-              assert.strictEqual(second.iteration, 2);
+              assert.strictEqual(second.iteration, (copied?.iteration ?? 0) + 2);
               const childId = second.current!.childThreadId;
               assert.notStrictEqual(childId, oldChild.thread.id);
               yield* worker.drain();
-              yield* sink.stream().pipe(
+              yield* sink.stream({ afterSequence }).pipe(
                 Stream.filter(
                   ({ event }) =>
                     event.threadId === childId &&
@@ -422,8 +537,31 @@ it.effect.each(["complete", "stop", "delete", "restart", "disk-restart", "usage-
               });
               yield* loop.sweep();
               yield* worker.drain();
+              yield* sink.stream({ afterSequence }).pipe(
+                Stream.filter(
+                  ({ event }) =>
+                    event.threadId === childId &&
+                    event.type === "run.updated" &&
+                    event.payload.status === "interrupted",
+                ),
+                Stream.take(1),
+                Stream.runDrain,
+              );
+              yield* worker.drain();
+              yield* loop.sweep();
+              const stopped = (yield* orchestrator.getThreadRecords(threadId, [])).thread.goal!;
+              assert.strictEqual(stopped.status, "stopped");
+              assert.isNull(stopped.current);
+              yield* loop.sweep();
+              assert.lengthOf(started, 2);
+              assert.isTrue(
+                (yield* orchestrator.getThreadProjection(childId)).runtimeRequests.every(
+                  (request) => request.status !== "pending",
+                ),
+              );
             }).pipe(Effect.provide(runtime(true))),
           );
+          assert.strictEqual(diskConnections, 0);
         }
       }).pipe(Effect.provide(Layer.merge(SqlitePersistence.layerMemory, NodeServices.layer))),
     ),

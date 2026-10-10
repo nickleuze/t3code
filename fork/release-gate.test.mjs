@@ -155,3 +155,22 @@ NodeTest.test("workflows use the checked SHA output and gate both build and publ
       workflow.indexOf("      - name: Publish release\n"),
   );
 });
+
+NodeTest.test("native change detection includes the fork-owned workflow that runs its lint", () => {
+  const ci = NodeFS.readFileSync(
+    new URL("../.github/workflows/fork-ci.yml", import.meta.url),
+    "utf8",
+  );
+  const pattern = ci.match(/pattern='([^']+)'/)?.[1];
+  NodeAssert.ok(pattern);
+  const matches = new RegExp(pattern);
+  for (const path of [
+    ".github/workflows/fork-ci.yml",
+    ".github/workflows/ci.yml",
+    "apps/mobile/native/Fixture.swift",
+    "scripts/mobile-native-static-check.ts",
+  ]) {
+    NodeAssert.ok(matches.test(path), path);
+  }
+  NodeAssert.equal(matches.test("docs/user/mobile.md"), false);
+});

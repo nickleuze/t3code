@@ -16,9 +16,12 @@ import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Deferred from "effect/Deferred";
 import * as Layer from "effect/Layer";
+import * as Stream from "effect/Stream";
 import * as TestClock from "effect/testing/TestClock";
 import * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
 import * as SqlitePersistence from "../persistence/Sqlite.ts";
+import * as Scheduler from "../scheduling/Scheduler.ts";
+import * as ServerActivation from "../serverActivation.ts";
 import * as ProcessRunner from "../processRunner.ts";
 import * as ProviderRegistry from "../provider/ProviderRegistry.ts";
 import * as VcsDriverRegistry from "../vcs/VcsDriverRegistry.ts";
@@ -1019,3 +1022,74 @@ it.layer(TestLayer)("goal loop worker", (it) => {
     ),
   );
 });
+
+it.effect(
+  "registers the production goal worker after startup activation and retires Stop on scheduler ticks",
+  () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const { orchestrator, threadId, goalId } = yield* setup("scheduler-activation");
+        const activation = yield* Deferred.make<void>();
+        const sink = yield* EventSink.EventSinkV2;
+        const afterSequence = (yield* orchestrator.dispatch({
+          type: "thread.goal.control",
+          commandId: CommandId.make("scheduler:resume"),
+          threadId,
+          goalId,
+          action: "resume",
+        })).sequence;
+        const waitForGoal = (iteration: number, retired = false) =>
+          sink.stream({ afterSequence }).pipe(
+            Stream.filter(
+              ({ event }) =>
+                event.threadId === threadId &&
+                event.type === "thread.metadata-updated" &&
+                event.payload.goal?.iteration === iteration &&
+                (retired
+                  ? event.payload.goal.current === null
+                  : event.payload.goal.current !== null),
+            ),
+            Stream.take(1),
+            Stream.runDrain,
+          );
+        yield* Effect.gen(function* () {
+          yield* TestClock.adjust("10 seconds");
+          assert.strictEqual((yield* readGoal(threadId)).iteration, 0);
+          yield* Deferred.succeed(activation, undefined);
+          yield* waitForGoal(1);
+          const first = yield* readGoal(threadId);
+          const childId = first.current!.childThreadId;
+          assert.isNull(
+            (yield* orchestrator.getThreadRecords(childId, [])).thread.lineage.parentThreadId,
+          );
+          assert.isEmpty((yield* orchestrator.getThreadRecords(threadId, ["runs"])).runs);
+          yield* TestClock.adjust("10 seconds");
+          assert.strictEqual((yield* readGoal(threadId)).iteration, 1);
+          yield* orchestrator.dispatch({
+            type: "thread.goal.control",
+            commandId: CommandId.make("scheduler:stop"),
+            threadId,
+            goalId,
+            action: "stop",
+          });
+          yield* TestClock.adjust("10 seconds");
+          yield* waitForGoal(1, true);
+          assert.strictEqual((yield* readGoal(threadId)).status, "stopped");
+          assert.deepEqual(
+            (yield* orchestrator.getThreadRecords(childId, ["runs"])).runs.map((run) => run.status),
+            ["interrupted"],
+          );
+          yield* TestClock.adjust("10 seconds");
+          assert.strictEqual((yield* readGoal(threadId)).iteration, 1);
+        }).pipe(
+          Effect.provide(
+            GoalLoopWorker.layer.pipe(
+              Layer.provide(WorkerDependencies),
+              Layer.provide(Scheduler.layer),
+            ),
+          ),
+          Effect.provideService(ServerActivation.ServerActivation, Deferred.await(activation)),
+        );
+      }).pipe(Effect.provide(TestLayer)),
+    ),
+);
