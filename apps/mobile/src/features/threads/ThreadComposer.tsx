@@ -505,6 +505,11 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
         ? undefined
         : props.onUpdateInteractionMode,
     offersUsageLimits: usageLimitsOffered,
+    offersT3Goals:
+      props.canOperateThread &&
+      props.serverConfig?.environment.capabilities.t3Goals === true &&
+      props.selectedThread.goalIteration == null &&
+      props.selectedThread.lineage.relationshipToParent !== "subagent",
     // With attachments aboard the pick just inserts the text, so it sends as a prompt.
     onUsageLimits:
       usageLimitsOffered && props.draftAttachments.length === 0 ? openUsageLimits : undefined,

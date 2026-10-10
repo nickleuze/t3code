@@ -5,7 +5,7 @@ import {
   goalComposerPlaceholder,
   parseComposerGoalCommand,
   goalDraftRequestMessage,
-} from "./chat/goalPresentation";
+} from "@t3tools/client-runtime/state/thread-goals";
 import { ThreadFind, ThreadFindCanvas, type ThreadFindControls } from "./chat/ThreadFindProvider";
 import { THREAD_FIND_BAR_RESERVED_HEIGHT } from "./chat/ThreadFindBar";
 import { usageLimitRecoveryBannerItem } from "./chat/UsageLimitRecoveryBanner";

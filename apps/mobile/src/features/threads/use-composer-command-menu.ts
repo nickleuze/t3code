@@ -66,6 +66,7 @@ export function buildComposerSlashCommandItems(input: {
   readonly hasCompactableConversation?: boolean;
   /** Whether T3 itself offers /usage-limits for the selected provider. */
   readonly offersUsageLimits?: boolean;
+  readonly offersT3Goals?: boolean;
   readonly allowInteractionMode: boolean;
   readonly selectedProviderStatus: Pick<
     ServerProvider,
@@ -105,6 +106,15 @@ export function buildComposerSlashCommandItems(input: {
   // Providers expand commands only at the start of a message. T3 commands
   // change local state and do not have this restriction.
   if (!input.atMessageStart) return items;
+  if (input.hasThread && input.offersT3Goals && "t3-goal".includes(query)) {
+    items.push({
+      id: "cmd:t3-goal",
+      type: "slash-command",
+      command: "t3-goal",
+      label: "/t3-goal",
+      description: "Draft a T3 goal for you to start",
+    });
+  }
   for (const command of input.selectedProviderStatus?.slashCommands ?? []) {
     if (!command.name.toLowerCase().includes(query)) continue;
     if (command.name === "compact" && !input.hasCompactableConversation) continue;
@@ -183,6 +193,7 @@ export function useComposerCommandMenu({
   hasThread,
   hasCompactableConversation,
   offersUsageLimits = false,
+  offersT3Goals = false,
   enabled = true,
   onChangeDraftMessage,
   onUpdateInteractionMode,
@@ -203,6 +214,7 @@ export function useComposerCommandMenu({
   readonly hasCompactableConversation: boolean;
   /** Whether T3 itself offers /usage-limits for the selected provider. */
   readonly offersUsageLimits?: boolean;
+  readonly offersT3Goals?: boolean;
   readonly enabled?: boolean;
   readonly onChangeDraftMessage: (value: string) => void;
   readonly onUpdateInteractionMode?: (mode: ProviderInteractionMode) => void;
@@ -390,6 +402,7 @@ export function useComposerCommandMenu({
         hasThread,
         hasCompactableConversation,
         offersUsageLimits,
+        offersT3Goals,
         allowInteractionMode: onUpdateInteractionMode !== undefined,
         selectedProviderStatus: selectedProviderStatus
           ? {
@@ -538,6 +551,7 @@ export function useComposerCommandMenu({
     skills,
     trigger,
     offersUsageLimits,
+    offersT3Goals,
   ]);
 
   const onSelect = useCallback(

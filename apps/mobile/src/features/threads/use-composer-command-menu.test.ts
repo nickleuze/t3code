@@ -322,3 +322,29 @@ describe("workspace command discovery retry", () => {
     expect(vi.getTimerCount()).toBe(0);
   });
 });
+
+it("offers T3 goals only in an eligible existing thread and keeps native goals independent", () => {
+  const input = {
+    query: "goal",
+    atMessageStart: true,
+    hasThread: true,
+    offersT3Goals: true,
+    allowInteractionMode: false,
+    selectedProviderStatus: {
+      driver: ProviderDriverKind.make("codex"),
+      showInteractionModeToggle: false,
+      slashCommands: [{ name: "goal", description: "Native goal" }],
+    },
+  };
+  expect(buildComposerSlashCommandItems(input).map((item) => item.label)).toEqual([
+    "/t3-goal",
+    "/goal",
+  ]);
+  expect(
+    buildComposerSlashCommandItems({ ...input, offersT3Goals: false }).map((item) => item.label),
+  ).toEqual(["/goal"]);
+  expect(
+    buildComposerSlashCommandItems({ ...input, hasThread: false }).map((item) => item.label),
+  ).toEqual(["/goal"]);
+  expect(buildComposerSlashCommandItems({ ...input, atMessageStart: false })).toEqual([]);
+});

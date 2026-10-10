@@ -1,3 +1,5 @@
+import { T3GoalCard } from "./T3GoalCard";
+import { goalComposerPlaceholder, goalIsLive } from "@t3tools/client-runtime/state/thread-goals";
 import { useAtomValue } from "@effect/atom-react";
 import { useChildThreadInputs, useThreadReportedModelSelection } from "../../state/entities";
 import { UsageLimitRecoveryCard } from "./UsageLimitRecoveryCard";
@@ -1285,6 +1287,11 @@ export const ThreadDetailScreen = memo(function ThreadDetailScreen(props: Thread
                       />
                     </Animated.View>
                   ) : null}
+                  <T3GoalCard
+                    key={`${selectedThreadKey}:${props.selectedThread.t3Goal?.id ?? props.selectedThread.goalProposal?.id ?? "iteration"}`}
+                    thread={props.selectedThread}
+                    supportsGoals={props.serverConfig?.environment.capabilities.t3Goals === true}
+                  />
                   <UsageLimitRecoveryCard
                     key={props.selectedThread.latestRun?.runId}
                     thread={props.selectedThread}
@@ -1425,7 +1432,13 @@ export const ThreadDetailScreen = memo(function ThreadDetailScreen(props: Thread
                         editorRef={composerEditorRef}
                         draftMessage={props.draftMessage}
                         draftAttachments={props.draftAttachments}
-                        placeholder="Ask the repo agent, or run a command…"
+                        placeholder={
+                          props.serverConfig?.environment.capabilities.t3Goals === true &&
+                          props.selectedThread.t3Goal &&
+                          goalIsLive(props.selectedThread.t3Goal)
+                            ? goalComposerPlaceholder(props.selectedThread.t3Goal)
+                            : "Ask the repo agent, or run a command…"
+                        }
                         contentMaxWidth={contentMaxWidth}
                         connectionState={props.connectionStateLabel}
                         environmentLabel={props.environmentLabel}

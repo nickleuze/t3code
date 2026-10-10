@@ -1,7 +1,52 @@
 import type {
+  CommandId,
   OrchestrationV2ThreadGoal,
   OrchestrationV2ThreadGoalSummary,
 } from "@t3tools/contracts";
+
+export function goalControlActions(goal: OrchestrationV2ThreadGoalSummary) {
+  const actions: Array<"pause" | "resume" | "stop" | "clear"> = [];
+  if (goal.status === "active") actions.push("pause");
+  if (["paused", "blocked", "usageLimited"].includes(goal.status)) actions.push("resume");
+  if (goalIsLive(goal)) actions.push("stop");
+  if (!goalIsLive(goal) && goal.currentChildThreadId === null) actions.push("clear");
+  return actions;
+}
+
+/** Classifies mobile sends before they can enter the ordinary-turn outbox. */
+export function resolveGoalComposerIntent(input: {
+  readonly text: string;
+  readonly goal: OrchestrationV2ThreadGoalSummary | null;
+  readonly supportsGoals: boolean;
+  readonly canMutate: boolean;
+  readonly isIteration: boolean;
+  readonly isSubagent: boolean;
+  readonly hasNonTextContent: boolean;
+}):
+  | { readonly kind: "ordinary"; readonly text: string }
+  | { readonly kind: "reply"; readonly goalId: CommandId; readonly text: string }
+  | { readonly kind: "blocked"; readonly reason: string } {
+  if (input.goal !== null && goalIsLive(input.goal)) {
+    if (!input.supportsGoals || !input.canMutate)
+      return { kind: "blocked", reason: "This connection cannot control T3 goals." };
+    if (input.hasNonTextContent)
+      return {
+        kind: "blocked",
+        reason:
+          "Goal replies support text only. Open the iteration to send attachments or context.",
+      };
+    if (input.text.trim().length === 0)
+      return { kind: "blocked", reason: "Write a message for the goal." };
+    return { kind: "reply", goalId: input.goal.id, text: input.text.trim() };
+  }
+  const command = parseComposerGoalCommand(input.text);
+  if (command === null) return { kind: "ordinary", text: input.text };
+  if (!input.supportsGoals || !input.canMutate || input.isIteration || input.isSubagent)
+    return { kind: "blocked", reason: "T3 goals are unavailable in this thread." };
+  if (input.hasNonTextContent)
+    return { kind: "blocked", reason: "Send /t3-goal as text alone to draft a goal." };
+  return { kind: "ordinary", text: goalDraftRequestMessage(command.objective) };
+}
 
 /** `/t3-goal` alone or followed by an objective; the objective is null for a bare `/t3-goal`. */
 export function parseComposerGoalCommand(

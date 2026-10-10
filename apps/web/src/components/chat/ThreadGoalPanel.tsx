@@ -13,7 +13,11 @@ import type { ReactNode } from "react";
 import { cn } from "../../lib/utils";
 import { useThreadProjection } from "../../state/entities";
 import { buildThreadRouteParams } from "../../threadRoutes";
-import { formatGoalTokens, goalStatusLabel, goalSummaryFromGoal } from "./goalPresentation";
+import {
+  formatGoalTokens,
+  goalStatusLabel,
+  goalSummaryFromGoal,
+} from "@t3tools/client-runtime/state/thread-goals";
 import { ThreadDetailsSection } from "./ThreadDetailsSection";
 import { THREAD_DETAILS_PANEL_ROW_CONTENT_CLASS } from "./threadDetailsPanelStyles";
 

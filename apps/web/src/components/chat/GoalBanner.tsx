@@ -14,7 +14,7 @@ import {
   goalIsRunning,
   goalNeedsAttention,
   goalStatusLabel,
-} from "./goalPresentation";
+} from "@t3tools/client-runtime/state/thread-goals";
 
 export type GoalControlAction = "pause" | "resume" | "stop" | "clear";
 
