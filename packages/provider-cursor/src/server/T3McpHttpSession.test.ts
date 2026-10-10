@@ -2,7 +2,7 @@
 // @effect-diagnostics preferSchemaOverJson:off
 import { describe, expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
-import { openMcpHttpSession } from "./mcpHttpSession.ts";
+import { openMcpHttpSession } from "./T3McpHttpSession.ts";
 
 const error = (cause: unknown) => ({ _tag: "TestMcpError" as const, cause });
 

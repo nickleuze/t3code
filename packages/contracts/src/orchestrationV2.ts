@@ -3466,19 +3466,6 @@ const OrchestrationV2InternalCommand = Schema.Union([
       }),
     ),
   }),
-  /** A live provider without native questions asks through the next-message path. */
-  Schema.Struct({
-    type: Schema.Literal("thread.user-input.request"),
-    commandId: CommandId,
-    threadId: ThreadId,
-    runId: RunId,
-    providerSessionId: ProviderSessionId,
-    requestId: RuntimeRequestId,
-    questions: Schema.Array(OrchestrationV2UserInputQuestion).check(
-      Schema.isMinLength(1),
-      Schema.isMaxLength(4),
-    ),
-  }),
   /** Records that the provider rollback `requestId` failed for good. */
   Schema.Struct({
     type: Schema.Literal("checkpoint.rollback.fail"),

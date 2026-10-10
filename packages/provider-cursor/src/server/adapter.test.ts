@@ -879,7 +879,7 @@ describe("CursorAdapterV2", () => {
   });
 
   it.effect.each(["full-access", "auto-accept-edits", "approval-required"] as const)(
-    "refreshes T3 callbacks and cancels them with a %s Cursor run",
+    "registers T3 callbacks per send and cancels them with a %s Cursor run",
     (runtimeMode) =>
       Effect.gen(function* () {
         const fileSystem = yield* FileSystem.FileSystem;
@@ -1002,9 +1002,11 @@ describe("CursorAdapterV2", () => {
             modelSelection,
             runtimePolicy,
           });
-          assert.isDefined(openOptions?.local?.customTools?.orchestrator_capabilities);
-          assert.isUndefined(openOptions?.mcpServers);
+          // The agent keeps upstream's options; tools are listed per send only.
+          assert.isUndefined(openOptions?.local?.customTools);
+          assert.deepEqual(Object.keys(openOptions?.mcpServers ?? {}), ["t3-code"]);
           assert.equal(openOptions?.local?.sandboxOptions?.enabled, runtimeMode !== "full-access");
+          assert.lengthOf(headers, 0);
           const now = yield* DateTime.now;
           const appThread = {
             id: threadId,
@@ -1019,7 +1021,11 @@ describe("CursorAdapterV2", () => {
             branch: null,
             worktreePath: null,
             activeProviderThreadId: providerThread.id,
-            lineage: { parentThreadId: null, relationshipToParent: null, rootThreadId: threadId },
+            lineage: {
+              parentThreadId: null,
+              relationshipToParent: null as "subagent" | null,
+              rootThreadId: threadId,
+            },
             forkedFrom: null,
             createdAt: now,
             updatedAt: now,
@@ -1029,7 +1035,7 @@ describe("CursorAdapterV2", () => {
             lastVisitedAt: null,
             deletedAt: null,
           };
-          const start = (ordinal: number) =>
+          const start = (ordinal: number, thread = appThread) =>
             runtime.startTurn({
               threadId,
               providerThread,
@@ -1040,7 +1046,7 @@ describe("CursorAdapterV2", () => {
               providerTurnOrdinal: ordinal,
               attemptId: RunAttemptId.make(`cursor-test-${ordinal}`),
               rootNodeId: NodeId.make(`cursor-test-${ordinal}`),
-              appThread,
+              appThread: thread,
               message: {
                 messageId: MessageId.make(`cursor-test-${ordinal}`),
                 createdBy: "user",
@@ -1063,6 +1069,17 @@ describe("CursorAdapterV2", () => {
             ?.orchestrator_capabilities as SDKCustomTool;
           assert.isDefined(tool);
           assert.deepEqual(sentOptions[0]?.mcpServers, {});
+          const ask = (send: SendOptions | undefined, header: string) =>
+            Effect.promise(() =>
+              Promise.resolve(
+                send?.local?.customTools?.t3_ask_user_question?.execute(
+                  { questions: [{ header, question: "Which approach?", options: [] }] },
+                  { toolCallId: `ask-${header}` },
+                ),
+              ),
+            );
+          // Asked, then stopped: nothing is left waiting.
+          yield* ask(sentOptions[0], "Stopped");
           yield* registry.set({ ...config, authorizationHeader: "Bearer synthetic-refreshed" });
           const pending = Promise.resolve(tool.execute({}, {}));
           yield* Effect.promise(() => started);
@@ -1074,9 +1091,14 @@ describe("CursorAdapterV2", () => {
           assert.match(JSON.stringify(yield* Effect.promise(() => pending)), /isError/);
           assert.isTrue(aborted);
           assert.equal(callCount, 1);
-          yield* runtime.events.pipe(
-            Stream.filter((event) => event.type === "turn.terminal"),
-            Stream.runHead,
+          const untilTerminal = runtime.events.pipe(
+            Stream.takeUntil((event) => event.type === "turn.terminal"),
+            Stream.runCollect,
+          );
+          const stoppedEvents = yield* untilTerminal;
+          assert.isFalse(
+            stoppedEvents.some((event) => event.type === "runtime_request.updated"),
+            "a stopped turn opens no question",
           );
           yield* start(2);
           assert.notStrictEqual(
@@ -1087,20 +1109,68 @@ describe("CursorAdapterV2", () => {
             JSON.stringify(yield* Effect.promise(() => Promise.resolve(tool.execute({}, {})))),
             /isError/,
           );
+          assert.match(
+            JSON.stringify(
+              yield* Effect.promise(() =>
+                Promise.resolve(
+                  sentOptions[1]?.local?.customTools?.t3_ask_user_question?.execute(
+                    { questions: [] },
+                    {},
+                  ),
+                ),
+              ),
+            ),
+            /isError/,
+          );
+          yield* ask(sentOptions[1], "Approach");
           yield* Deferred.succeed(runs[1]!, { status: "finished" } as RunResult);
-          yield* runtime.events.pipe(
-            Stream.filter((event) => event.type === "turn.terminal"),
-            Stream.runHead,
+          const completedEvents = yield* untilTerminal;
+          const request = completedEvents.find((event) => event.type === "runtime_request.updated");
+          const item = completedEvents.find(
+            (event) =>
+              event.type === "turn_item.updated" && event.turnItem.type === "user_input_request",
           );
-          yield* registry.clear(threadId);
-          yield* start(3);
-          assert.deepEqual(sentOptions[2]?.local?.customTools, {});
-          assert.deepEqual(sentOptions[2]?.mcpServers, {});
+          assert.deepEqual(
+            request?.type === "runtime_request.updated"
+              ? [request.runtimeRequest.status, request.runtimeRequest.responseCapability]
+              : undefined,
+            ["pending", { type: "message" }],
+          );
+          assert.deepEqual(
+            item?.type === "turn_item.updated" && item.turnItem.type === "user_input_request"
+              ? [item.turnItem.status, item.turnItem.responseMode, item.turnItem.questions]
+              : undefined,
+            [
+              "waiting",
+              "message",
+              [
+                {
+                  id: "1",
+                  header: "Approach",
+                  question: "Which approach?",
+                  options: [],
+                  multiSelect: false,
+                  allowCustomAnswer: true,
+                },
+              ],
+            ],
+          );
+          // A delegated task cannot ask the user.
+          yield* start(3, {
+            ...appThread,
+            lineage: { ...appThread.lineage, relationshipToParent: "subagent" },
+          });
+          assert.isDefined(sentOptions[2]?.local?.customTools?.orchestrator_capabilities);
+          assert.isUndefined(sentOptions[2]?.local?.customTools?.t3_ask_user_question);
           yield* Deferred.succeed(runs[2]!, { status: "finished" } as RunResult);
-          yield* runtime.events.pipe(
-            Stream.filter((event) => event.type === "turn.terminal"),
-            Stream.runHead,
-          );
+          yield* untilTerminal;
+          // Without T3 tools the send matches upstream exactly.
+          yield* registry.clear(threadId);
+          yield* start(4);
+          assert.isUndefined(sentOptions[3]?.local);
+          assert.isUndefined(sentOptions[3]?.mcpServers);
+          yield* Deferred.succeed(runs[3]!, { status: "finished" } as RunResult);
+          yield* untilTerminal;
         } finally {
           fetchMock.mockRestore();
         }
@@ -1111,28 +1181,6 @@ describe("CursorAdapterV2", () => {
         ),
       ),
   );
-
-  it("offers custom callbacks in restricted modes without changing sandbox policy", () => {
-    const customTools = { orchestrator_capabilities: { execute: () => "{}" } };
-    for (const runtimeMode of ["full-access", "auto-accept-edits", "approval-required"] as const) {
-      const policy = { runtimeMode, interactionMode: "plan" as const, cwd: "/workspace" };
-      const options = makeCursorAgentOptions({
-        modelSelection: { instanceId: ProviderInstanceId.make("cursor"), model: "composer-2.5" },
-        runtimePolicy: policy,
-        threadId: ThreadId.make("cursor-custom"),
-        mcpSession: undefined,
-        customTools,
-      });
-      assert.strictEqual(options.local?.customTools, customTools);
-      assert.isUndefined(options.mcpServers);
-      assert.equal(options.local?.autoReview, cursorRuntimeAgentPolicy(policy).autoReview);
-      assert.equal(
-        options.local?.sandboxOptions?.enabled,
-        cursorRuntimeAgentPolicy(policy).sandboxEnabled,
-      );
-      assert.equal(options.mode, "plan");
-    }
-  });
 
   it("injects thread-scoped MCP credentials without logging them", () => {
     const threadId = ThreadId.make("thread-cursor-mcp");
