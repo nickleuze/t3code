@@ -5,6 +5,7 @@ import type {
   McpServerConfig,
   RunResult,
   SDKUserMessage,
+  SDKCustomTool,
   SettingSource,
   ToolCall,
 } from "@cursor/sdk";
@@ -74,6 +75,11 @@ import {
   subagentThreadTitle,
 } from "@t3tools/provider-core/server/subagentProjection";
 import * as CursorAgentSdk from "./CursorAgentSdk.ts";
+import {
+  CURSOR_CUSTOM_TOOLS_PROVIDER,
+  listT3McpTools,
+  makeCursorT3CustomTools,
+} from "./CursorT3Tools.ts";
 export { cursorSdkModelSelection } from "./sdkModel.ts";
 
 export const CURSOR_DRIVER_KIND = CursorAgentSdk.CURSOR_PROVIDER;
@@ -308,9 +314,11 @@ export function makeCursorAgentOptions(input: {
   readonly runtimePolicy: ProviderAdapter.ProviderAdapterV2RuntimePolicy;
   readonly threadId: ThreadId;
   readonly mcpSession: McpProviderSession.McpProviderSessionConfig | undefined;
+  readonly customTools?: Record<string, SDKCustomTool>;
 }): AgentOptions {
   const policy = cursorRuntimeAgentPolicy(input.runtimePolicy);
-  const mcpServers = cursorMcpServers(input.mcpSession);
+  const mcpServers =
+    input.customTools === undefined ? cursorMcpServers(input.mcpSession) : undefined;
   return {
     model: cursorSdkModelSelection(input.modelSelection),
     name: `T3 Code ${input.threadId}`,
@@ -324,6 +332,7 @@ export function makeCursorAgentOptions(input: {
         enabled: policy.sandboxEnabled,
       },
       enableAgentRetries: true,
+      ...(input.customTools === undefined ? {} : { customTools: input.customTools }),
     },
     ...(mcpServers === undefined ? {} : { mcpServers }),
   };
@@ -390,7 +399,10 @@ function cursorToolName(toolCall: ToolCall): string {
   if (toolCall.type !== "mcp") {
     return toolCall.type;
   }
-  const provider = toolCall.args.providerIdentifier ?? "mcp";
+  const provider =
+    toolCall.args.providerIdentifier === CURSOR_CUSTOM_TOOLS_PROVIDER
+      ? "t3-code"
+      : (toolCall.args.providerIdentifier ?? "mcp");
   const tool = toolCall.args.toolName ?? "unknown";
   return `mcp__${provider}__${tool}`;
 }
@@ -840,6 +852,7 @@ interface ActiveCursorTurn {
 interface CursorLiveAgent {
   readonly nativeThreadId: string;
   readonly session: CursorAgentSdk.CursorAgentSdkSession;
+  t3Tools: ReturnType<typeof makeCursorT3CustomTools> | undefined;
 }
 
 export interface CursorAdapterV2Options {
@@ -1287,7 +1300,10 @@ export const makeCursorAdapterV2 = Effect.fn("makeCursorAdapterV2")(function* (
                 type: "dynamic_tool",
                 ...(toolCall.type === "mcp"
                   ? mcpToolPresentation({
-                      serverName: toolCall.args.providerIdentifier,
+                      serverName:
+                        toolCall.args.providerIdentifier === CURSOR_CUSTOM_TOOLS_PROVIDER
+                          ? "t3-code"
+                          : toolCall.args.providerIdentifier,
                       toolName: toolCall.args.toolName,
                     })
                   : {}),
@@ -1964,6 +1980,8 @@ export const makeCursorAdapterV2 = Effect.fn("makeCursorAdapterV2")(function* (
             return;
           }
           input.context.finalized = true;
+          const agent = yield* Ref.get(liveAgent);
+          yield* agent?.t3Tools?.cancel ?? Effect.void;
           const completedAt = yield* DateTime.now;
           // Tools still here never got a tool-call-completed. A stopped or
           // failed turn cut them short, so they end with the turn's status.
@@ -2067,6 +2085,30 @@ export const makeCursorAdapterV2 = Effect.fn("makeCursorAdapterV2")(function* (
           }
         };
 
+        const t3Connection = (threadId: ThreadId) =>
+          mcpSessions
+            .read(threadId)
+            .pipe(
+              Effect.map((config) =>
+                config === undefined
+                  ? undefined
+                  : { endpoint: config.endpoint, authorization: config.authorizationHeader },
+              ),
+            );
+        const loadT3Tools = Effect.fnUntraced(
+          function* (threadId: ThreadId) {
+            const connection = yield* t3Connection(threadId);
+            if (connection === undefined) return undefined;
+            const tools = yield* listT3McpTools(connection);
+            return makeCursorT3CustomTools(tools, t3Connection(threadId));
+          },
+          Effect.catch(() =>
+            Effect.logWarning("orchestration-v2.cursor-t3-tools-unavailable").pipe(
+              Effect.as(undefined),
+            ),
+          ),
+        );
+
         const openAgent = Effect.fnUntraced(function* (openInput: {
           readonly operation: "create" | "resume";
           readonly threadId: ThreadId;
@@ -2083,9 +2125,11 @@ export const makeCursorAdapterV2 = Effect.fn("makeCursorAdapterV2")(function* (
             return existing;
           }
           if (existing !== null) {
+            yield* existing.t3Tools?.cancel ?? Effect.void;
             yield* existing.session.close.pipe(Effect.ignore);
             yield* Ref.set(liveAgent, null);
           }
+          const t3Tools = yield* loadT3Tools(openInput.threadId);
           const sdkSession = yield* runner.open({
             operation: openInput.operation,
             ...(openInput.agentId === undefined ? {} : { agentId: openInput.agentId }),
@@ -2095,6 +2139,7 @@ export const makeCursorAdapterV2 = Effect.fn("makeCursorAdapterV2")(function* (
               runtimePolicy: openInput.runtimePolicy,
               threadId: openInput.threadId,
               mcpSession: yield* mcpSessions.read(openInput.threadId),
+              ...(t3Tools === undefined ? {} : { customTools: t3Tools.tools }),
             }),
             threadId: openInput.threadId,
             providerSessionId: input.providerSessionId,
@@ -2102,6 +2147,7 @@ export const makeCursorAdapterV2 = Effect.fn("makeCursorAdapterV2")(function* (
           const next = {
             nativeThreadId: sdkSession.agentId,
             session: sdkSession,
+            t3Tools,
           } satisfies CursorLiveAgent;
           yield* Ref.set(liveAgent, next);
           return next;
@@ -2110,7 +2156,7 @@ export const makeCursorAdapterV2 = Effect.fn("makeCursorAdapterV2")(function* (
         let cursorSkillNames: ReadonlySet<string> | undefined;
         const resolveUserMessage = Effect.fnUntraced(function* (
           turnInput: ProviderAdapter.ProviderAdapterV2TurnInput,
-          mcpServers: Record<string, McpServerConfig> | undefined,
+          hasT3Tools: boolean,
         ) {
           const rawText = turnInput.message.text;
           if (rawText.trim() === "/compress" && turnInput.message.attachments.length === 0) {
@@ -2140,7 +2186,7 @@ export const makeCursorAdapterV2 = Effect.fn("makeCursorAdapterV2")(function* (
               resolveAttachmentPath: host.resolveAttachmentPath,
             }),
             runOrdinal: turnInput.runOrdinal,
-            hasT3Mcp: mcpServers !== undefined,
+            hasT3Mcp: hasT3Tools,
           });
           const images = yield* Effect.forEach(
             turnInput.message.attachments.filter(isProviderNativeImageAttachment),
@@ -2203,25 +2249,33 @@ export const makeCursorAdapterV2 = Effect.fn("makeCursorAdapterV2")(function* (
               runtimePolicy: turnInput.runtimePolicy,
             });
             const mcpServers = cursorMcpServers(yield* mcpSessions.read(turnInput.threadId));
-            const message = yield* resolveUserMessage(turnInput, mcpServers);
+            yield* agent.t3Tools?.cancel ?? Effect.void;
+            agent.t3Tools = yield* loadT3Tools(turnInput.threadId);
+            const message = yield* resolveUserMessage(
+              turnInput,
+              agent.t3Tools !== undefined || mcpServers !== undefined,
+            );
             const pendingUpdates: Array<InteractionUpdate> = [];
             let context: ActiveCursorTurn | null = null;
-            const sdkRun = yield* agent.session.send({
-              message,
-              options: {
-                model: cursorSdkModelSelection(turnInput.modelSelection),
-                mode: turnInput.runtimePolicy.interactionMode === "plan" ? "plan" : "agent",
-                ...(mcpServers === undefined ? {} : { mcpServers }),
-              },
-              onDelta: (update) => {
-                if (context === null) {
-                  return Effect.sync(() => {
-                    pendingUpdates.push(update);
-                  });
-                }
-                return handleInteractionUpdate(context, update);
-              },
-            });
+            const sdkRun = yield* agent.session
+              .send({
+                message,
+                options: {
+                  model: cursorSdkModelSelection(turnInput.modelSelection),
+                  mode: turnInput.runtimePolicy.interactionMode === "plan" ? "plan" : "agent",
+                  mcpServers: agent.t3Tools === undefined ? (mcpServers ?? {}) : {},
+                  local: { customTools: agent.t3Tools?.tools ?? {} },
+                },
+                onDelta: (update) => {
+                  if (context === null) {
+                    return Effect.sync(() => {
+                      pendingUpdates.push(update);
+                    });
+                  }
+                  return handleInteractionUpdate(context, update);
+                },
+              })
+              .pipe(Effect.onError(() => agent.t3Tools?.cancel ?? Effect.void));
             const startedAt = yield* DateTime.now;
             const completed = yield* Deferred.make<void, never>();
             const providerTurnId = idAllocator.derive.providerTurn({
@@ -2355,6 +2409,7 @@ export const makeCursorAdapterV2 = Effect.fn("makeCursorAdapterV2")(function* (
         const closeSession = Effect.fnUntraced(function* () {
           const existing = yield* Ref.get(liveAgent);
           if (existing !== null) {
+            yield* existing.t3Tools?.cancel ?? Effect.void;
             yield* existing.session.close.pipe(Effect.ignore);
             yield* Ref.set(liveAgent, null);
           }
@@ -2462,6 +2517,8 @@ export const makeCursorAdapterV2 = Effect.fn("makeCursorAdapterV2")(function* (
                 });
               }
               context.interrupted = true;
+              const agent = yield* Ref.get(liveAgent);
+              yield* agent?.t3Tools?.cancel ?? Effect.void;
               yield* context.run.cancel;
               const stopped = yield* Deferred.await(context.completed).pipe(
                 Effect.timeoutOption("10 seconds"),

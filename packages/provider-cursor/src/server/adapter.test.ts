@@ -1,6 +1,14 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, describe, it } from "@effect/vitest";
-import type { InteractionUpdate } from "@cursor/sdk";
+import type {
+  AgentOptions,
+  InteractionUpdate,
+  SDKCustomTool,
+  SendOptions,
+  RunResult,
+} from "@cursor/sdk";
+import { vi } from "vite-plus/test";
+import * as Deferred from "effect/Deferred";
 import {
   EnvironmentId,
   MessageId,
@@ -867,6 +875,262 @@ describe("CursorAdapterV2", () => {
         "mdm",
         "plugins",
       ]);
+    }
+  });
+
+  it.effect.each(["full-access", "auto-accept-edits", "approval-required"] as const)(
+    "refreshes T3 callbacks and cancels them with a %s Cursor run",
+    (runtimeMode) =>
+      Effect.gen(function* () {
+        const fileSystem = yield* FileSystem.FileSystem;
+        const workspace = yield* fileSystem.makeTempDirectoryScoped({ prefix: "cursor-t3-tools-" });
+        const instanceId = ProviderInstanceId.make("cursor");
+        const threadId = ThreadId.make("cursor-custom-thread");
+        const modelSelection = { instanceId, model: "composer-2.5" };
+        const runtimePolicy = ProviderAdapter.ProviderAdapterV2RuntimePolicy.make({
+          runtimeMode,
+          interactionMode: "plan",
+          cwd: workspace,
+        });
+        const registry = yield* McpProviderSessions.McpProviderSessions;
+        const config = {
+          environmentId: EnvironmentId.make("cursor-test"),
+          threadId,
+          providerSessionId: "cursor-test",
+          providerInstanceId: instanceId,
+          endpoint: "http://127.0.0.1:1/mcp",
+          authorizationHeader: "Bearer synthetic-first",
+          browserToolsAvailable: false,
+        };
+        yield* registry.set(config);
+        const headers: string[] = [];
+        let markStarted: () => void = () => {};
+        const started = new Promise<void>((resolve) => {
+          markStarted = resolve;
+        });
+        let aborted = false;
+        let callCount = 0;
+        let openOptions: AgentOptions | undefined;
+        const sentOptions: SendOptions[] = [];
+        const runs: Array<Deferred.Deferred<RunResult>> = [];
+        const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation(async (_url, init) => {
+          const request = JSON.parse(String(init?.body)) as { id?: unknown; method: string };
+          headers.push(new Headers(init?.headers).get("authorization") ?? "");
+          if (request.method === "notifications/initialized")
+            return new Response(null, { status: 202 });
+          if (request.method === "tools/call") {
+            callCount++;
+            return new Promise<Response>((_resolve, reject) => {
+              init?.signal?.addEventListener(
+                "abort",
+                () => {
+                  aborted = true;
+                  reject(new Error("aborted"));
+                },
+                { once: true },
+              );
+              markStarted();
+            });
+          }
+          return Response.json({
+            id: request.id,
+            result:
+              request.method === "initialize"
+                ? { protocolVersion: "2025-06-18" }
+                : {
+                    tools: [{ name: "orchestrator_capabilities", inputSchema: { type: "object" } }],
+                  },
+          });
+        });
+        try {
+          const adapter = yield* makeCursorAdapterV2({
+            instanceId,
+            settings: yield* decodeCursorSettings({}),
+            environment: { HOME: workspace },
+          }).pipe(
+            Effect.provideService(CursorAgentSdk.CursorAgentSdkRunner, {
+              assertComplete: Effect.void,
+              open: (input) => {
+                openOptions = input.options;
+                return Effect.succeed({
+                  agentId: "cursor-native",
+                  listMessages: Effect.succeed([]),
+                  close: Effect.void,
+                  send: (input) =>
+                    Effect.gen(function* () {
+                      sentOptions.push(input.options ?? {});
+                      if (input.onDelta)
+                        yield* input
+                          .onDelta({
+                            type: "tool-call-started",
+                            modelCallId: "custom-model",
+                            callId: "custom-tool-call",
+                            toolCall: {
+                              type: "mcp",
+                              args: {
+                                providerIdentifier: "custom-user-tools",
+                                toolName: "orchestrator_capabilities",
+                                args: {},
+                              },
+                            },
+                          })
+                          .pipe(Effect.orDie);
+                      const result = yield* Deferred.make<RunResult>();
+                      runs.push(result);
+                      return {
+                        agentId: "cursor-native",
+                        runId: `cursor-run-${runs.length}`,
+                        wait: Deferred.await(result),
+                        cancel: Deferred.succeed(result, { status: "cancelled" } as RunResult).pipe(
+                          Effect.asVoid,
+                        ),
+                      };
+                    }),
+                });
+              },
+            }),
+            Effect.provide(TestProviderHost.layer()),
+          );
+          const runtime = yield* adapter.openSession({
+            providerSessionId: ProviderSessionId.make("cursor-custom-session"),
+            threadId,
+            modelSelection,
+            runtimePolicy,
+          });
+          const providerThread = yield* runtime.ensureThread({
+            threadId,
+            modelSelection,
+            runtimePolicy,
+          });
+          assert.isDefined(openOptions?.local?.customTools?.orchestrator_capabilities);
+          assert.isUndefined(openOptions?.mcpServers);
+          assert.equal(openOptions?.local?.sandboxOptions?.enabled, runtimeMode !== "full-access");
+          const now = yield* DateTime.now;
+          const appThread = {
+            id: threadId,
+            projectId: ProjectId.make("cursor-test"),
+            createdBy: "user" as const,
+            creationSource: "web" as const,
+            title: "Cursor custom tools",
+            providerInstanceId: instanceId,
+            modelSelection,
+            runtimeMode,
+            interactionMode: "plan" as const,
+            branch: null,
+            worktreePath: null,
+            activeProviderThreadId: providerThread.id,
+            lineage: { parentThreadId: null, relationshipToParent: null, rootThreadId: threadId },
+            forkedFrom: null,
+            createdAt: now,
+            updatedAt: now,
+            archivedAt: null,
+            settledOverride: null,
+            settledAt: null,
+            lastVisitedAt: null,
+            deletedAt: null,
+          };
+          const start = (ordinal: number) =>
+            runtime.startTurn({
+              threadId,
+              providerThread,
+              modelSelection,
+              runtimePolicy,
+              runId: RunId.make(`cursor-test-${ordinal}`),
+              runOrdinal: ordinal,
+              providerTurnOrdinal: ordinal,
+              attemptId: RunAttemptId.make(`cursor-test-${ordinal}`),
+              rootNodeId: NodeId.make(`cursor-test-${ordinal}`),
+              appThread,
+              message: {
+                messageId: MessageId.make(`cursor-test-${ordinal}`),
+                createdBy: "user",
+                creationSource: "web",
+                text: "Check the catalog",
+                attachments: [],
+              },
+            });
+          yield* start(1);
+          const running = yield* runtime.events.pipe(
+            Stream.filter(
+              (event) =>
+                event.type === "provider_turn.updated" && event.providerTurn.status === "running",
+            ),
+            Stream.runHead,
+          );
+          if (Option.isNone(running) || running.value.type !== "provider_turn.updated")
+            return yield* Effect.die("No running turn");
+          const tool = sentOptions[0]?.local?.customTools
+            ?.orchestrator_capabilities as SDKCustomTool;
+          assert.isDefined(tool);
+          assert.deepEqual(sentOptions[0]?.mcpServers, {});
+          yield* registry.set({ ...config, authorizationHeader: "Bearer synthetic-refreshed" });
+          const pending = Promise.resolve(tool.execute({}, {}));
+          yield* Effect.promise(() => started);
+          assert.deepEqual(headers.slice(-3), Array(3).fill("Bearer synthetic-refreshed"));
+          yield* runtime.interruptTurn({
+            providerThread,
+            providerTurnId: running.value.providerTurn.id,
+          });
+          assert.match(JSON.stringify(yield* Effect.promise(() => pending)), /isError/);
+          assert.isTrue(aborted);
+          assert.equal(callCount, 1);
+          yield* runtime.events.pipe(
+            Stream.filter((event) => event.type === "turn.terminal"),
+            Stream.runHead,
+          );
+          yield* start(2);
+          assert.notStrictEqual(
+            sentOptions[1]?.local?.customTools?.orchestrator_capabilities,
+            tool,
+          );
+          assert.match(
+            JSON.stringify(yield* Effect.promise(() => Promise.resolve(tool.execute({}, {})))),
+            /isError/,
+          );
+          yield* Deferred.succeed(runs[1]!, { status: "finished" } as RunResult);
+          yield* runtime.events.pipe(
+            Stream.filter((event) => event.type === "turn.terminal"),
+            Stream.runHead,
+          );
+          yield* registry.clear(threadId);
+          yield* start(3);
+          assert.deepEqual(sentOptions[2]?.local?.customTools, {});
+          assert.deepEqual(sentOptions[2]?.mcpServers, {});
+          yield* Deferred.succeed(runs[2]!, { status: "finished" } as RunResult);
+          yield* runtime.events.pipe(
+            Stream.filter((event) => event.type === "turn.terminal"),
+            Stream.runHead,
+          );
+        } finally {
+          fetchMock.mockRestore();
+        }
+      }).pipe(
+        Effect.scoped,
+        Effect.provide(
+          Layer.mergeAll(NodeServices.layer, IdAllocator.layer, McpProviderSessions.layer),
+        ),
+      ),
+  );
+
+  it("offers custom callbacks in restricted modes without changing sandbox policy", () => {
+    const customTools = { orchestrator_capabilities: { execute: () => "{}" } };
+    for (const runtimeMode of ["full-access", "auto-accept-edits", "approval-required"] as const) {
+      const policy = { runtimeMode, interactionMode: "plan" as const, cwd: "/workspace" };
+      const options = makeCursorAgentOptions({
+        modelSelection: { instanceId: ProviderInstanceId.make("cursor"), model: "composer-2.5" },
+        runtimePolicy: policy,
+        threadId: ThreadId.make("cursor-custom"),
+        mcpSession: undefined,
+        customTools,
+      });
+      assert.strictEqual(options.local?.customTools, customTools);
+      assert.isUndefined(options.mcpServers);
+      assert.equal(options.local?.autoReview, cursorRuntimeAgentPolicy(policy).autoReview);
+      assert.equal(
+        options.local?.sandboxOptions?.enabled,
+        cursorRuntimeAgentPolicy(policy).sandboxEnabled,
+      );
+      assert.equal(options.mode, "plan");
     }
   });
 
