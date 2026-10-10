@@ -13,6 +13,7 @@ import {
   sortPinnedThreadsByOrderKey,
   sortSettledThreads,
   sortThreads,
+  sortThreadsByLastActivity,
   type SettledThreadTimestampInput,
   type ThreadSortInput,
 } from "./threadSort.ts";
@@ -509,5 +510,49 @@ describe("sortActiveThreadsByOrderKey", () => {
     const keys = new Map(assignments.map((assignment) => [assignment.id, assignment.orderKey]));
     const updated = threads.map((thread) => ({ ...thread, activeOrderKey: keys.get(thread.id) }));
     expect(sortActiveThreadsByOrderKey(updated).map((thread) => thread.id)).toEqual(orderedIds);
+  });
+});
+
+describe("sortThreadsByLastActivity", () => {
+  const thread = (
+    id: string,
+    latestUserMessageAt: string | null,
+    completedAt: string | null,
+    updatedAt = "2026-01-10T00:00:00Z",
+  ) => ({
+    id,
+    createdAt: "2026-01-01T00:00:00Z",
+    updatedAt,
+    latestUserMessageAt,
+    latestRun: completedAt == null ? null : { completedAt },
+  });
+  it("surfaces provider completion after newer messages elsewhere", () => {
+    expect(
+      sortThreadsByLastActivity([
+        thread("a", "2026-01-03T00:00:00Z", null),
+        thread("b", "2026-01-02T00:00:00Z", "2026-01-04T00:00:00Z"),
+      ]).map((t) => t.id),
+    ).toEqual(["b", "a"]);
+  });
+  it("uses later user messages and ignores lifecycle edits, even without message history", () => {
+    expect(
+      sortThreadsByLastActivity([
+        thread("a", "2026-01-05T00:00:00Z", "2026-01-02T00:00:00Z"),
+        thread("b", null, null, "2026-02-01T00:00:00Z"),
+      ]).map((t) => t.id),
+    ).toEqual(["a", "b"]);
+  });
+  it("falls back to valid user-message history and creation for malformed timestamps", () => {
+    const a = {
+      ...thread("a", "invalid", "invalid"),
+      messages: [{ role: "user", createdAt: "2026-01-05T00:00:00Z" }],
+    };
+    const b = thread("b", null, "2026-01-04T00:00:00Z");
+    expect(sortThreadsByLastActivity([b, a]).map((t) => t.id)).toEqual(["a", "b"]);
+    expect(
+      sortThreadsByLastActivity([thread("a", null, null), thread("b", null, null)]).map(
+        (t) => t.id,
+      ),
+    ).toEqual(["b", "a"]);
   });
 });
