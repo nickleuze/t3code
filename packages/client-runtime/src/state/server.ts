@@ -1192,16 +1192,6 @@ export function createServerEnvironmentAtoms<R, E>(
       concurrency: configConcurrency,
     }),
     updateServer,
-    forkUpdateStatus: createEnvironmentRpcQueryAtomFamily(runtime, {
-      label: "environment-data:server:fork-update-status",
-      tag: WS_METHODS.serverForkUpdateStatus,
-      staleTimeMs: 60_000,
-      refreshIntervalMs: 5 * 60_000,
-    }),
-    installForkUpdate: createEnvironmentRpcCommand(runtime, {
-      label: "environment-data:server:install-fork-update",
-      tag: WS_METHODS.serverInstallForkUpdate,
-    }),
     upsertKeybinding: createEnvironmentRpcCommand(runtime, {
       label: "environment-data:server:upsert-keybinding",
       tag: WS_METHODS.serverUpsertKeybinding,
