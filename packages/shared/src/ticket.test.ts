@@ -1,6 +1,6 @@
 import * as DateTime from "effect/DateTime";
 import { describe, expect, it } from "vite-plus/test";
-import { TicketId, type TicketStatus } from "@t3tools/contracts";
+import { ThreadId, TicketId, type TicketStatus } from "@t3tools/contracts";
 import {
   deriveTicketStatus,
   ticketStartPrompt,
@@ -126,9 +126,54 @@ const cases: {
   },
 ];
 describe("deriveTicketStatus", () => {
+  it.each([thread(after), thread(null, [after])])(
+    "ignores origin thread work signals: %j",
+    (shell) => {
+      const ticket = {
+        status: "inbox" as const,
+        statusSetAt: at,
+        githubIssue: null,
+        links: [{ threadId: ThreadId.make("origin"), role: "origin" as const, linkedAt: before }],
+      };
+      expect(deriveTicketStatus(ticket, () => shell)).toBe("inbox");
+    },
+  );
+  it("ignores missing work-linked threads", () => {
+    const ticket: TicketStatusInput = {
+      status: "inbox",
+      statusSetAt: at,
+      githubIssue: null,
+      links: [{ threadId: ThreadId.make("missing"), role: "work", linkedAt: before }],
+    };
+    expect(deriveTicketStatus(ticket, () => undefined)).toBe("inbox");
+  });
+  it("selects work-linked shells by id from mixed origin and work links", () => {
+    const originId = ThreadId.make("origin");
+    const workId = ThreadId.make("work");
+    const ticket: TicketStatusInput = {
+      status: "inbox",
+      statusSetAt: at,
+      githubIssue: null,
+      links: [
+        { threadId: originId, role: "origin", linkedAt: before },
+        { threadId: workId, role: "work", linkedAt: before },
+      ],
+    };
+    const shells = new Map([
+      [originId, thread(after, [after])],
+      [workId, thread(after)],
+    ]);
+    expect(deriveTicketStatus(ticket, (id) => shells.get(id))).toBe("in_progress");
+  });
   it.each(cases)("$name", ({ status, threads, issue, expected }) => {
-    const ticket = { status, statusSetAt: at, githubIssue: issue ?? null };
-    expect(deriveTicketStatus(ticket, threads)).toBe(expected);
+    const shells = new Map(threads.map((shell, index) => [ThreadId.make(`work:${index}`), shell]));
+    const ticket: TicketStatusInput = {
+      status,
+      statusSetAt: at,
+      githubIssue: issue ?? null,
+      links: [...shells.keys()].map((threadId) => ({ threadId, role: "work", linkedAt: before })),
+    };
+    expect(deriveTicketStatus(ticket, (id) => shells.get(id))).toBe(expected);
     expect(ticket.status).toBe(status);
   });
 });

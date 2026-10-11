@@ -1,13 +1,14 @@
 import * as DateTime from "effect/DateTime";
-import type { Ticket, TicketStatus } from "@t3tools/contracts";
+import type { ThreadId, Ticket, TicketStatus } from "@t3tools/contracts";
 
 export interface TicketStatusInput {
   readonly status: TicketStatus;
   readonly statusSetAt: string;
   readonly githubIssue: { readonly state: "open" | "closed"; readonly syncedAt: string } | null;
+  readonly links: Ticket["links"];
 }
 
-/** Only shells of the ticket's linked threads are needed; missing threads contribute no signal. */
+/** Only work-linked thread shells contribute signals; missing threads contribute nothing. */
 export interface TicketLinkedThreadShell {
   readonly latestRunStartedAt?: string | DateTime.Utc | null;
   readonly pullRequests?: ReadonlyArray<{ readonly linkedAt: string; readonly source?: string }>;
@@ -23,7 +24,7 @@ const statusRank: Record<Exclude<TicketStatus, "dropped">, number> = {
 
 export function deriveTicketStatus(
   ticket: TicketStatusInput,
-  linkedThreadShells: ReadonlyArray<TicketLinkedThreadShell>,
+  threadShellById: (threadId: ThreadId) => TicketLinkedThreadShell | undefined,
 ): TicketStatus {
   if (ticket.status === "done" || ticket.status === "dropped") return ticket.status;
   let status = ticket.status;
@@ -35,7 +36,10 @@ export function deriveTicketStatus(
   const advance = (signal: typeof status) => {
     if (statusRank[signal] > statusRank[status]) status = signal;
   };
-  for (const thread of linkedThreadShells) {
+  for (const link of ticket.links) {
+    if (link.role !== "work") continue;
+    const thread = threadShellById(link.threadId);
+    if (thread === undefined) continue;
     if (newer(thread.latestRunStartedAt)) advance("in_progress");
     if (thread.pullRequests?.some((pr) => pr.source !== "stack-dismissed" && newer(pr.linkedAt)))
       advance("in_review");
