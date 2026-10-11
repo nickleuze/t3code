@@ -1,6 +1,8 @@
 "use client";
 
 import { Dialog as DialogPrimitive } from "@base-ui/react/dialog";
+import { useEffect, useState } from "react";
+import { useMediaQuery } from "~/hooks/useMediaQuery";
 import { XIcon } from "lucide-react";
 import { cn } from "~/lib/utils";
 import { Button } from "~/components/ui/button";
@@ -66,25 +68,52 @@ function DialogPopup({
 }: DialogPrimitive.Popup.Props & {
   showCloseButton?: boolean;
   bottomStickOnMobile?: boolean;
-  variant?: "default" | "media";
+  variant?: "default" | "media" | "mobile-fullscreen";
 }) {
+  const fullscreen = useMediaQuery("(max-width: 480px)") && variant === "mobile-fullscreen";
+  const [viewport, setViewport] = useState<{ height: number; top: number } | null>(null);
+  useEffect(() => {
+    if (!fullscreen || !window.visualViewport) return;
+    const visual = window.visualViewport;
+    const update = () => setViewport({ height: visual.height, top: visual.offsetTop });
+    update();
+    visual.addEventListener("resize", update);
+    visual.addEventListener("scroll", update);
+    return () => {
+      visual.removeEventListener("resize", update);
+      visual.removeEventListener("scroll", update);
+    };
+  }, [fullscreen]);
   return (
     <DialogPortal>
       {/* Media opens from inside other overlays (a composer chip, a popover), so it sits above them. */}
-      <DialogBackdrop className={variant === "media" ? "z-[60]" : undefined} variant={variant} />
+      <DialogBackdrop
+        className={variant === "media" ? "z-[60]" : undefined}
+        variant={variant === "media" ? "media" : "default"}
+      />
       <DialogViewport
         className={cn(
-          bottomStickOnMobile && "max-sm:grid-rows-[1fr_auto] max-sm:p-0 max-sm:pt-12",
+          bottomStickOnMobile &&
+            !fullscreen &&
+            "max-sm:grid-rows-[1fr_auto] max-sm:p-0 max-sm:pt-12",
+          fullscreen && "grid-rows-1 p-0",
           variant === "media" &&
             "z-[60] grid-rows-1 place-items-center px-4 py-6 [-webkit-app-region:no-drag]",
         )}
+        style={
+          fullscreen
+            ? { top: viewport?.top ?? 0, height: viewport?.height ?? "100dvh", bottom: "auto" }
+            : undefined
+        }
       >
         <DialogPrimitive.Popup
           className={cn(
             variant === "media" ? DIALOG_MEDIA_POPUP_CLASS : DIALOG_POPUP_CLASS,
             "row-start-2 text-popover-foreground",
-            variant === "default" && "max-h-full max-w-lg",
-            bottomStickOnMobile && DIALOG_MOBILE_SHEET_CLASS,
+            variant !== "media" && "max-h-full max-w-lg",
+            fullscreen &&
+              "row-start-1 h-full max-w-none rounded-none border-0 pt-[env(safe-area-inset-top)] pb-[env(safe-area-inset-bottom)]",
+            bottomStickOnMobile && !fullscreen && DIALOG_MOBILE_SHEET_CLASS,
             className,
           )}
           data-slot="dialog-popup"
@@ -94,8 +123,11 @@ function DialogPopup({
           {showCloseButton && (
             <DialogPrimitive.Close
               aria-label="Close"
-              className="absolute end-2 top-2"
-              render={<Button size="icon" variant="ghost" />}
+              className={cn(
+                "absolute end-2 top-2",
+                fullscreen && "top-[calc(env(safe-area-inset-top)+0.5rem)]",
+              )}
+              render={<Button size={fullscreen ? "icon-touch" : "icon"} variant="ghost" />}
             >
               <XIcon />
             </DialogPrimitive.Close>

@@ -1,5 +1,7 @@
 import * as Orchestrator from "../../../orchestration-v2/Orchestrator.ts";
 import * as ProjectionStore from "../../../orchestration-v2/ProjectionStore.ts";
+import * as ProjectStore from "../../../orchestration-v2/ProjectStore.ts";
+import * as TicketService from "../../../tickets/TicketService.ts";
 import * as DeviceService from "../../../device/DeviceService.ts";
 import * as ServerConfig from "../../../config.ts";
 import { expect, it } from "@effect/vitest";
@@ -37,6 +39,8 @@ import * as PreviewBrowser from "../../../preview/PreviewBrowser.ts";
 const layerStubServices = Layer.mergeAll(
   Layer.mock(Orchestrator.OrchestratorV2)({}),
   Layer.mock(ProjectionStore.ProjectionStoreV2)({}),
+  Layer.mock(ProjectStore.ProjectStoreV2)({}),
+  Layer.mock(TicketService.TicketService)({}),
   Layer.mock(DeviceService.DeviceService)({}),
   Layer.mock(ThreadManagementService.ThreadManagementService)({}),
   Layer.mock(ProviderRegistry.ProviderRegistry)({}),
@@ -141,6 +145,12 @@ it.effect("production mcp layer lists worktree tools over http", () =>
       // than replacing them.
       expect(toolNames).toContain("preview_status");
       expect(toolNames).toContain("delegate_task");
+      expect(toolNames).toContain("t3_ticket_create");
+      expect(toolNames).toContain("t3_ticket_update");
+      expect(toolNames).toContain("t3_ticket_link_thread");
+      expect(tools.find((tool) => tool.name === "t3_ticket_list")?.annotations?.readOnlyHint).toBe(
+        true,
+      );
 
       // The handoff tool mutates thread state, reaches the network (origin
       // fetch), and runs project setup scripts, so its MCP hints must not

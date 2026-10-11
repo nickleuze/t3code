@@ -37,6 +37,7 @@ import * as EnvironmentRegistry from "../connection/registry.ts";
 import * as EnvironmentSupervisor from "../connection/supervisor.ts";
 import { safeErrorLogAttributes } from "../errors/safeLog.ts";
 import * as Persistence from "../platform/persistence.ts";
+import { createTicketEnvironmentAtoms } from "./tickets.ts";
 import { runCachePersistence } from "./cachePersistence.ts";
 import {
   isRpcClientError,
@@ -982,6 +983,7 @@ export function createServerEnvironmentAtoms<R, E>(
   });
 
   return {
+    ...createTicketEnvironmentAtoms(runtime),
     configValueAtom,
     runStorageCleanup: createEnvironmentRpcCommand(runtime, {
       label: "environment-data:server:run-storage-cleanup",

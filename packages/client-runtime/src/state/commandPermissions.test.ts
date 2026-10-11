@@ -4,7 +4,7 @@ import * as SubscriptionRef from "effect/SubscriptionRef";
 import * as Option from "effect/Option";
 import * as Stream from "effect/Stream";
 import type { RpcSession } from "../rpc/session.ts";
-import { describe, expect, it } from "@effect/vitest";
+import { assert, describe, expect, it } from "@effect/vitest";
 import { vi } from "vite-plus/test";
 import {
   AuthOrchestrationOperateScope,
@@ -287,4 +287,29 @@ it.effect("rejects protected unary and streamed RPCs outside a guarded command",
     expect(streamed._tag).toBe("EnvironmentAuthorizationError");
     expect(writes).toBe(0);
   }),
+);
+
+it.effect("GitHub ticket writes require the destination operate grant and respect revocation", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const registry = yield* setup;
+      for (const tag of [
+        WS_METHODS.ticketsPublishIssue,
+        WS_METHODS.ticketsImportIssue,
+        WS_METHODS.ticketsUnlinkIssue,
+        WS_METHODS.ticketsRefreshIssues,
+      ]) {
+        const command = createCommandPermissions(runtime, tag);
+        registry.set(sessions(env), AsyncResult.success(grant(true)));
+        assert.equal(registry.get(command.permissionAtom(env)), true);
+        yield* command.authorize(registry, env);
+        registry.set(sessions(env), AsyncResult.success(grant(false)));
+        assert.equal(registry.get(command.permissionAtom(env)), false);
+        assert.equal(
+          (yield* command.authorize(registry, env).pipe(Effect.flip))._tag,
+          "EnvironmentAuthorizationError",
+        );
+      }
+    }),
+  ),
 );

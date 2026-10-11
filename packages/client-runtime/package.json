@@ -3,6 +3,14 @@
   "private": true,
   "type": "module",
   "exports": {
+    "./state/ticket-board": {
+      "types": "./src/state/ticketBoard.ts",
+      "import": "./src/state/ticketBoard.ts"
+    },
+    "./state/tickets": {
+      "types": "./src/state/tickets.ts",
+      "import": "./src/state/tickets.ts"
+    },
     "./composerThreadItems": {
       "types": "./src/composerThreadItems.ts",
       "default": "./src/composerThreadItems.ts"

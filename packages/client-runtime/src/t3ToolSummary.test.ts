@@ -7,6 +7,36 @@ function completed(input: unknown, output?: unknown): T3ToolSummaryCall {
 }
 
 describe("summarizeT3ToolCalls", () => {
+  it("summarizes ticket creation, list, patch and link changes", () => {
+    for (const [action, verb] of [
+      ["ticket-create", "Filed"],
+      ["ticket-update", "Updated"],
+    ] as const) {
+      expect(
+        summarizeT3ToolCalls(action, [
+          completed({ id: "ticket-1" }, { id: "ticket-1" }),
+          completed({ id: "ticket-1" }, { id: "ticket-1" }),
+          {
+            input: { id: "ticket-2" },
+            output: { _tag: "OrchestratorMcpFailure" },
+            outcome: "completed",
+          },
+        ]),
+      ).toEqual({ label: `${verb} 1 ticket`, failedCount: 1 });
+    }
+    expect(summarizeT3ToolCalls("ticket-list", [completed({})]).label).toBe(
+      "Listed tickets 1 time",
+    );
+    expect(summarizeT3ToolCalls("ticket-link", [completed({})]).label).toBe(
+      "Linked 1 ticket thread link",
+    );
+    expect(summarizeT3ToolCalls("ticket-link", [completed({ unlink: true })]).label).toBe(
+      "Unlinked 1 ticket thread link",
+    );
+    expect(
+      summarizeT3ToolCalls("ticket-link", [completed({}), completed({ unlink: true })]).label,
+    ).toBe("Updated 2 ticket thread links");
+  });
   it("counts registered projects, repository destinations, and accepted thread launches", () => {
     expect(
       summarizeT3ToolCalls("project-create", [

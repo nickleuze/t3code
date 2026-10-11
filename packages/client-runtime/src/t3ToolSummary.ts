@@ -212,6 +212,24 @@ export function summarizeT3ToolCalls(
     case "goal-propose":
       label = phrase("Proposed", "propose", quantity(selected.length, "T3 goal"));
       break;
+    case "ticket-create":
+      label = phrase("Filed", "file", quantity(countEntities(entityIds("id")), "ticket"));
+      break;
+    case "ticket-list":
+      label = phrase("Listed", "list", `tickets ${times}`);
+      break;
+    case "ticket-update":
+      label = phrase("Updated", "update", quantity(countEntities(entityIds("id")), "ticket"));
+      break;
+    case "ticket-link": {
+      const unlinks = selected.filter((call) => call.input?.unlink === true).length;
+      label = phrase(
+        unlinks === selected.length ? "Unlinked" : unlinks === 0 ? "Linked" : "Updated",
+        unlinks === selected.length ? "unlink" : unlinks === 0 ? "link" : "update",
+        quantity(selected.length, "ticket thread link"),
+      );
+      break;
+    }
     case "schedule-run":
       label = phrase("Requested", "request", quantity(selected.length, "scheduled task run"));
       break;
