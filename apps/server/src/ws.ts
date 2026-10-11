@@ -2043,7 +2043,7 @@ const layerWsRpc = (
             ),
           ),
         [WS_METHODS.ticketsList]: (input) => tickets.list(input),
-        [WS_METHODS.ticketsSubscribe]: () => tickets.subscribeList(),
+        [WS_METHODS.ticketsSubscribe]: () => ticketGithub.subscribeList(),
         [WS_METHODS.ticketsUpsert]: (input) => tickets.upsert(input),
         [WS_METHODS.ticketsDelete]: (input) => tickets.delete(input),
         [WS_METHODS.ticketsRestore]: (input) => tickets.restore(input),

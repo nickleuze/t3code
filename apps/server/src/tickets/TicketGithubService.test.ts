@@ -2,6 +2,7 @@ import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import { assert, it } from "@effect/vitest";
 import { ProjectId, RepositoryIdentity, TicketError } from "@t3tools/contracts";
 import * as GitHubApi from "@t3tools/source-control-github/server/GitHubApi";
+import * as Deferred from "effect/Deferred";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -416,5 +417,37 @@ it.effect("refresh skips a ticket deleted while remote reads are in flight", () 
       (t) => t.id === deleted.id,
     )!;
     assert.equal(saved.githubIssue?.state, "open");
+  }).pipe(Effect.provide(layer)),
+);
+
+it.effect("subscription start requests a throttled refresh without blocking its initial list", () =>
+  Effect.gen(function* () {
+    yield* seed;
+    const github = yield* Github.TicketGithubService;
+    const fixture = yield* Fixture;
+    yield* github.importIssue({ projectId, issue: 1 });
+    const started = yield* Deferred.make<void>();
+    const release = yield* Deferred.make<void>();
+    fixture.beforeBatch = Deferred.succeed(started, undefined).pipe(
+      Effect.andThen(Deferred.await(release)),
+    );
+    fixture.issues.set(1, issue(1, true));
+    const snapshots = yield* Queue.unbounded<import("@t3tools/contracts").TicketListResult>();
+    yield* github.subscribeList().pipe(
+      Stream.runForEach((list) => Queue.offer(snapshots, list)),
+      Effect.forkChild,
+    );
+    const initial = yield* Queue.take(snapshots);
+    assert.equal(initial.tickets[0]!.githubIssue?.state, "open");
+    yield* Deferred.await(started);
+    yield* Deferred.succeed(release, undefined);
+    const refreshed = yield* Queue.take(snapshots);
+    assert.equal(refreshed.tickets[0]!.githubIssue?.state, "closed");
+    assert.deepStrictEqual(yield* github.refreshIssues({}), {
+      refreshed: 0,
+      failed: 0,
+      skipped: true,
+    });
+    assert.equal(fixture.batches, 1);
   }).pipe(Effect.provide(layer)),
 );

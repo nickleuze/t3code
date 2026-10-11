@@ -7,6 +7,7 @@ import {
   type TicketId,
   type TicketImportIssueInput,
   type TicketMutationResult,
+  type TicketListResult,
   type TicketPublishIssueInput,
   type TicketRefreshIssuesInput,
   type TicketRefreshIssuesResult,
@@ -21,6 +22,7 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
+import * as Stream from "effect/Stream";
 import * as Semaphore from "effect/Semaphore";
 import * as RepositoryIdentityResolver from "../project/RepositoryIdentityResolver.ts";
 import * as ProjectService from "../project/ProjectService.ts";
@@ -93,6 +95,7 @@ function repositoryParts(repository: string) {
 export class TicketGithubService extends Context.Service<
   TicketGithubService,
   {
+    readonly subscribeList: () => Stream.Stream<TicketListResult, TicketError>;
     readonly publishIssue: (
       input: TicketPublishIssueInput,
     ) => Effect.Effect<TicketMutationResult, TicketError>;
@@ -351,7 +354,21 @@ const make = Effect.gen(function* () {
         return { refreshed, failed, skipped: false };
       }).pipe(mapError),
     );
-  return TicketGithubService.of({ publishIssue, importIssue, unlinkIssue, refreshIssues });
+  const subscribeList: TicketGithubService["Service"]["subscribeList"] = () =>
+    Stream.unwrap(
+      Effect.gen(function* () {
+        // Keep the initial list immediate; the stream scope owns the refresh fiber.
+        yield* refreshIssues({}).pipe(Effect.ignore, Effect.forkScoped);
+        return tickets.subscribeList();
+      }),
+    );
+  return TicketGithubService.of({
+    subscribeList,
+    publishIssue,
+    importIssue,
+    unlinkIssue,
+    refreshIssues,
+  });
 });
 
 export const layer = Layer.effect(TicketGithubService, make);
