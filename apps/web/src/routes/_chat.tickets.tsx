@@ -23,13 +23,14 @@ import {
 } from "@dnd-kit/core";
 import { SortableContext, useSortable, verticalListSortingStrategy } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
-import { GripVerticalIcon } from "lucide-react";
+import { ArrowUpRightIcon, ListFilterIcon, GripVerticalIcon } from "lucide-react";
 import { useState } from "react";
 import { WorkspacePageHeader } from "../components/WorkspacePageHeader";
 import { WorkspacePageContainer } from "../components/WorkspacePageContainer";
 import { SidebarInset } from "../components/ui/sidebar";
 import { Button } from "../components/ui/button";
 import { Badge } from "../components/ui/badge";
+import { Tooltip, TooltipTrigger, TooltipPopup } from "../components/ui/tooltip";
 import { Input } from "../components/ui/input";
 import { Menu, MenuTrigger, MenuPopup, MenuItem } from "../components/ui/menu";
 import { TicketPicker } from "../components/tickets/TicketPicker";
@@ -289,7 +290,12 @@ function TicketsPage() {
                     void drop(event);
                   }}
                 >
-                  <div className="grid min-w-[1000px] grid-cols-5 gap-3">
+                  <div
+                    className="grid gap-3"
+                    style={{
+                      gridTemplateColumns: `repeat(${search.showDropped ? 6 : 5}, minmax(170px, 1fr))`,
+                    }}
+                  >
                     {[...TICKET_COLUMNS, ...(search.showDropped ? ["dropped" as const] : [])].map(
                       (status) => (
                         <TicketColumn
@@ -340,7 +346,7 @@ function TicketColumn({
     <section
       ref={setNodeRef}
       aria-label={TICKET_STATUS_LABELS[status]}
-      className={`min-h-64 rounded-xl border p-2 ${isOver ? "border-primary bg-accent" : "border-border bg-muted/20"}`}
+      className={`min-w-0 min-h-64 rounded-xl border p-2 ${isOver ? "border-primary bg-accent" : "border-border bg-muted/20"}`}
     >
       <div className="mb-3 flex items-center justify-between gap-1">
         <h2 className="text-sm font-medium">
@@ -400,10 +406,22 @@ function TicketCard({
     <article
       ref={setNodeRef}
       style={{ transform: CSS.Transform.toString(transform), transition }}
-      className={`group flex flex-col gap-2 rounded-lg border border-border bg-background p-3 shadow-xs ${isDragging ? "z-10 opacity-60" : ""}`}
+      className={`group min-w-0 flex flex-col gap-2 rounded-lg border border-border bg-background p-3 shadow-xs ${isDragging ? "z-10 opacity-60" : ""}`}
     >
       <div className="flex items-center gap-1">
-        <Badge variant="secondary">{project?.title ?? "No project"}</Badge>
+        <div className="min-w-0 overflow-hidden">
+          <Badge variant="secondary">{project?.title ?? "No project"}</Badge>
+        </div>
+        {status !== entry.ticket.status ? (
+          <Tooltip>
+            <TooltipTrigger
+              render={<Button size="icon-xs" variant="ghost" aria-label="Moved by linked work" />}
+            >
+              <ArrowUpRightIcon />
+            </TooltipTrigger>
+            <TooltipPopup>Moved by linked work</TooltipPopup>
+          </Tooltip>
+        ) : null}
         <div className="ml-auto">
           <Button
             variant="ghost"
@@ -424,25 +442,30 @@ function TicketCard({
       ) : null}
       <button
         type="button"
-        className="text-left text-sm font-medium hover:underline"
+        className="text-left text-sm font-medium wrap-anywhere hover:underline"
         onClick={onOpen}
       >
         {entry.ticket.title}
       </button>
+      {entry.ticket.body.trim() ? (
+        <p className="line-clamp-2 text-xs text-muted-foreground whitespace-pre-line wrap-anywhere">
+          {entry.ticket.body.trim()}
+        </p>
+      ) : null}
       <TicketLinks entry={entry} />
       <div className="flex flex-wrap items-center justify-between gap-1">
         <Menu>
           <MenuTrigger
             render={
               <Button
-                size="xs"
+                size="icon-xs"
                 variant="ghost"
                 disabled={!canWrite}
                 aria-label={`Set status for ${entry.ticket.title}`}
               />
             }
           >
-            {TICKET_STATUS_LABELS[status]}
+            <ListFilterIcon />
           </MenuTrigger>
           <MenuPopup>
             {Object.entries(TICKET_STATUS_LABELS).map(([value, label]) => (

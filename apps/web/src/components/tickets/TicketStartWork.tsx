@@ -4,6 +4,8 @@ import { scopeProjectRef } from "@t3tools/client-runtime/environment";
 import {
   CommandId,
   ProjectId,
+  ThreadId,
+  type OrchestrationV2ThreadLaunchInput,
   type ModelSelection,
   type ProviderInstanceId,
   type Ticket,
@@ -26,6 +28,9 @@ import {
   deriveProviderInstanceEntries,
 } from "../../providerInstances";
 import { getAppModelOptionsForInstance } from "../../modelSelection";
+import { resolveProjectSettings } from "@t3tools/shared/projectSettings";
+import { runtimeModeConfig, runtimeModeOptions } from "../chat/runtimeModeConfig";
+import { launchLinkedTicketThread } from "./ticketLaunch";
 import { scheduledTaskDefaultModel } from "../settings/scheduledTasksSettings.logic";
 import { ProviderModelPicker } from "../chat/ProviderModelPicker";
 import { Button } from "../ui/button";
@@ -180,13 +185,29 @@ function TicketStartDialog({
   const [baseRef, setBaseRef] = useState("");
   const [pending, setPending] = useState(false);
   const submitting = useRef(false);
+  const ambiguousLaunch = useRef(false);
   const [error, setError] = useState<string | null>(null);
-  const [launchedThread, setLaunchedThread] = useState<
-    import("@t3tools/contracts").ThreadId | null
+  const [launchIds] = useState(() => ({
+    threadId: ThreadId.make(randomUUID()),
+    commandId: CommandId.make(randomUUID()),
+  }));
+  const [launchInput, setLaunchInput] = useState<
+    (OrchestrationV2ThreadLaunchInput & { threadId: ThreadId }) | null
   >(null);
+  const defaultRuntimeMode = resolveProjectSettings(settings, project?.id ?? null, project).settings
+    .defaultRuntimeMode;
+  const supportedModes = entries.find((e) => e.instanceId === selection?.instanceId)?.snapshot
+    .supportedRuntimeModes;
+  const compatibleModes = supportedModes?.length
+    ? runtimeModeOptions.filter((mode) => supportedModes.includes(mode))
+    : runtimeModeOptions;
+  const runtimeMode = compatibleModes.includes(defaultRuntimeMode)
+    ? defaultRuntimeMode
+    : (compatibleModes[0] ?? defaultRuntimeMode);
   const upsert = useAtomCommand(ticketEnvironment.upsertTicket);
   const launch = useOrchestrationCommand(ticketEnvironment.launchTicketThread);
   const link = useAtomCommand(ticketEnvironment.linkTicket);
+  const unlink = useAtomCommand(ticketEnvironment.unlinkTicket);
   const navigate = useNavigate();
   const isDraft = mode === "draft" || mode === "goal";
   const submit = async () => {
@@ -211,40 +232,42 @@ function TicketStartDialog({
         await onDraft(target);
         return;
       }
-      let threadId = launchedThread;
-      if (!threadId) {
-        const result = await launch({
-          environmentId,
-          input: {
-            commandId: CommandId.make(randomUUID()),
-            projectId: project.id,
-            title: target.title,
-            modelSelection: selection!,
-            runtimeMode: "approval-required",
-            interactionMode: mode === "plan" ? "plan" : "default",
-            workspaceStrategy:
-              workspace === "worktree"
-                ? { type: "worktree", baseRef: baseRef.trim() || "HEAD" }
-                : { type: "root" },
-            initialMessage: { text: ticketStartPrompt(target), attachments: [] },
-            creationSource: "web",
-          },
-        });
-        if (result._tag !== "Success") {
-          setError("Could not launch the thread. Check the connection before trying again.");
-          return;
-        }
-        threadId = result.value.threadId;
-        setLaunchedThread(threadId);
-      }
-      const linked = await link({
+      // Freeze the entire request after the first submit, including prompt and
+      // model defaults that may change while an ambiguous response is retried.
+      const input = launchInput ?? {
+        ...launchIds,
+        projectId: project.id,
+        title: target.title,
+        modelSelection: selection!,
+        runtimeMode,
+        interactionMode: mode === "plan" ? ("plan" as const) : ("default" as const),
+        workspaceStrategy:
+          workspace === "worktree"
+            ? { type: "worktree" as const, baseRef: baseRef.trim() || "HEAD" }
+            : { type: "root" as const },
+        initialMessage: { text: ticketStartPrompt(target), attachments: [] },
+        creationSource: "web" as const,
+      };
+      setLaunchInput(input);
+      const attempt = await launchLinkedTicketThread({
         environmentId,
-        input: { id: ticket.id, threadId, role: "work" },
+        ticketId: ticket.id,
+        input,
+        link,
+        launch,
+        unlink,
+        unlinkOnRejection: !ambiguousLaunch.current,
       });
-      if (linked._tag !== "Success") {
-        setError("Thread launched; linking failed. Retry links the same thread.");
+      if (attempt.step !== "launch" || attempt.result._tag !== "Success") {
+        if (attempt.step === "launch" && !attempt.rejected) ambiguousLaunch.current = true;
+        setError(
+          attempt.step === "link"
+            ? "Could not link the ticket. Retry uses the same thread."
+            : "Launch was not confirmed. Retry safely resumes the same thread.",
+        );
         return;
       }
+      const threadId = input.threadId;
       onClose();
       await navigate({ to: "/$environmentId/$threadId", params: { environmentId, threadId } });
     } finally {
@@ -272,7 +295,7 @@ function TicketStartDialog({
             value={projectId}
             options={projects.map((p) => ({ value: p.id, label: p.title }))}
             onChange={setProjectId}
-            disabled={pending || !!launchedThread}
+            disabled={pending || !!launchInput}
           />
           {!isDraft ? (
             <>
@@ -294,12 +317,15 @@ function TicketStartDialog({
                     setPicked({ instanceId, model })
                   }
                   isComposerOwned={false}
-                  disabled={pending || !!launchedThread}
+                  disabled={pending || !!launchInput}
                   triggerAriaLabel="Model"
                 />
               ) : (
                 <p>No available model. Configure a provider in Settings.</p>
               )}
+              <p className="text-sm text-muted-foreground">
+                Runtime mode: {runtimeModeConfig[launchInput?.runtimeMode ?? runtimeMode].label}
+              </p>
               <TicketPicker
                 label="Workspace"
                 value={workspace}
@@ -308,7 +334,7 @@ function TicketStartDialog({
                   { value: "local", label: "Local" },
                 ]}
                 onChange={setWorkspace}
-                disabled={pending || !!launchedThread}
+                disabled={pending || !!launchInput}
               />
               {workspace === "worktree" ? (
                 <label className="grid gap-1.5">
@@ -318,7 +344,7 @@ function TicketStartDialog({
                     placeholder="Current branch"
                     value={baseRef}
                     onChange={(e) => setBaseRef(e.target.value)}
-                    disabled={pending || !!launchedThread}
+                    disabled={pending || !!launchInput}
                   />
                 </label>
               ) : null}
@@ -340,7 +366,7 @@ function TicketStartDialog({
               void submit();
             }}
           >
-            {launchedThread ? "Retry link" : isDraft ? "Open draft" : "Launch"}
+            {isDraft ? "Open draft" : error ? "Retry" : "Launch"}
           </Button>
         </DialogFooter>
       </DialogPopup>

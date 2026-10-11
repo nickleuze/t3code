@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vite-plus/test";
-import { EnvironmentId, ThreadId, TicketId } from "@t3tools/contracts";
+import { EnvironmentId, ProjectId, ThreadId, TicketId } from "@t3tools/contracts";
 
 const mocks = vi.hoisted(() => {
   const values = new Map<string, string>();
@@ -28,12 +28,23 @@ import {
   setPendingTicketDraft,
   usePendingTicketDrafts,
 } from "./pendingTicketDrafts";
+import { prunePendingTicketDrafts } from "./pendingTicketDraftStore";
+import {
+  DraftId,
+  finalizePromotedDraftThreadByRef,
+  useComposerDraftStore,
+} from "./composerDraftStore";
 const environmentId = EnvironmentId.make("ticket-host");
 const ticketId = TicketId.make("ticket");
 const threadId = ThreadId.make("original-bootstrap");
 const pending = { environmentId, ticketId, threadId };
 
 beforeEach(() => {
+  useComposerDraftStore.setState({
+    draftThreadsByThreadKey: {},
+    draftsByThreadKey: {},
+    logicalProjectDraftThreadKeyByLogicalProjectKey: {},
+  });
   usePendingTicketDrafts.setState({ links: {} });
   mocks.run.mockReset().mockResolvedValue({ _tag: "Success" });
   mocks.toast.mockClear();
@@ -84,6 +95,63 @@ describe("draft ticket linking", () => {
     expect(mocks.toast).toHaveBeenCalledTimes(1);
     await linkPromotedTicketDraft("draft", { environmentId, threadId });
     expect(mocks.run).toHaveBeenCalledTimes(2);
+    expect(usePendingTicketDrafts.getState().links).toEqual({});
+  });
+});
+
+function createDraft(id: string) {
+  useComposerDraftStore
+    .getState()
+    .setProjectDraftThreadId(
+      { environmentId, projectId: ProjectId.make("project") },
+      DraftId.make(id),
+      { threadId },
+    );
+}
+describe("pending draft lifecycle", () => {
+  it("prunes absent identities on load and keeps existing drafts", async () => {
+    createDraft("kept");
+    localStorage.setItem(
+      "t3-pending-ticket-drafts",
+      JSON.stringify({ state: { links: { kept: pending, abandoned: pending } }, version: 0 }),
+    );
+    await usePendingTicketDrafts.persist.rehydrate();
+    expect(usePendingTicketDrafts.getState().links).toEqual({ kept: pending });
+    expect(JSON.parse(localStorage.getItem("t3-pending-ticket-drafts")!).state.links).toEqual({
+      kept: pending,
+    });
+  });
+  it("clears discarded drafts before an identity can be reused", () => {
+    createDraft("discarded");
+    setPendingTicketDraft("discarded", pending);
+    useComposerDraftStore.getState().clearDraftThread(DraftId.make("discarded"));
+    expect(usePendingTicketDrafts.getState().links).toEqual({});
+    createDraft("discarded");
+    expect(usePendingTicketDrafts.getState().links).toEqual({});
+  });
+  it("prunes only missing draft metadata, preserving a draft without composer content", () => {
+    createDraft("empty");
+    setPendingTicketDraft("empty", pending);
+    setPendingTicketDraft("orphan", pending);
+    prunePendingTicketDrafts(
+      new Set(Object.keys(useComposerDraftStore.getState().draftThreadsByThreadKey)),
+    );
+    expect(usePendingTicketDrafts.getState().links).toEqual({ empty: pending });
+  });
+  it("promotion captures the link before pruning and retries from the captured target", async () => {
+    createDraft("promoted");
+    setPendingTicketDraft("promoted", pending);
+    mocks.run.mockResolvedValueOnce({ _tag: "Failure" });
+    finalizePromotedDraftThreadByRef({ environmentId, threadId });
+    expect(usePendingTicketDrafts.getState().links).toEqual({});
+    await vi.waitFor(() => expect(mocks.toast).toHaveBeenCalledTimes(1));
+    expect(mocks.run).toHaveBeenCalledTimes(1);
+    mocks.toast.mock.calls[0]![0].actionProps.onClick();
+    await vi.waitFor(() => expect(mocks.run).toHaveBeenCalledTimes(2));
+    expect(mocks.run.mock.calls[1]?.[2]).toEqual({
+      environmentId,
+      input: { id: ticketId, threadId, role: "work" },
+    });
     expect(usePendingTicketDrafts.getState().links).toEqual({});
   });
 });
