@@ -2,7 +2,7 @@
 
 import { Dialog as DialogPrimitive } from "@base-ui/react/dialog";
 import { useEffect, useState } from "react";
-import { useMediaQuery } from "~/hooks/useMediaQuery";
+import { useMobileFullscreen } from "~/hooks/useMobileFullscreen";
 import { XIcon } from "lucide-react";
 import { cn } from "~/lib/utils";
 import { Button } from "~/components/ui/button";
@@ -70,7 +70,7 @@ function DialogPopup({
   bottomStickOnMobile?: boolean;
   variant?: "default" | "media" | "mobile-fullscreen";
 }) {
-  const fullscreen = useMediaQuery("(max-width: 480px)") && variant === "mobile-fullscreen";
+  const fullscreen = useMobileFullscreen(variant === "mobile-fullscreen");
   const [viewport, setViewport] = useState<{ height: number; top: number } | null>(null);
   useEffect(() => {
     if (!fullscreen || !window.visualViewport) return;

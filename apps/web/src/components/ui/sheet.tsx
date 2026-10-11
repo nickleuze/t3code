@@ -1,7 +1,7 @@
 "use client";
 
 import { Dialog as SheetPrimitive } from "@base-ui/react/dialog";
-import { useMediaQuery } from "~/hooks/useMediaQuery";
+import { useMobileFullscreen } from "~/hooks/useMobileFullscreen";
 import { XIcon } from "lucide-react";
 import type { CSSProperties } from "react";
 import { cn } from "~/lib/utils";
@@ -70,7 +70,7 @@ function SheetPopup({
   side?: "right" | "left" | "top" | "bottom";
   variant?: "default" | "inset" | "mobile-fullscreen";
 }) {
-  const fullscreen = useMediaQuery("(max-width: 480px)") && variant === "mobile-fullscreen";
+  const fullscreen = useMobileFullscreen(variant === "mobile-fullscreen");
   const transitionStyle =
     transitionDurationMs === undefined
       ? undefined
