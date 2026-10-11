@@ -33,6 +33,7 @@ import { runtimeModeConfig, runtimeModeOptions } from "../chat/runtimeModeConfig
 import { launchLinkedTicketThread } from "./ticketLaunch";
 import { scheduledTaskDefaultModel } from "../settings/scheduledTasksSettings.logic";
 import { ProviderModelPicker } from "../chat/ProviderModelPicker";
+import { useMediaQuery } from "../../hooks/useMediaQuery";
 import { Button } from "../ui/button";
 import { Menu, MenuTrigger, MenuPopup, MenuItem } from "../ui/menu";
 import {
@@ -90,6 +91,7 @@ export function TicketStartWork({ entry }: { entry: EnvironmentTicket }) {
       setBusy(false);
     }
   };
+  const narrow = useMediaQuery("(max-width: 480px)");
   const start = (next: StartMode) => {
     if (busy || !canWrite) return;
     if (project && (next === "draft" || next === "goal")) {
@@ -102,7 +104,7 @@ export function TicketStartWork({ entry }: { entry: EnvironmentTicket }) {
     <>
       <div className="flex items-center gap-1">
         <Button
-          size="xs"
+          size={narrow ? "touch" : "xs"}
           variant="outline"
           disabled={busy || !canWrite}
           onClick={() => start("draft")}
@@ -113,7 +115,7 @@ export function TicketStartWork({ entry }: { entry: EnvironmentTicket }) {
           <MenuTrigger
             render={
               <Button
-                size="icon-xs"
+                size={narrow ? "icon-touch" : "icon-xs"}
                 variant="outline"
                 aria-label="Start work options"
                 disabled={busy || !canWrite}
@@ -123,10 +125,18 @@ export function TicketStartWork({ entry }: { entry: EnvironmentTicket }) {
             <ChevronDownIcon />
           </MenuTrigger>
           <MenuPopup>
-            <MenuItem onClick={() => start("draft")}>Draft</MenuItem>
-            <MenuItem onClick={() => start("launch")}>Launch now</MenuItem>
-            <MenuItem onClick={() => start("plan")}>Plan first</MenuItem>
-            <MenuItem onClick={() => start("goal")}>As goal</MenuItem>
+            <MenuItem density={narrow ? "phone" : "default"} onClick={() => start("draft")}>
+              Draft
+            </MenuItem>
+            <MenuItem density={narrow ? "phone" : "default"} onClick={() => start("launch")}>
+              Launch now
+            </MenuItem>
+            <MenuItem density={narrow ? "phone" : "default"} onClick={() => start("plan")}>
+              Plan first
+            </MenuItem>
+            <MenuItem density={narrow ? "phone" : "default"} onClick={() => start("goal")}>
+              As goal
+            </MenuItem>
           </MenuPopup>
         </Menu>
       </div>
@@ -155,6 +165,7 @@ function TicketStartDialog({
   onClose: () => void;
   onDraft: (ticket: Ticket) => Promise<void>;
 }) {
+  const narrow = useMediaQuery("(max-width: 480px)");
   const { environmentId, ticket } = entry;
   const canWrite = useTicketWriteAllowed(environmentId);
   const projects = useProjects().filter((p) => p.environmentId === environmentId);
@@ -282,7 +293,7 @@ function TicketStartDialog({
         if (!open && !pending) onClose();
       }}
     >
-      <DialogPopup>
+      <DialogPopup variant="mobile-fullscreen">
         <DialogHeader>
           <DialogTitle>
             {isDraft ? "Choose a project" : mode === "plan" ? "Plan first" : "Launch now"}
@@ -340,6 +351,7 @@ function TicketStartDialog({
                 <label className="grid gap-1.5">
                   <span>Base branch (optional)</span>
                   <Input
+                    size={narrow ? "touch" : "default"}
                     aria-label="Base branch"
                     placeholder="Current branch"
                     value={baseRef}
@@ -357,10 +369,16 @@ function TicketStartDialog({
           ) : null}
         </DialogPanel>
         <DialogFooter>
-          <Button variant="outline" disabled={pending} onClick={onClose}>
+          <Button
+            size={narrow ? "touch" : "default"}
+            variant="outline"
+            disabled={pending}
+            onClick={onClose}
+          >
             Cancel
           </Button>
           <Button
+            size={narrow ? "touch" : "default"}
             disabled={pending || !canWrite || !project || (!isDraft && !selection)}
             onClick={() => {
               void submit();

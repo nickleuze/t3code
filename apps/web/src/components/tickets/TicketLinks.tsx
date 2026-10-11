@@ -8,6 +8,7 @@ import { useThreadShells } from "../../state/entities";
 import { ticketEnvironment, useTicketWriteAllowed } from "../../state/tickets";
 import { useAtomCommand } from "../../state/use-atom-command";
 import { Badge } from "../ui/badge";
+import { useMediaQuery } from "../../hooks/useMediaQuery";
 import { Button } from "../ui/button";
 
 export function TicketLinks({
@@ -17,6 +18,7 @@ export function TicketLinks({
   entry: EnvironmentTicket;
   editable?: boolean;
 }) {
+  const narrow = useMediaQuery("(max-width: 480px)");
   const shells = useThreadShells();
   const canWrite = useTicketWriteAllowed(entry.environmentId);
   const navigate = useNavigate();
@@ -38,7 +40,7 @@ export function TicketLinks({
             <div className="min-w-0 flex-1">
               <button
                 type="button"
-                className="block w-full truncate text-left hover:underline disabled:text-muted-foreground"
+                className="block w-full truncate text-left hover:underline disabled:text-muted-foreground max-[480px]:min-h-11"
                 disabled={!thread}
                 onClick={() => {
                   void navigate({
@@ -56,7 +58,7 @@ export function TicketLinks({
             </span>
             {editable ? (
               <Button
-                size="xs"
+                size={narrow ? "touch" : "xs"}
                 variant="ghost"
                 aria-label={`Unlink ${thread?.title ?? link.threadId}`}
                 disabled={!canWrite}

@@ -13,6 +13,7 @@ import {
 } from "../../state/tickets";
 import { useAtomCommand } from "../../state/use-atom-command";
 import { Badge } from "../ui/badge";
+import { useMediaQuery } from "../../hooks/useMediaQuery";
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";
 import {
@@ -40,6 +41,7 @@ export function TicketIssueBadge({ entry }: { entry: EnvironmentTicket }) {
   const issue = entry.ticket.githubIssue;
   return supported && issue ? (
     <a
+      className="max-[480px]:flex max-[480px]:min-h-11 max-[480px]:items-center"
       href={issue.url}
       target="_blank"
       rel="noreferrer"
@@ -60,6 +62,7 @@ export function TicketGithubSection({
   unsaved: boolean;
 }) {
   const { environmentId, ticket } = entry;
+  const narrow = useMediaQuery("(max-width: 480px)");
   const supported = useTicketGithubSupported(environmentId);
   const projects = useProjects();
   const project = projects.find(
@@ -80,7 +83,7 @@ export function TicketGithubSection({
           <TicketIssueBadge entry={entry} />
           <Button
             variant="outline"
-            size="sm"
+            size={narrow ? "touch" : "sm"}
             disabled={!canUnlink || busy}
             onClick={() => {
               setError(null);
@@ -99,7 +102,7 @@ export function TicketGithubSection({
         <>
           <Button
             variant="outline"
-            size="sm"
+            size={narrow ? "touch" : "sm"}
             disabled={!canPublish || busy || unsaved}
             onClick={() => {
               setError(null);
@@ -132,6 +135,7 @@ export function TicketGithubSection({
 }
 
 export function TicketGithubBoardActions() {
+  const narrow = useMediaQuery("(max-width: 480px)");
   const ids = useAtomValue(ticketGithubEnvironmentIdsAtom);
   const projects = useProjects().filter(
     (p) => ids.includes(p.environmentId) && p.repositoryIdentity?.provider === "github",
@@ -148,7 +152,7 @@ export function TicketGithubBoardActions() {
         />
       ))}
       <Button
-        size="sm"
+        size={narrow ? "touch" : "sm"}
         variant="outline"
         disabled={projects.length === 0}
         onClick={() => setImportOpen(true)}
@@ -166,6 +170,7 @@ function TicketIssueRefresh({
   environmentId: EnvironmentTicket["environmentId"];
   multiple: boolean;
 }) {
+  const narrow = useMediaQuery("(max-width: 480px)");
   const canRefresh = useAtomValue(ticketEnvironment.refreshIssues.permissionAtom(environmentId));
   const refresh = useAtomCommand(ticketEnvironment.refreshIssues);
   const { environments } = useEnvironments();
@@ -179,7 +184,7 @@ function TicketIssueRefresh({
   const label = environments.find((e) => e.environmentId === environmentId)?.label ?? environmentId;
   return (
     <Button
-      size="sm"
+      size={narrow ? "touch" : "sm"}
       variant="outline"
       disabled={!canRefresh || busy}
       onClick={() => {

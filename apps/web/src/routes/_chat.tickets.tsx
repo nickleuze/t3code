@@ -24,7 +24,7 @@ import {
 import { SortableContext, useSortable, verticalListSortingStrategy } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
 import { ArrowUpRightIcon, ListFilterIcon, GripVerticalIcon } from "lucide-react";
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { WorkspacePageHeader } from "../components/WorkspacePageHeader";
 import { WorkspacePageContainer } from "../components/WorkspacePageContainer";
 import { SidebarInset } from "../components/ui/sidebar";
@@ -44,45 +44,21 @@ import { useEnvironments } from "../state/environments";
 import { allTicketsAtom, ticketEnvironmentIdsAtom, ticketEnvironment } from "../state/tickets";
 import { useAtomCommand } from "../state/use-atom-command";
 import { useEnvironmentQuery } from "../state/query";
+import { useMediaQuery } from "../hooks/useMediaQuery";
+import { scopeProjectRef } from "@t3tools/client-runtime/environment";
+import { parseTicketsSearch, ticketBoardColumns, type TicketsSearch } from "../ticketsSearch";
 import { isElectron } from "../env";
 
-export interface TicketsSearch {
-  environmentId?: EnvironmentId;
-  projectId?: ProjectId;
-  projectEnvironmentId?: EnvironmentId;
-  unassigned?: boolean;
-  search?: string;
-  showAllDone?: boolean;
-  showDropped?: boolean;
-  deleted?: boolean;
-  ticketId?: TicketId;
-  ticketEnvironmentId?: EnvironmentId;
-}
 export const Route = createFileRoute("/_chat/tickets")({
-  validateSearch: (search: Record<string, unknown>): TicketsSearch => ({
-    ...(typeof search.environmentId === "string"
-      ? { environmentId: EnvironmentId.make(search.environmentId) }
-      : {}),
-    ...(typeof search.projectId === "string"
-      ? { projectId: ProjectId.make(search.projectId) }
-      : {}),
-    ...(typeof search.projectEnvironmentId === "string"
-      ? { projectEnvironmentId: EnvironmentId.make(search.projectEnvironmentId) }
-      : {}),
-    ...(search.unassigned === true ? { unassigned: true } : {}),
-    ...(typeof search.search === "string" ? { search: search.search } : {}),
-    ...(search.showAllDone === true ? { showAllDone: true } : {}),
-    ...(search.showDropped === true ? { showDropped: true } : {}),
-    ...(search.deleted === true ? { deleted: true } : {}),
-    ...(typeof search.ticketId === "string" ? { ticketId: TicketId.make(search.ticketId) } : {}),
-    ...(typeof search.ticketEnvironmentId === "string"
-      ? { ticketEnvironmentId: EnvironmentId.make(search.ticketEnvironmentId) }
-      : {}),
-  }),
+  validateSearch: parseTicketsSearch,
   component: TicketsPage,
 });
 function TicketsPage() {
   const search = Route.useSearch();
+  const narrow = useMediaQuery("(max-width: 480px)");
+  const [activeStatus, setActiveStatus] = useState<TicketStatus>("inbox");
+  const [filtersOpen, setFiltersOpen] = useState(false);
+  const captureOpened = useRef(false);
   const [now] = useState(() => Date.now());
   const navigate = useNavigate();
   const ids = useAtomValue(ticketEnvironmentIdsAtom);
@@ -92,6 +68,34 @@ function TicketsPage() {
   const { environments } = useEnvironments();
   const upsert = useAtomCommand(ticketEnvironment.upsertTicket);
   const sensors = useSensors(useSensor(PointerSensor));
+  useEffect(() => {
+    if (!search.capture) {
+      captureOpened.current = false;
+      return;
+    }
+    if (captureOpened.current || !ids.length || loading) return;
+    captureOpened.current = true;
+    const project = projects.find(
+      (p) =>
+        p.id === search.project &&
+        ids.includes(p.environmentId) &&
+        (!search.environmentId || p.environmentId === search.environmentId),
+    );
+    openTicketCapture(
+      project ? { projectRef: scopeProjectRef(project.environmentId, project.id) } : {},
+    );
+    const { capture: _capture, project: _project, ...rest } = search;
+    void navigate({ to: "/tickets", search: rest, replace: true });
+  }, [search, ids, loading, projects, navigate]);
+  useEffect(() => {
+    const manifest = document.querySelector<HTMLLinkElement>('link[rel="manifest"]');
+    if (!manifest) return;
+    const previous = manifest.getAttribute("href");
+    manifest.href = "/tickets-capture.webmanifest";
+    return () => {
+      if (previous !== null) manifest.setAttribute("href", previous);
+    };
+  }, []);
   const setFilters = (patch: { [K in keyof TicketsSearch]?: TicketsSearch[K] | undefined }) => {
     const next: TicketsSearch = { ...search };
     for (const key of Object.keys(patch) as (keyof TicketsSearch)[]) {
@@ -166,9 +170,9 @@ function TicketsPage() {
     <SidebarInset>
       <WorkspacePageHeader electron={isElectron}>
         <h1 className="flex-1 text-sm font-medium">Tickets</h1>
-        <TicketGithubBoardActions />
+        {!narrow ? <TicketGithubBoardActions /> : null}
         {ids.length ? (
-          <Button size="sm" onClick={() => openTicketCapture()}>
+          <Button size={narrow ? "touch" : "sm"} onClick={() => openTicketCapture()}>
             New ticket
           </Button>
         ) : null}
@@ -184,8 +188,36 @@ function TicketsPage() {
             </div>
           ) : (
             <>
-              <div className="flex flex-wrap items-end gap-3">
-                <div className="min-w-48 flex-1">
+              {narrow ? (
+                <div className="flex items-center gap-2">
+                  <div className="min-w-0 flex-1">
+                    <Input
+                      size="touch"
+                      aria-label="Search tickets"
+                      type="search"
+                      placeholder="Search tickets…"
+                      value={search.search ?? ""}
+                      onChange={(event) => setFilters({ search: event.target.value })}
+                    />
+                  </div>
+                  <Button
+                    size="touch"
+                    variant="outline"
+                    aria-expanded={filtersOpen}
+                    aria-controls="ticket-filters"
+                    onClick={() => setFiltersOpen(!filtersOpen)}
+                  >
+                    Filters
+                  </Button>
+                </div>
+              ) : null}
+              <div
+                id="ticket-filters"
+                hidden={narrow && !filtersOpen}
+                className="flex flex-wrap items-end gap-3 max-[480px]:flex-col max-[480px]:items-stretch"
+              >
+                {narrow ? <TicketGithubBoardActions /> : null}
+                <div hidden={narrow} className="min-w-48 flex-1">
                   <Input
                     aria-label="Search tickets"
                     type="search"
@@ -253,14 +285,14 @@ function TicketsPage() {
                 />
                 <Button
                   variant="outline"
-                  size="sm"
+                  size={narrow ? "touch" : "sm"}
                   onClick={() => setFilters({ showDropped: !search.showDropped })}
                 >
                   {search.showDropped ? "Hide dropped" : "Show dropped"}
                 </Button>
                 <Button
                   variant="outline"
-                  size="sm"
+                  size={narrow ? "touch" : "sm"}
                   onClick={() => setFilters({ deleted: !search.deleted })}
                 >
                   {search.deleted ? "Back to board" : "Recently deleted"}
@@ -278,7 +310,7 @@ function TicketsPage() {
                   .map((id) => <DeletedTickets key={id} environmentId={id} search={search} />)
               ) : (
                 <DndContext
-                  sensors={sensors}
+                  sensors={narrow ? [] : sensors}
                   collisionDetection={(args) => {
                     const hits = pointerWithin(args);
                     const cards = hits.filter(
@@ -292,17 +324,49 @@ function TicketsPage() {
                     void drop(event);
                   }}
                 >
+                  {narrow ? (
+                    <div
+                      role="group"
+                      aria-label="Ticket status"
+                      className="flex gap-0.5 overflow-x-auto pb-1"
+                    >
+                      {[...TICKET_COLUMNS, ...(search.showDropped ? ["dropped" as const] : [])].map(
+                        (status) => (
+                          <Button
+                            key={status}
+                            size="touch-sm"
+                            variant={
+                              ticketBoardColumns(!!search.showDropped, true, activeStatus)[0] ===
+                              status
+                                ? "default"
+                                : "ghost"
+                            }
+                            aria-pressed={
+                              ticketBoardColumns(!!search.showDropped, true, activeStatus)[0] ===
+                              status
+                            }
+                            onClick={() => setActiveStatus(status)}
+                          >
+                            {TICKET_STATUS_LABELS[status]}
+                          </Button>
+                        ),
+                      )}
+                    </div>
+                  ) : null}
                   <div
                     className="grid gap-3"
                     style={{
-                      gridTemplateColumns: `repeat(${search.showDropped ? 6 : 5}, minmax(170px, 1fr))`,
+                      gridTemplateColumns: narrow
+                        ? "minmax(0, 1fr)"
+                        : `repeat(${search.showDropped ? 6 : 5}, minmax(170px, 1fr))`,
                     }}
                   >
-                    {[...TICKET_COLUMNS, ...(search.showDropped ? ["dropped" as const] : [])].map(
+                    {ticketBoardColumns(!!search.showDropped, narrow, activeStatus).map(
                       (status) => (
                         <TicketColumn
                           key={status}
                           status={status}
+                          narrow={narrow}
                           entries={groups[status]}
                           showAllDone={search.showAllDone === true}
                           onShowAll={() => setFilters({ showAllDone: !search.showAllDone })}
@@ -330,6 +394,7 @@ function TicketsPage() {
 }
 function TicketColumn({
   status,
+  narrow,
   entries,
   showAllDone,
   onShowAll,
@@ -337,13 +402,18 @@ function TicketColumn({
   multipleEnvironments,
 }: {
   status: TicketStatus;
+  narrow: boolean;
   entries: EnvironmentTicket[];
   showAllDone: boolean;
   onShowAll: () => void;
   onOpen: (entry: EnvironmentTicket) => void;
   multipleEnvironments: boolean;
 }) {
-  const { setNodeRef, isOver } = useDroppable({ id: `column:${status}`, data: { status } });
+  const { setNodeRef, isOver } = useDroppable({
+    id: `column:${status}`,
+    data: { status },
+    disabled: narrow,
+  });
   return (
     <section
       ref={setNodeRef}
@@ -356,7 +426,7 @@ function TicketColumn({
           <span className="text-muted-foreground">{entries.length}</span>
         </h2>
         {status === "done" ? (
-          <Button size="xs" variant="ghost" onClick={onShowAll}>
+          <Button size={narrow ? "touch" : "xs"} variant="ghost" onClick={onShowAll}>
             {showAllDone ? "Last 14 days" : "Show all"}
           </Button>
         ) : null}
@@ -368,6 +438,7 @@ function TicketColumn({
               key={ticketEntryKey(entry)}
               entry={entry}
               status={status}
+              narrow={narrow}
               onOpen={() => onOpen(entry)}
               multipleEnvironments={multipleEnvironments}
             />
@@ -383,17 +454,19 @@ function TicketColumn({
 function TicketCard({
   entry,
   status,
+  narrow,
   onOpen,
   multipleEnvironments,
 }: {
   entry: EnvironmentTicket;
   status: TicketStatus;
+  narrow: boolean;
   onOpen: () => void;
   multipleEnvironments: boolean;
 }) {
   const canWrite = useTicketWriteAllowed(entry.environmentId);
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
-    disabled: !canWrite,
+    disabled: narrow || !canWrite,
     id: ticketEntryKey(entry),
     data: { status, kind: "ticket" },
   });
@@ -424,7 +497,7 @@ function TicketCard({
             <TooltipPopup>Moved by linked work</TooltipPopup>
           </Tooltip>
         ) : null}
-        <div className="ml-auto">
+        <div hidden={narrow} className="ml-auto">
           <Button
             variant="ghost"
             size="icon-xs"
@@ -444,7 +517,7 @@ function TicketCard({
       ) : null}
       <button
         type="button"
-        className="text-left text-sm font-medium wrap-anywhere hover:underline"
+        className="text-left text-sm font-medium wrap-anywhere hover:underline max-[480px]:min-h-11"
         onClick={onOpen}
       >
         {entry.ticket.title}
@@ -461,7 +534,7 @@ function TicketCard({
           <MenuTrigger
             render={
               <Button
-                size="icon-xs"
+                size={narrow ? "icon-touch" : "icon-xs"}
                 variant="ghost"
                 disabled={!canWrite}
                 aria-label={`Set status for ${entry.ticket.title}`}
@@ -474,6 +547,7 @@ function TicketCard({
             {Object.entries(TICKET_STATUS_LABELS).map(([value, label]) => (
               <MenuItem
                 key={value}
+                density={narrow ? "phone" : "default"}
                 onClick={() => {
                   void upsert({
                     environmentId: entry.environmentId,
@@ -505,6 +579,7 @@ function DeletedTickets({
   search: TicketsSearch;
 }) {
   const [now] = useState(() => Date.now());
+  const narrow = useMediaQuery("(max-width: 480px)");
   const canWrite = useTicketWriteAllowed(environmentId);
   const projects = useProjects();
   const { environments } = useEnvironments();
@@ -536,7 +611,7 @@ function DeletedTickets({
         {environments.find((e) => e.environmentId === environmentId)?.label ?? environmentId}
       </h2>
       {query.error ? <p role="alert">{query.error}</p> : null}
-      <Button size="sm" variant="outline" onClick={query.refresh}>
+      <Button size={narrow ? "touch" : "sm"} variant="outline" onClick={query.refresh}>
         Refresh
       </Button>
       {!query.data ? (
@@ -551,7 +626,7 @@ function DeletedTickets({
         >
           <span>{entry.ticket.title}</span>
           <Button
-            size="sm"
+            size={narrow ? "touch" : "sm"}
             variant="outline"
             disabled={!canWrite}
             onClick={() => {

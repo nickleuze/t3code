@@ -7,6 +7,7 @@ import { useState } from "react";
 import { useProjects, useThreadShells } from "../../state/entities";
 import { ticketEnvironment } from "../../state/tickets";
 import { useAtomCommand } from "../../state/use-atom-command";
+import { useMediaQuery } from "../../hooks/useMediaQuery";
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";
 import { Textarea } from "../ui/textarea";
@@ -39,6 +40,7 @@ export function TicketDetail({
   );
   const [pickedStatus, setStatus] = useState<TicketStatus | null>(null);
   const [edited, setEdited] = useState({ title: false, body: false, project: false });
+  const narrow = useMediaQuery("(max-width: 480px)");
   const [busy, setBusy] = useState(false);
   const upsert = useAtomCommand(ticketEnvironment.upsertTicket);
   const remove = useAtomCommand(ticketEnvironment.deleteTicket);
@@ -89,7 +91,7 @@ export function TicketDetail({
         if (!open && !busy) onClose();
       }}
     >
-      <SheetPopup>
+      <SheetPopup variant="mobile-fullscreen">
         <SheetHeader>
           <SheetTitle>Ticket</SheetTitle>
           <SheetDescription>Edit this idea and see its linked work.</SheetDescription>
@@ -99,6 +101,7 @@ export function TicketDetail({
             <label className="grid gap-1.5">
               <span>Title</span>
               <Input
+                size={narrow ? "touch" : "default"}
                 aria-label="Ticket title"
                 disabled={busy}
                 value={edited.title ? title : ticket.title}
@@ -150,6 +153,7 @@ export function TicketDetail({
               onChange={(value) => setStatus(value as TicketStatus)}
             />
             <Button
+              size={narrow ? "touch" : "default"}
               disabled={!canWrite || busy || !title.trim()}
               onClick={() => {
                 void save();
@@ -171,6 +175,7 @@ export function TicketDetail({
         </div>
         <div className="flex justify-end p-6">
           <Button
+            size={narrow ? "touch" : "default"}
             variant="destructive"
             disabled={!canWrite || busy}
             onClick={() => {

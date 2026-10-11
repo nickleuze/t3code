@@ -1,3 +1,4 @@
+import { useMediaQuery } from "../../hooks/useMediaQuery";
 import { Select, SelectTrigger, SelectValue, SelectContent, SelectItem } from "../ui/select";
 export function TicketPicker({
   label,
@@ -12,6 +13,7 @@ export function TicketPicker({
   onChange: (value: string) => void;
   disabled?: boolean;
 }) {
+  const narrow = useMediaQuery("(max-width: 480px)");
   return (
     <label className="grid gap-1.5">
       <span className="text-xs text-muted-foreground">{label}</span>
@@ -23,12 +25,16 @@ export function TicketPicker({
         disabled={disabled}
         items={options}
       >
-        <SelectTrigger aria-label={label}>
+        <SelectTrigger size={narrow ? "touch" : "default"} aria-label={label}>
           <SelectValue />
         </SelectTrigger>
         <SelectContent>
           {options.map((option) => (
-            <SelectItem key={option.value} value={option.value}>
+            <SelectItem
+              density={narrow ? "phone" : "default"}
+              key={option.value}
+              value={option.value}
+            >
               {option.label}
             </SelectItem>
           ))}

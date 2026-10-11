@@ -1,6 +1,7 @@
 "use client";
 
 import { Dialog as SheetPrimitive } from "@base-ui/react/dialog";
+import { useMediaQuery } from "~/hooks/useMediaQuery";
 import { XIcon } from "lucide-react";
 import type { CSSProperties } from "react";
 import { cn } from "~/lib/utils";
@@ -32,7 +33,7 @@ function SheetViewport({
   ...props
 }: SheetPrimitive.Viewport.Props & {
   side?: "right" | "left" | "top" | "bottom";
-  variant?: "default" | "inset";
+  variant?: "default" | "inset" | "mobile-fullscreen";
 }) {
   return (
     <SheetPrimitive.Viewport
@@ -43,6 +44,7 @@ function SheetViewport({
         side === "left" && "flex justify-start",
         side === "right" && "flex justify-end",
         variant === "inset" && "sm:p-4",
+        variant === "mobile-fullscreen" && "max-[480px]:z-50",
         className,
       )}
       data-slot="sheet-viewport"
@@ -66,8 +68,9 @@ function SheetPopup({
   keepMounted?: boolean;
   transitionDurationMs?: number;
   side?: "right" | "left" | "top" | "bottom";
-  variant?: "default" | "inset";
+  variant?: "default" | "inset" | "mobile-fullscreen";
 }) {
+  const fullscreen = useMediaQuery("(max-width: 480px)") && variant === "mobile-fullscreen";
   const transitionStyle =
     transitionDurationMs === undefined
       ? undefined
@@ -77,11 +80,11 @@ function SheetPopup({
   return (
     <SheetPortal keepMounted={keepMounted}>
       <SheetBackdrop
-        className={
-          instant
-            ? "transition-none! data-ending-style:opacity-100! data-starting-style:opacity-100!"
-            : undefined
-        }
+        className={cn(
+          fullscreen && "z-50",
+          instant &&
+            "transition-none! data-ending-style:opacity-100! data-starting-style:opacity-100!",
+        )}
         style={transitionStyle}
       />
       <SheetViewport side={side} variant={variant}>
@@ -98,6 +101,8 @@ function SheetPopup({
               "col-start-2 w-[calc(100%-(--spacing(12)))] max-w-md border-s data-ending-style:translate-x-8 data-starting-style:translate-x-8",
             variant === "inset" &&
               "before:hidden sm:rounded-2xl sm:border sm:before:rounded-[calc(var(--radius-2xl)-1px)] sm:**:data-[slot=sheet-footer]:rounded-b-[calc(var(--radius-2xl)-1px)]",
+            fullscreen &&
+              "col-start-1 w-full max-w-none border-0 pt-[env(safe-area-inset-top)] pb-[env(safe-area-inset-bottom)]",
             instant &&
               "transition-none! will-change-auto! data-ending-style:translate-x-0! data-starting-style:translate-x-0! data-ending-style:translate-y-0! data-starting-style:translate-y-0! data-ending-style:opacity-100! data-starting-style:opacity-100!",
             className,
@@ -110,8 +115,11 @@ function SheetPopup({
           {showCloseButton && (
             <SheetPrimitive.Close
               aria-label="Close"
-              className="absolute end-2 top-2"
-              render={<Button size="icon" variant="ghost" />}
+              className={cn(
+                "absolute end-2 top-2",
+                fullscreen && "top-[calc(env(safe-area-inset-top)+0.5rem)]",
+              )}
+              render={<Button size={fullscreen ? "icon-touch" : "icon"} variant="ghost" />}
             >
               <XIcon />
             </SheetPrimitive.Close>

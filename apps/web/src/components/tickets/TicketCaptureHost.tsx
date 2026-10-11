@@ -10,6 +10,7 @@ import { useProjects } from "../../state/entities";
 import { useEnvironments } from "../../state/environments";
 import { ticketEnvironment, ticketEnvironmentIdsAtom } from "../../state/tickets";
 import { useAtomCommand } from "../../state/use-atom-command";
+import { useMediaQuery } from "../../hooks/useMediaQuery";
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";
 import { Textarea } from "../ui/textarea";
@@ -58,6 +59,7 @@ export function TicketCaptureHost() {
   ) : null;
 }
 function TicketCaptureDialog() {
+  const narrow = useMediaQuery("(max-width: 480px)");
   const request = useTicketCapture((state) => state.request)!;
   const environmentIds = useAtomValue(ticketEnvironmentIdsAtom);
   const projects = useProjects();
@@ -166,8 +168,9 @@ function TicketCaptureDialog() {
         if (!open && !busy) close();
       }}
     >
-      <DialogPopup initialFocus={input}>
+      <DialogPopup variant="mobile-fullscreen" initialFocus={input}>
         <form
+          className={narrow ? "contents" : undefined}
           onSubmit={(event) => {
             event.preventDefault();
             void save(false);
@@ -181,6 +184,7 @@ function TicketCaptureDialog() {
             <label className="grid gap-1.5">
               <span>Title</span>
               <Input
+                size={narrow ? "touch" : "default"}
                 ref={input}
                 autoFocus
                 aria-label="Title"
@@ -231,6 +235,7 @@ function TicketCaptureDialog() {
           </DialogPanel>
           <DialogFooter>
             <Button
+              size={narrow ? "touch" : "default"}
               variant="outline"
               type="button"
               disabled={busy || !canWrite}
@@ -240,7 +245,11 @@ function TicketCaptureDialog() {
             >
               Save &amp; add another
             </Button>
-            <Button type="submit" disabled={busy || !canWrite || !title.trim()}>
+            <Button
+              size={narrow ? "touch" : "default"}
+              type="submit"
+              disabled={busy || !canWrite || !title.trim()}
+            >
               Save ticket
             </Button>
           </DialogFooter>

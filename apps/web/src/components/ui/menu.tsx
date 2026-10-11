@@ -79,7 +79,7 @@ function MenuItem({
   ...props
 }: MenuPrimitive.Item.Props & {
   inset?: boolean;
-  density?: "default" | "touch";
+  density?: "default" | "touch" | "phone";
   variant?: "default" | "destructive" | "ghost";
 }) {
   return (
@@ -93,6 +93,7 @@ function MenuItem({
             className: "h-auto min-h-7 w-full sm:text-xs",
           }),
         density === "touch" && "min-h-10 sm:min-h-10",
+        density === "phone" && "min-h-11 sm:min-h-11",
         className,
       )}
       data-density={density}
@@ -273,7 +274,7 @@ function MenuSubTrigger({
   ...props
 }: MenuPrimitive.SubmenuTrigger.Props & {
   inset?: boolean;
-  density?: "default" | "touch";
+  density?: "default" | "touch" | "phone";
 }) {
   return (
     <MenuPrimitive.SubmenuTrigger
@@ -285,6 +286,7 @@ function MenuSubTrigger({
         // only one, and these rules would take away its `ms-auto` alignment.
         "[&>svg:not(:last-child)]:-mx-0.5 flex min-h-8 cursor-pointer items-center gap-2 rounded-sm px-2 py-1 text-base text-foreground outline-none data-disabled:cursor-not-allowed data-disabled:pointer-events-none data-highlighted:bg-accent data-popup-open:bg-accent data-inset:ps-8 data-highlighted:text-accent-foreground data-popup-open:text-accent-foreground data-disabled:opacity-64 sm:min-h-7 sm:text-sm [&_svg:not([class*='size-'])]:size-4.5 sm:[&_svg:not([class*='size-'])]:size-4 [&_svg:not([class*='text-'])]:text-muted-foreground [&>svg:not(:last-child):not([class*='opacity-'])]:opacity-80 [&_svg]:pointer-events-none [&>svg]:shrink-0",
         density === "touch" && "min-h-10 sm:min-h-10",
+        density === "phone" && "min-h-11 sm:min-h-11",
         className,
       )}
       data-density={density}
