@@ -252,7 +252,11 @@ export const make = Effect.gen(function* () {
           originThreadId:
             existing === undefined ? (input.originThreadId ?? null) : existing.originThreadId,
           githubIssue: existing?.githubIssue ?? null,
-          links: existing?.links ?? [],
+          links:
+            existing?.links ??
+            (input.creationSource === "mcp" && input.originThreadId != null
+              ? [{ threadId: input.originThreadId, role: "origin", linkedAt: timestamp }]
+              : []),
           createdAt: existing?.createdAt ?? timestamp,
           updatedAt: timestamp,
           deletedAt: null,
@@ -276,6 +280,14 @@ export const make = Effect.gen(function* () {
         };
         yield* sql`INSERT INTO fork_tickets ${sql.insert(row)}
       ON CONFLICT (ticket_id) DO UPDATE SET ${sql.update(row)}`;
+        // MCP creation and its origin link share the receipt transaction. A retry
+        // must not restore an unlinked origin or downgrade a later work link.
+        if (existing === undefined) {
+          for (const link of ticket.links) {
+            yield* sql`INSERT INTO fork_ticket_links (ticket_id, thread_id, role, linked_at)
+          VALUES (${id}, ${link.threadId}, ${link.role}, ${link.linkedAt})`;
+          }
+        }
         const result = { ticket };
         if (input.commandId !== undefined) {
           yield* sql`INSERT INTO fork_ticket_commands (command_id, ticket_id, result_json)

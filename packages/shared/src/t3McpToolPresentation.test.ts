@@ -3,6 +3,19 @@ import { describe, expect, it } from "vite-plus/test";
 import { T3_MCP_TOOL_NAMES, resolveT3McpToolPresentation } from "./t3McpToolPresentation.ts";
 
 describe("resolveT3McpToolPresentation", () => {
+  it("presents ticket tools with the shared T3 branding", () => {
+    for (const [name, displayName] of [
+      ["t3_ticket_create", "File a T3 ticket"],
+      ["t3_ticket_list", "List T3 tickets"],
+      ["t3_ticket_update", "Update a T3 ticket"],
+      ["t3_ticket_link_thread", "Update a ticket's thread link"],
+    ]) {
+      expect(resolveT3McpToolPresentation(`mcp__t3-code__${name}`)).toEqual({
+        displayName,
+        logo: "t3-code",
+      });
+    }
+  });
   it("recognizes every T3 tool across provider prefixes and completion suffixes", () => {
     for (const tool of T3_MCP_TOOL_NAMES) {
       const presentation = resolveT3McpToolPresentation(tool);

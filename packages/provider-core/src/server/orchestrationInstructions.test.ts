@@ -26,6 +26,26 @@ describe("T3 orchestration provider instructions", () => {
     assert.include(T3_CODE_ORCHESTRATION_INSTRUCTIONS, "bindToCurrentThread=false");
   });
 
+  it("shares bounded backlog guidance across system, first-run and ACP prompts", () => {
+    const prompts = [
+      t3OrchestrationSystemPrompt(true),
+      t3OrchestrationPromptForFirstRun({ prompt: "Continue", runOrdinal: 1, hasT3Mcp: true }),
+      t3AcpPromptWithInstructions({
+        prompt: "Continue",
+        state: { interactionMode: "default", hasT3Mcp: true },
+      }),
+    ];
+    for (const prompt of prompts) {
+      assert.include(prompt, "T3 tickets are the user's backlog");
+      assert.include(prompt, "outside your current task");
+      assert.include(prompt, "a few at most per turn, mentioned in your reply");
+      assert.include(prompt, "`t3_ticket_create`");
+      assert.include(prompt, "`t3_ticket_list`");
+      assert.include(prompt, "`t3_ticket_link_thread`");
+      assert.include(prompt, "link your PR as usual");
+    }
+  });
+
   it("injects prompt fallback only for an MCP-enabled first run", () => {
     const prompt = "Inspect the repository.";
     const injected = t3OrchestrationPromptForFirstRun({
