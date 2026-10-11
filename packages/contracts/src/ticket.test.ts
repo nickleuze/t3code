@@ -62,6 +62,17 @@ describe("ticket contracts", () => {
       expect(() => decodeUpsert({ ...input, ...extra })).toThrow();
     }
   });
+  it("accepts minimal creates and partial updates without supplying defaults", () => {
+    for (const input of [
+      { title: "Capture" },
+      { id: ticket.id, status: "ready" },
+      { id: ticket.id, body: "" },
+      { id: ticket.id, projectId: null, sortKey: 0 },
+      {}, // Missing create titles are reported by the service as TicketError.
+    ]) {
+      expect(decodeUpsert(input)).toEqual(input);
+    }
+  });
   it("keeps the tickets capability optional for older environments", () => {
     expect(decodeCapability({})).toEqual({});
     expect(decodeCapability({ tickets: true })).toEqual({ tickets: true });

@@ -214,18 +214,39 @@ export const make = Effect.gen(function* () {
             ticketId: id,
           });
         }
-        if (input.projectId !== null && Option.isNone(yield* projects.get(input.projectId))) {
+        const title = input.title ?? existing?.title;
+        if (title === undefined) {
+          return yield* new TicketError({
+            message: "Title is required to create a ticket.",
+            ticketId: id,
+          });
+        }
+        if (
+          input.projectId !== undefined &&
+          input.projectId !== null &&
+          Option.isNone(yield* projects.get(input.projectId))
+        ) {
           return yield* new TicketError({ message: "Project not found.", ticketId: id });
+        }
+        let sortKey = input.sortKey ?? existing?.sortKey;
+        if (sortKey === undefined) {
+          const rows = yield* sql<{ minSortKey: number | null }>`
+            SELECT MIN(sort_key) AS "minSortKey" FROM fork_tickets
+            WHERE status = 'inbox' AND deleted_at IS NULL
+          `;
+          const minSortKey = rows[0]?.minSortKey;
+          sortKey = minSortKey == null ? 0 : minSortKey - 1;
         }
         const ticket: Ticket = {
           id,
-          projectId: input.projectId,
-          title: input.title,
-          body: input.body,
+          projectId:
+            input.projectId === undefined ? (existing?.projectId ?? null) : input.projectId,
+          title,
+          body: input.body ?? existing?.body ?? "",
           status: input.status ?? existing?.status ?? "inbox",
           statusSetAt:
             input.status === undefined ? (existing?.statusSetAt ?? timestamp) : timestamp,
-          sortKey: input.sortKey,
+          sortKey,
           createdBy: existing?.createdBy ?? input.createdBy ?? "user",
           creationSource: existing?.creationSource ?? input.creationSource ?? "web",
           originThreadId:

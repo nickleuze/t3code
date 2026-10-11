@@ -77,12 +77,13 @@ export const TicketUpsertInput = Schema.Struct({
   id: Schema.optional(TicketId),
   requireExisting: Schema.optional(Schema.Boolean),
   commandId: Schema.optional(CommandId),
-  projectId: Schema.NullOr(ProjectId),
-  title: TrimmedNonEmptyString,
-  body: Schema.String,
+  // Creates require a title; updates only change provided editable fields.
+  projectId: Schema.optional(Schema.NullOr(ProjectId)),
+  title: Schema.optional(TrimmedNonEmptyString),
+  body: Schema.optional(Schema.String),
   // Explicit status records a manual override, even if it equals the stored status.
   status: Schema.optional(TicketStatus),
-  sortKey: Schema.Number.check(Schema.isFinite()),
+  sortKey: Schema.optional(Schema.Number.check(Schema.isFinite())),
   createdBy: Schema.optional(TicketCreatedBy),
   creationSource: Schema.optional(TicketCreationSource),
   originThreadId: Schema.optional(Schema.NullOr(ThreadId)),

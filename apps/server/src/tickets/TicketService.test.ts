@@ -43,6 +43,73 @@ const fail = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
     }),
   );
 
+it.effect("creates with defaults and puts new tickets first in the active inbox", () =>
+  Effect.gen(function* () {
+    const service = yield* Tickets.TicketService;
+    const error = yield* fail(service.upsert({}));
+    assert.equal(error.message, "Title is required to create a ticket.");
+    assert.deepStrictEqual((yield* service.list()).tickets, []);
+    const first = (yield* service.upsert({ title: "First" })).ticket;
+    assert.equal(first.body, "");
+    assert.equal(first.projectId, null);
+    assert.equal(first.status, "inbox");
+    assert.equal(first.sortKey, 0);
+    assert.equal(first.statusSetAt, first.createdAt);
+    const second = (yield* service.upsert({ title: "Second" })).ticket;
+    assert.equal(second.sortKey, -1);
+    yield* service.upsert({ title: "Other column", status: "ready", sortKey: -100 });
+    const deleted = (yield* service.upsert({ title: "Deleted", sortKey: -200 })).ticket;
+    yield* service.delete({ id: deleted.id });
+    const third = (yield* service.upsert({ title: "Third" })).ticket;
+    assert.equal(third.sortKey, -2);
+  }).pipe(Effect.provide(layer)),
+);
+
+it.effect("partial updates preserve omitted fields and allow clearing fields", () =>
+  Effect.gen(function* () {
+    const service = yield* Tickets.TicketService;
+    const created = (yield* service.upsert(input)).ticket;
+    yield* TestClock.adjust("1 second");
+    const edited = (yield* service.upsert({ id: created.id, title: "Updated" })).ticket;
+    assert.deepStrictEqual(edited, { ...created, title: "Updated", updatedAt: edited.updatedAt });
+    assert.notEqual(edited.updatedAt, created.updatedAt);
+    const bodyEdit = (yield* service.upsert({ id: created.id, body: "Another device's edit" }))
+      .ticket;
+    assert.deepStrictEqual(bodyEdit, { ...edited, body: "Another device's edit" });
+    const cleared = (yield* service.upsert({
+      id: created.id,
+      body: "",
+      sortKey: 0,
+      projectId: null,
+    })).ticket;
+    assert.deepStrictEqual(cleared, { ...bodyEdit, body: "", sortKey: 0, projectId: null });
+  }).pipe(Effect.provide(layer)),
+);
+
+it.effect("status-only updates record manual overrides even for the same status", () =>
+  Effect.gen(function* () {
+    const service = yield* Tickets.TicketService;
+    const created = (yield* service.upsert(input)).ticket;
+    yield* TestClock.adjust("1 second");
+    const same = (yield* service.upsert({ id: created.id, status: created.status })).ticket;
+    assert.notEqual(same.statusSetAt, created.statusSetAt);
+    assert.deepStrictEqual(same, {
+      ...created,
+      statusSetAt: same.updatedAt,
+      updatedAt: same.updatedAt,
+    });
+    yield* TestClock.adjust("1 second");
+    const review = (yield* service.upsert({ id: created.id, status: "in_review" })).ticket;
+    assert.notEqual(review.statusSetAt, same.statusSetAt);
+    assert.deepStrictEqual(review, {
+      ...same,
+      status: "in_review",
+      statusSetAt: review.updatedAt,
+      updatedAt: review.updatedAt,
+    });
+  }).pipe(Effect.provide(layer)),
+);
+
 it.effect("CRUD preserves creation metadata and records explicit status overrides", () =>
   Effect.gen(function* () {
     const service = yield* Tickets.TicketService;
@@ -86,7 +153,7 @@ it.effect("soft deletes, refuses edits/links while deleted, and restores links",
     const deleted = (yield* service.list({ includeDeleted: true })).tickets[0]!;
     assert.ok(deleted.deletedAt !== null);
     assert.equal(deleted.links.length, 1);
-    yield* fail(service.upsert({ ...input, id: ticket.id }));
+    yield* fail(service.upsert({ id: ticket.id, status: "ready" }));
     yield* fail(service.link({ id: ticket.id, threadId, role: "origin" }));
     yield* service.delete({ id: ticket.id });
     const restored = (yield* service.restore({ id: ticket.id })).ticket;
@@ -120,23 +187,44 @@ it.effect("links unknown threads once, changes role without relinking, and unlin
   }).pipe(Effect.provide(layer)),
 );
 
+it.effect("rejects new links to soft-deleted tickets without persisting them", () =>
+  Effect.gen(function* () {
+    const service = yield* Tickets.TicketService;
+    const sql = yield* SqlClient.SqlClient;
+    const { ticket } = yield* service.upsert({ title: "Deleted" });
+    yield* service.delete({ id: ticket.id });
+    const deleted = (yield* service.list({ includeDeleted: true })).tickets[0]!;
+    for (const role of ["origin", "work"] as const) {
+      const error = yield* fail(
+        service.link({ id: ticket.id, threadId: ThreadId.make(role), role }),
+      );
+      assert.equal(error.message, "Ticket not found.");
+      assert.equal(error.ticketId, ticket.id);
+    }
+    assert.deepStrictEqual(
+      yield* sql`SELECT * FROM fork_ticket_links WHERE ticket_id = ${ticket.id}`,
+      [],
+    );
+    assert.deepStrictEqual((yield* service.list({ includeDeleted: true })).tickets, [deleted]);
+  }).pipe(Effect.provide(layer)),
+);
+
 it.effect("commandId replays creates and updates without overwriting later edits", () =>
   Effect.gen(function* () {
     const service = yield* Tickets.TicketService;
-    const create = { ...input, commandId: CommandId.make("create") };
+    const create = { title: "Build tickets", commandId: CommandId.make("create") };
     const first = yield* service.upsert(create);
     yield* TestClock.adjust("1 second");
     assert.deepStrictEqual(yield* service.upsert(create), first);
     assert.equal((yield* service.list()).tickets.length, 1);
     const update = {
-      ...input,
       id: first.ticket.id,
       commandId: CommandId.make("update"),
       status: "in_review" as const,
     };
     const changed = yield* service.upsert(update);
     yield* TestClock.adjust("1 second");
-    const latest = yield* service.upsert({ ...input, id: first.ticket.id, status: "done" });
+    const latest = yield* service.upsert({ id: first.ticket.id, status: "done" });
     assert.deepStrictEqual(yield* service.upsert(update), changed);
     assert.deepStrictEqual((yield* service.list()).tickets, [latest.ticket]);
     // Receipts survive rebuilding the service over the same connection.
@@ -167,10 +255,25 @@ it.effect("validates active projects and requires existing rows when requested",
     yield* fail(service.upsert({ ...input, projectId }));
     yield* sql`INSERT INTO projection_projects (project_id, title, workspace_root, scripts_json, created_at, updated_at)
     VALUES (${projectId}, 'Project', '/tmp/tickets-project', '[]', '2026-10-11T00:00:00.000Z', '2026-10-11T00:00:00.000Z')`;
-    assert.equal((yield* service.upsert({ ...input, projectId })).ticket.projectId, projectId);
+    const created = (yield* service.upsert({ ...input, projectId })).ticket;
+    assert.equal(created.projectId, projectId);
     yield* sql`UPDATE projection_projects SET deleted_at = '2026-10-11T01:00:00.000Z' WHERE project_id = ${projectId}`;
+    const edited = (yield* service.upsert({
+      id: created.id,
+      body: "Edited after project deletion",
+    })).ticket;
+    assert.equal(edited.projectId, projectId);
+    assert.equal(edited.body, "Edited after project deletion");
+    yield* fail(service.upsert({ id: created.id, projectId }));
+    assert.equal(
+      (yield* service.upsert({ id: created.id, projectId: null })).ticket.projectId,
+      null,
+    );
     yield* fail(service.upsert({ ...input, projectId }));
-    yield* fail(service.upsert({ ...input, id: TicketId.make("missing"), requireExisting: true }));
+    const missing = yield* fail(
+      service.upsert({ id: TicketId.make("missing"), requireExisting: true }),
+    );
+    assert.equal(missing.message, "Ticket not found. Restore deleted tickets before editing.");
     assert.equal((yield* service.upsert({ ...input, status: undefined })).ticket.status, "inbox");
   }).pipe(Effect.provide(layer)),
 );

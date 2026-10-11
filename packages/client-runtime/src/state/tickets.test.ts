@@ -104,7 +104,7 @@ it.effect("gates every command on tickets support before dispatch", () =>
       const operations = [
         h.atoms.upsertTicket.run(h.registry, {
           environmentId: env,
-          input: { title: "Title", body: "", projectId: null, sortKey: 0 },
+          input: { title: "Title" },
         }),
         h.atoms.deleteTicket.run(h.registry, { environmentId: env, input: { id: ticket.id } }),
         h.atoms.restoreTicket.run(h.registry, { environmentId: env, input: { id: ticket.id } }),
@@ -129,6 +129,18 @@ it.effect("gates every command on tickets support before dispatch", () =>
       }
       assert.equal(h.sent.length, support === true ? 5 : 0);
     }
+  }),
+);
+
+it.effect("dispatches partial upserts without filling in omitted fields", () =>
+  Effect.gen(function* () {
+    const h = yield* harness(true);
+    const input = { id: ticket.id, status: "in_review" as const };
+    yield* Effect.promise(async () => {
+      const result = await h.atoms.upsertTicket.run(h.registry, { environmentId: env, input });
+      assert.equal(result._tag, "Success");
+    });
+    assert.deepStrictEqual(h.sent, [{ tag: WS_METHODS.ticketsUpsert, input }]);
   }),
 );
 
