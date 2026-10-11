@@ -341,6 +341,19 @@ import {
   ScheduledTaskUpsertInput,
   ScheduledTaskMutationResult,
 } from "./scheduledTask.ts";
+import {
+  TicketDeleteInput,
+  TicketDeleteResult,
+  TicketError,
+  TicketListInput,
+  TicketListResult,
+  TicketSubscribeInput,
+  TicketUpsertInput,
+  TicketRestoreInput,
+  TicketLinkInput,
+  TicketUnlinkInput,
+  TicketMutationResult,
+} from "./ticket.ts";
 import { SecretRequestAnswerInput, SecretRequestError } from "./secretRequest.ts";
 import {
   ProjectCloneActionInput,
@@ -502,6 +515,15 @@ export const WS_METHODS = {
   serverGetBackgroundPolicy: "server.getBackgroundPolicy",
   serverGetUsageSummary: "server.getUsageSummary",
   serverRefreshUsageRates: "server.refreshUsageRates",
+
+  // Tickets
+  ticketsList: "tickets.list",
+  ticketsSubscribe: "tickets.subscribe",
+  ticketsUpsert: "tickets.upsert",
+  ticketsDelete: "tickets.delete",
+  ticketsRestore: "tickets.restore",
+  ticketsLink: "tickets.link",
+  ticketsUnlink: "tickets.unlink",
 
   // Scheduled tasks
   scheduledTasksList: "scheduledTasks.list",
@@ -1734,6 +1756,49 @@ const WsSubscribeServerLifecycleRpc = Rpc.make(WS_METHODS.subscribeServerLifecyc
   stream: true,
 });
 
+const WsTicketsListRpc = Rpc.make(WS_METHODS.ticketsList, {
+  payload: TicketListInput,
+  success: TicketListResult,
+  error: Schema.Union([TicketError, EnvironmentAuthorizationError]),
+});
+
+const WsTicketsSubscribeRpc = Rpc.make(WS_METHODS.ticketsSubscribe, {
+  payload: TicketSubscribeInput,
+  success: TicketListResult,
+  error: Schema.Union([TicketError, EnvironmentAuthorizationError]),
+  stream: true,
+});
+
+const WsTicketsUpsertRpc = Rpc.make(WS_METHODS.ticketsUpsert, {
+  payload: TicketUpsertInput,
+  success: TicketMutationResult,
+  error: Schema.Union([TicketError, EnvironmentAuthorizationError]),
+});
+
+const WsTicketsDeleteRpc = Rpc.make(WS_METHODS.ticketsDelete, {
+  payload: TicketDeleteInput,
+  success: TicketDeleteResult,
+  error: Schema.Union([TicketError, EnvironmentAuthorizationError]),
+});
+
+const WsTicketsRestoreRpc = Rpc.make(WS_METHODS.ticketsRestore, {
+  payload: TicketRestoreInput,
+  success: TicketMutationResult,
+  error: Schema.Union([TicketError, EnvironmentAuthorizationError]),
+});
+
+const WsTicketsLinkRpc = Rpc.make(WS_METHODS.ticketsLink, {
+  payload: TicketLinkInput,
+  success: TicketMutationResult,
+  error: Schema.Union([TicketError, EnvironmentAuthorizationError]),
+});
+
+const WsTicketsUnlinkRpc = Rpc.make(WS_METHODS.ticketsUnlink, {
+  payload: TicketUnlinkInput,
+  success: TicketMutationResult,
+  error: Schema.Union([TicketError, EnvironmentAuthorizationError]),
+});
+
 const WsScheduledTasksListRpc = Rpc.make(WS_METHODS.scheduledTasksList, {
   payload: ScheduledTaskListInput,
   success: ScheduledTaskListResult,
@@ -1885,6 +1950,13 @@ export const WsRpcGroup = RpcGroup.make(
   WsServerGetUsageSummaryRpc,
   WsServerRefreshUsageRatesRpc,
   WsServerSignalProcessRpc,
+  WsTicketsListRpc,
+  WsTicketsSubscribeRpc,
+  WsTicketsUpsertRpc,
+  WsTicketsDeleteRpc,
+  WsTicketsRestoreRpc,
+  WsTicketsLinkRpc,
+  WsTicketsUnlinkRpc,
   WsScheduledTasksListRpc,
   WsScheduledTasksSubscribeRpc,
   WsScheduledTasksUpsertRpc,
