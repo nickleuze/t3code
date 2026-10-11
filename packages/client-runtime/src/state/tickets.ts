@@ -4,6 +4,7 @@ import {
   type TicketId,
   type ThreadId,
   WS_METHODS,
+  ORCHESTRATION_V2_WS_METHODS,
 } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 import * as Stream from "effect/Stream";
@@ -15,12 +16,14 @@ import {
   EnvironmentRpcUnavailableError,
   getInitialServerConfig,
   requestGuarded,
+  request,
   subscribe,
   type EnvironmentRpcInput,
 } from "../rpc/client.ts";
 import {
   createAtomCommandScheduler,
   createEnvironmentRpcCommand,
+  createEnvironmentRpcQueryAtomFamily,
   createEnvironmentSubscriptionAtomFamily,
 } from "./runtime.ts";
 
@@ -80,6 +83,17 @@ export function createTicketEnvironmentAtoms<R, E>(
   );
   return {
     ticketsLive,
+    listTickets: createEnvironmentRpcQueryAtomFamily(runtime, {
+      label: "environment-data:server:tickets:list",
+      tag: WS_METHODS.ticketsList,
+      execute: (input) => withTickets(request(WS_METHODS.ticketsList, input)),
+    }),
+    launchTicketThread: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:server:tickets:launch",
+      tag: ORCHESTRATION_V2_WS_METHODS.launchThread,
+      execute: (input) =>
+        withTickets(requestGuarded(ORCHESTRATION_V2_WS_METHODS.launchThread, input)),
+    }),
     ticketIdsByThreadAtom,
     upsertTicket: createEnvironmentRpcCommand(runtime, {
       label: "environment-data:server:tickets:upsert",

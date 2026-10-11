@@ -10,8 +10,10 @@ export interface TicketStatusInput {
 
 /** Only work-linked thread shells contribute signals; missing threads contribute nothing. */
 export interface TicketLinkedThreadShell {
-  readonly latestRunStartedAt?: string | DateTime.Utc | null;
-  readonly pullRequests?: ReadonlyArray<{ readonly linkedAt: string; readonly source?: string }>;
+  readonly latestRunStartedAt?: string | DateTime.Utc | null | undefined;
+  readonly pullRequests?:
+    | ReadonlyArray<{ readonly linkedAt: string; readonly source?: string }>
+    | undefined;
 }
 
 const statusRank: Record<Exclude<TicketStatus, "dropped">, number> = {
