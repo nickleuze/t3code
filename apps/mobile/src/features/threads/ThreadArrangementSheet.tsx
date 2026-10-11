@@ -2,7 +2,8 @@ import { appAtomRegistry } from "../../state/atom-registry";
 import { useAtomValue } from "@effect/atom-react";
 import type { EnvironmentThreadShell } from "@t3tools/client-runtime/state/shell";
 import { effectiveSnoozed } from "@t3tools/client-runtime/state/thread-settled";
-import { sortThreads, sortThreadsByLastActivity } from "@t3tools/client-runtime/state/thread-sort";
+import { sortThreadsByFlatOrder } from "@t3tools/client-runtime/state/thread-sort";
+import { nestGoalIterations } from "@t3tools/client-runtime/state/thread-goals";
 import { sortInboxThreadsByReturn } from "@t3tools/client-runtime/state/thread-inbox";
 import { type ReactNode, useEffect, useMemo, useRef, useState } from "react";
 import { Animated, FlatList, Modal, Pressable, View } from "react-native";
@@ -28,11 +29,7 @@ import {
   threadDragAction,
   type ThreadMoveDestination,
 } from "./threadOrder";
-import {
-  getThreadListV2OrderedSection,
-  goalThreadNavigation,
-  threadListInboxReturns,
-} from "./threadListV2";
+import { getThreadListV2OrderedSection, threadListInboxReturns } from "./threadListV2";
 import { useThreadListV2ShelfPreferences } from "./use-thread-list-v2-shelf-preferences";
 
 const ROW_HEIGHT = 56;
@@ -198,22 +195,16 @@ export function ThreadArrangementSheet(props: { onClose: () => void }) {
     const pinned = getThreadListV2OrderedSection({ ...shared, section: "pinned" });
     const active = getThreadListV2OrderedSection({ ...shared, section: "active" });
     const visible = new Set([...pinned, ...active].map(keyOf));
-    const parked = goalThreadNavigation(threads).roots.filter(
-      (thread) =>
-        thread.archivedAt === null &&
-        thread.lineage.relationshipToParent !== "subagent" &&
-        !visible.has(keyOf(thread)),
+    // Listed roots are already unarchived non-subagents.
+    const parked = nestGoalIterations(threads).roots.filter(
+      (thread) => !visible.has(keyOf(thread)),
     );
     return {
       pinned,
       // The Working beta orders the inbox by time; show that order here too.
       active: workingShelfEnabled
         ? sortInboxThreadsByReturn(active, threadListInboxReturns.returnedAt)
-        : flatThreadSortOrder === "manual"
-          ? active
-          : flatThreadSortOrder === "last_activity"
-            ? sortThreadsByLastActivity(active)
-            : sortThreads(active, flatThreadSortOrder),
+        : sortThreadsByFlatOrder(active, flatThreadSortOrder, (threads) => [...threads]),
       snoozed: parked.filter((thread) => effectiveSnoozed(thread, { now })),
       settled: parked.filter((thread) => !effectiveSnoozed(thread, { now })),
     };

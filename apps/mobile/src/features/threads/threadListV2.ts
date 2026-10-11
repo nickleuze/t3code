@@ -19,13 +19,18 @@ import {
 } from "@t3tools/client-runtime/state/thread-inbox";
 import {
   sortActiveThreadsByOrderKey,
-  sortThreads,
-  sortThreadsByLastActivity,
+  sortThreadsByFlatOrder,
   resolveSettledThreadTimestamp,
   sortPinnedThreadsByOrderKey,
   sortSettledThreads,
 } from "@t3tools/client-runtime/state/thread-sort";
 import type { SidebarFlatThreadSortOrder, EnvironmentId, ProjectId } from "@t3tools/contracts";
+import {
+  goalAwareThreadWorking,
+  goalRouteOwnerKey,
+  nestGoalIterations,
+} from "@t3tools/client-runtime/state/thread-goals";
+import { t3GoalAttention } from "@t3tools/shared/agentAwareness";
 
 import type { ThreadListProvider } from "../../state/thread-list-environments";
 import type { ThreadMoveAvailability } from "./threadOrder";
@@ -191,23 +196,19 @@ export function resolveThreadListV2Status(
   if (thread.hasPendingApprovals) {
     return "approval";
   }
-  if (
-    thread.hasPendingUserInput ||
-    (thread.t3Goal != null &&
-      (thread.t3Goal.needsInput ||
-        thread.t3Goal.status === "blocked" ||
-        (thread.t3Goal.status === "paused" && thread.t3Goal.statusReason !== "user")))
-  ) {
+  // A T3 goal's owner thread runs no turns itself; its goal says what it needs.
+  const goalAttention = thread.t3Goal == null ? null : t3GoalAttention(thread.t3Goal);
+  if (thread.hasPendingUserInput || goalAttention === "input") {
     return "input";
   }
   if (
     (thread.runtime !== null &&
       ["preparing", "queued", "starting", "running", "waiting"].includes(thread.runtime.status)) ||
-    thread.t3Goal?.status === "active"
+    goalAttention === "working"
   ) {
     return "working";
   }
-  if (thread.t3Goal?.status === "usageLimited") return "limited";
+  if (goalAttention === "limited") return "limited";
   if (thread.runtime?.status === "idle") {
     return "waiting";
   }
@@ -215,57 +216,6 @@ export function resolveThreadListV2Status(
     return thread.runtime.lastErrorClass === "usage_limit" ? "limited" : "failed";
   }
   return "ready";
-}
-
-/** Scoped top-level owners hide only iterations that remain reachable beneath them. */
-export function goalThreadNavigation(threads: readonly EnvironmentThreadShell[]): {
-  roots: EnvironmentThreadShell[];
-  iterations: ReadonlyMap<string, readonly EnvironmentThreadShell[]>;
-} {
-  const visible = threads.filter(
-    (thread) => thread.archivedAt === null && thread.lineage.relationshipToParent !== "subagent",
-  );
-  const owners = new Set(
-    visible
-      .filter((thread) => thread.goalIteration == null)
-      .map((thread) => `${thread.environmentId}:${thread.id}`),
-  );
-  const iterations = new Map<string, EnvironmentThreadShell[]>();
-  const roots: EnvironmentThreadShell[] = [];
-  for (const thread of visible) {
-    const marker = thread.goalIteration;
-    const key = marker == null ? null : `${thread.environmentId}:${marker.parentThreadId}`;
-    if (key === null || !owners.has(key)) roots.push(thread);
-    else {
-      const group = iterations.get(key) ?? [];
-      group.push(thread);
-      iterations.set(key, group);
-    }
-  }
-  for (const group of iterations.values())
-    group.sort(
-      (left, right) =>
-        (right.goalIteration?.iteration ?? 0) - (left.goalIteration?.iteration ?? 0) ||
-        right.createdAt.localeCompare(left.createdAt) ||
-        left.id.localeCompare(right.id),
-    );
-  return { roots, iterations };
-}
-
-/** A selected historical iteration reveals its owner even on collapsed/paged shelves. */
-function goalRouteOwnerKey(threads: readonly EnvironmentThreadShell[], routeKey: string | null) {
-  const iteration = threads.find((thread) => `${thread.environmentId}:${thread.id}` === routeKey);
-  if (iteration?.goalIteration == null) return routeKey;
-  const ownerKey = `${iteration.environmentId}:${iteration.goalIteration.parentThreadId}`;
-  return threads.some(
-    (thread) =>
-      `${thread.environmentId}:${thread.id}` === ownerKey &&
-      thread.archivedAt === null &&
-      thread.goalIteration == null &&
-      thread.lineage.relationshipToParent !== "subagent",
-  )
-    ? ownerKey
-    : routeKey;
 }
 
 /** NaN-safe Date.parse for sort comparators: a malformed timestamp must not
@@ -301,7 +251,7 @@ export function getThreadListV2OrderedSection(input: {
 }): EnvironmentThreadShell[] {
   // An empty set is treated as absent so `?.` skips building the key.
   const queuedThreadKeys = input.queuedThreadKeys?.size ? input.queuedThreadKeys : undefined;
-  const threads = goalThreadNavigation(input.threads).roots.filter((thread) => {
+  const threads = nestGoalIterations(input.threads).roots.filter((thread) => {
     if (thread.archivedAt !== null || thread.lineage.relationshipToParent === "subagent")
       return false;
     if (
@@ -780,7 +730,7 @@ export function buildThreadListV2Items(input: {
       (input.environmentId === null || thread.environmentId === input.environmentId) &&
       (projectKeys === null || projectKeys.has(`${thread.environmentId}:${thread.projectId}`)),
   );
-  const { roots, iterations } = goalThreadNavigation(scopedThreads);
+  const { roots, iterations } = nestGoalIterations(scopedThreads);
   const searchMatches = (thread: EnvironmentThreadShell) =>
     query.length === 0 ||
     thread.title.toLocaleLowerCase().includes(query) ||
@@ -817,8 +767,7 @@ export function buildThreadListV2Items(input: {
       pinned.push(thread);
     } else if (
       workingShelfEnabled &&
-      !["input", "approval"].includes(resolveThreadListV2Status(thread)) &&
-      (isThreadWorking(thread) || resolveThreadListV2Status(thread) === "working")
+      goalAwareThreadWorking(thread.t3Goal, isThreadWorking(thread))
     ) {
       working.push(thread);
     } else {
@@ -830,11 +779,9 @@ export function buildThreadListV2Items(input: {
   // flight) is kept but not applied until the beta is off again.
   const orderedActive = workingShelfEnabled
     ? sortInboxThreadsByReturn(active, input.inboxReturnAt)
-    : input.flatThreadSortOrder === undefined || input.flatThreadSortOrder === "manual"
-      ? applyPendingThreadOrder(sortThreadsForListV2(active), "active", pending)
-      : input.flatThreadSortOrder === "last_activity"
-        ? sortThreadsByLastActivity(active)
-        : sortThreads(active, input.flatThreadSortOrder);
+    : sortThreadsByFlatOrder(active, input.flatThreadSortOrder ?? "manual", (threads) =>
+        applyPendingThreadOrder(sortThreadsForListV2(threads), "active", pending),
+      );
   // Newest send first; finishing and waking again do not move a row.
   const orderedWorking = sortWorkingThreadsBySend(working);
   const orderedSnoozed = [...snoozed].sort(

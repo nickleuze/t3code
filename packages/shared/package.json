@@ -478,10 +478,6 @@
     "./PtyAdapter": {
       "types": "./src/PtyAdapter.ts",
       "import": "./src/PtyAdapter.ts"
-    },
-    "./mcpHttpSession": {
-      "types": "./src/mcpHttpSession.ts",
-      "import": "./src/mcpHttpSession.ts"
     }
   },
   "scripts": {

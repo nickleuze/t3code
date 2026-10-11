@@ -1560,9 +1560,11 @@ export interface ChatComposerProps {
   /** Flips the Compact chip for the active thread. */
   onToggleKeepFullHistory: () => void;
   /** Picking /usage-limits from the menu is the action itself; the draft keeps nothing of it. */
-  goalCommandAvailable?: boolean | undefined;
-  goalPlaceholder?: string | undefined;
   onUsageLimitsCommand?: (() => void) | undefined;
+  /** Offers `/t3-goal` in the slash menu. */
+  goalCommandAvailable?: boolean | undefined;
+  /** Replaces the placeholder while a live T3 goal receives this thread's messages. */
+  goalPlaceholder?: string | undefined;
   environmentUnavailable: {
     readonly label: string;
     readonly connection: EnvironmentConnectionPresentation;

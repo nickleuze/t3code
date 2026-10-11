@@ -227,7 +227,7 @@ it.effect("proposes only descriptive state and rejects blank reports/proposals",
         doneWhen: "  Tests pass  ",
         background: "context",
         preApprovedActions: "Local edits",
-        minutesPerIteration: 20,
+        minutesPerIteration: 60,
       }),
     ).toEqual({ proposed: true });
     expect(yield* Ref.get(harness.commands)).toMatchObject([
@@ -237,7 +237,7 @@ it.effect("proposes only descriptive state and rejects blank reports/proposals",
         objective: "Ship",
         doneWhen: "Tests pass",
         permissions: "Local edits",
-        iterationTimeoutMins: 20,
+        iterationTimeoutMins: 60,
         checkCommand: null,
       },
     ]);

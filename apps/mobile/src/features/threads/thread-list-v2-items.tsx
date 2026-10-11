@@ -1,5 +1,5 @@
 import { T3GoalHistory } from "./T3GoalHistory";
-import { goalStatusLabel } from "@t3tools/client-runtime/state/thread-goals";
+import { goalRowStatusLabel } from "@t3tools/client-runtime/state/thread-goals";
 import type { ThreadRowProviderInstance } from "./thread-provider-instance";
 import {
   THREAD_LIST_V2_MONO_FONT as MONO_FONT,
@@ -498,7 +498,8 @@ export const ThreadListV2PendingRow = memo(function ThreadListV2PendingRow(props
 export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
   readonly thread: EnvironmentThreadShell;
   readonly goalIterations?: readonly EnvironmentThreadShell[];
-  readonly selectedThreadKey?: string | null;
+  /** The selected thread's key only when it is one of `goalIterations`. */
+  readonly selectedIterationKey?: string | null;
   readonly variant: "card" | "slim";
   /** A message for this thread is waiting in the outbox. */
   readonly hasQueuedMessages?: boolean;
@@ -646,12 +647,7 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
       : thread.t3Goal?.status === "paused"
         ? STATUS_LABEL_BY_STATUS.waiting
         : undefined);
-  const t3StatusLabel =
-    status !== "approval" &&
-    thread.t3Goal != null &&
-    !["complete", "stopped"].includes(thread.t3Goal.status)
-      ? goalStatusLabel(thread.t3Goal)
-      : null;
+  const t3StatusLabel = goalRowStatusLabel(thread.t3Goal, status);
   const recede = shouldRecedeThreadRow({ status, selected });
   // The timestamp is precomputed on the list item (same stamps the settled
   // tail sorts by) so a minute tick only re-renders rows that draw it.
@@ -1322,7 +1318,7 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
       owner={thread}
       parked={variant === "slim"}
       iterations={props.goalIterations}
-      selectedThreadKey={props.selectedThreadKey}
+      selectedThreadKey={props.selectedIterationKey}
       onSelectThread={onSelectThread}
     />
   ) : null;

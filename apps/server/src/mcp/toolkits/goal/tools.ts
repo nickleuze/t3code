@@ -1,4 +1,4 @@
-import { OrchestratorMcpFailure } from "@t3tools/contracts";
+import { MIN_GOAL_ITERATION_TIMEOUT_MINS, OrchestratorMcpFailure } from "@t3tools/contracts";
 import * as GoalMcpService from "../../GoalMcpService.ts";
 import * as Schema from "effect/Schema";
 import { Tool, Toolkit } from "effect/ai";
@@ -62,7 +62,9 @@ const GoalProposeTool = Tool.make("t3_goal_propose", {
     checkCommand: Schema.optional(text(500)),
     preApprovedActions: Schema.optional(text(1_000)),
     minutesPerIteration: Schema.optional(
-      Schema.Int.check(Schema.isBetween({ minimum: 15, maximum: 480 })),
+      Schema.Int.check(
+        Schema.isBetween({ minimum: MIN_GOAL_ITERATION_TIMEOUT_MINS, maximum: 480 }),
+      ),
     ),
     reason: Schema.optional(text(300)),
   }),

@@ -26,7 +26,6 @@ import * as DesktopLinuxUrlHandler from "./DesktopLinuxUrlHandler.ts";
 import * as DesktopObservability from "./DesktopObservability.ts";
 import * as DesktopPreReadyPlatform from "./DesktopPreReadyPlatform.ts";
 import * as DesktopShutdown from "./DesktopShutdown.ts";
-import { configureShutdownLog, shutdownBreadcrumb, traceTeardown } from "./DesktopShutdownLog.ts";
 import { watchShutdown } from "./DesktopShutdownWatchdog.ts";
 import * as DesktopServerExposure from "../backend/DesktopServerExposure.ts";
 import * as DesktopAppSettings from "../settings/DesktopAppSettings.ts";
@@ -321,9 +320,8 @@ const startup = Effect.gen(function* () {
   }
 
   yield* appIdentity.configure;
-  configureShutdownLog(environment.logDir);
-  yield* traceTeardown("lifecycle listeners", lifecycle.register);
-  yield* traceTeardown("clerk", clerk.configure);
+  yield* lifecycle.register;
+  yield* clerk.configure;
 
   yield* electronApp.whenReady.pipe(
     Effect.withSpan("desktop.electron.whenReady"),
@@ -339,13 +337,10 @@ const startup = Effect.gen(function* () {
   yield* appIdentity.configure;
   yield* previewPasskeys.configure;
   yield* applicationMenu.configure;
-  yield* traceTeardown("desktop updates", updates.configure);
-  yield* traceTeardown("remote updates", DesktopRemoteUpdates.listen);
+  yield* updates.configure;
+  yield* DesktopRemoteUpdates.listen;
   yield* linuxUrlHandler.register;
-  yield* traceTeardown(
-    "bootstrap",
-    bootstrap.pipe(Effect.catchCause((cause) => fatalStartupCause("bootstrap", cause))),
-  );
+  yield* bootstrap.pipe(Effect.catchCause((cause) => fatalStartupCause("bootstrap", cause)));
 }).pipe(Effect.withSpan("desktop.startup"));
 
 const scopedProgram = Effect.scoped(
@@ -363,20 +358,15 @@ const scopedProgram = Effect.scoped(
       // cascade, so leaving the WSL instance for its parent scope
       // finalizer means it gets hard-killed by the OS instead of
       // receiving SIGTERM + grace.
-      Effect.sync(() => shutdownBreadcrumb("stopping backends")).pipe(
-        Effect.andThen(stopAllPoolInstances()),
+      stopAllPoolInstances().pipe(
         Effect.ensuring(rendererHistory.shutdown),
-        Effect.ensuring(
-          Effect.sync(() => shutdownBreadcrumb("backends stopped; shutdown complete")).pipe(
-            Effect.andThen(shutdown.markComplete),
-          ),
-        ),
+        Effect.ensuring(shutdown.markComplete),
       ),
     );
 
     yield* startup;
     yield* shutdown.awaitRequest;
-    shutdownBreadcrumb("shutdown requested; releasing app resources");
+    // Scope teardown can stall; the watchdog bounds it.
     yield* watchShutdown(stopAllPoolInstances).pipe(Effect.forkDetach);
   }),
 );

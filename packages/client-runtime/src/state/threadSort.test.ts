@@ -13,6 +13,7 @@ import {
   sortPinnedThreadsByOrderKey,
   sortSettledThreads,
   sortThreads,
+  sortThreadsByFlatOrder,
   sortThreadsByLastActivity,
   type SettledThreadTimestampInput,
   type ThreadSortInput,
@@ -554,5 +555,43 @@ describe("sortThreadsByLastActivity", () => {
         (t) => t.id,
       ),
     ).toEqual(["b", "a"]);
+  });
+  it("surfaces a goal thread when its goal moves on, though the thread runs no turns", () => {
+    expect(
+      sortThreadsByLastActivity([
+        thread("a", "2026-01-03T00:00:00Z", null),
+        {
+          ...thread("goal", "2026-01-01T00:00:00Z", null),
+          t3Goal: { updatedAt: "2026-01-04T00:00:00Z" },
+        },
+        { ...thread("old-goal", null, null), t3Goal: {} },
+      ]).map((t) => t.id),
+    ).toEqual(["goal", "a", "old-goal"]);
+  });
+});
+
+describe("sortThreadsByFlatOrder", () => {
+  const threads = [
+    {
+      id: "a",
+      createdAt: "2026-01-02T00:00:00Z",
+      updatedAt: "2026-01-02T00:00:00Z",
+      latestUserMessageAt: "2026-01-05T00:00:00Z",
+    },
+    {
+      id: "b",
+      createdAt: "2026-01-03T00:00:00Z",
+      updatedAt: "2026-01-03T00:00:00Z",
+      latestUserMessageAt: "2026-01-04T00:00:00Z",
+      latestRun: { completedAt: "2026-01-06T00:00:00Z" },
+    },
+  ];
+  it("defers manual order to the list and applies each time order", () => {
+    const order = (sortOrder: Parameters<typeof sortThreadsByFlatOrder>[1]) =>
+      sortThreadsByFlatOrder(threads, sortOrder, (rows) => rows.toReversed()).map((t) => t.id);
+    expect(order("manual")).toEqual(["b", "a"]);
+    expect(order("last_activity")).toEqual(["b", "a"]);
+    expect(order("updated_at")).toEqual(["a", "b"]);
+    expect(order("created_at")).toEqual(["b", "a"]);
   });
 });

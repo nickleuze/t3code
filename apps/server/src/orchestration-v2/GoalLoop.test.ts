@@ -349,6 +349,41 @@ it.layer(TestLayer)("goal commands", (it) => {
     }),
   );
 
+  it.effect("edits a paused goal's brief and shows it on the shell", () =>
+    Effect.gen(function* () {
+      const { orchestrator, threadId, goalId } = yield* setup("goal-update");
+      const update = {
+        type: "thread.goal.update" as const,
+        threadId,
+        goalId,
+        objective: "Make every test pass and merge",
+        permissions: "Merge the PR once CI is green",
+      };
+      const whileActive = yield* orchestrator
+        .dispatch({ ...update, commandId: CommandId.make("goal-update:active") })
+        .pipe(Effect.result);
+      assert.strictEqual(whileActive._tag, "Failure");
+      yield* orchestrator.dispatch({
+        type: "thread.goal.control",
+        commandId: CommandId.make("goal-update:pause"),
+        threadId,
+        goalId,
+        action: "pause",
+      });
+      yield* orchestrator.dispatch({ ...update, commandId: CommandId.make("goal-update:edit") });
+      assert.deepInclude((yield* orchestrator.getThreadRecords(threadId, [])).thread.goal, {
+        objective: "Make every test pass and merge",
+        permissions: "Merge the PR once CI is green",
+        status: "paused",
+        lastControlCommandId: CommandId.make("goal-update:pause"),
+      });
+      assert.strictEqual(
+        (yield* orchestrator.getThreadShell(threadId))?.t3Goal?.objective,
+        "Make every test pass and merge",
+      );
+    }),
+  );
+
   it.effect("rejects a stale iteration start", () =>
     Effect.gen(function* () {
       const { orchestrator, threadId, goalId } = yield* setup("goal-stale");
@@ -408,7 +443,7 @@ const readGoal = (threadId: ThreadId) =>
     Effect.map((records) => records.thread.goal!),
   );
 
-/** Ends the current iteration's first child run with `status`. */
+/** Ends the current iteration's latest child run with `status`. */
 const completeChildRun = Effect.fn("GoalLoopTest.completeChildRun")(function* (
   childThreadId: ThreadId,
   status: "completed" | "interrupted" = "completed",
@@ -416,7 +451,7 @@ const completeChildRun = Effect.fn("GoalLoopTest.completeChildRun")(function* (
   const orchestrator = yield* Orchestrator.OrchestratorV2;
   const sink = yield* EventSink.EventSinkV2;
   const now = yield* DateTime.now;
-  const run = (yield* orchestrator.getThreadRecords(childThreadId, ["runs"])).runs[0]!;
+  const run = (yield* orchestrator.getThreadRecords(childThreadId, ["runs"])).runs.at(-1)!;
   yield* sink.write({
     events: [
       {
@@ -426,6 +461,51 @@ const completeChildRun = Effect.fn("GoalLoopTest.completeChildRun")(function* (
         runId: run.id,
         occurredAt: now,
         payload: { ...run, status, startedAt: run.startedAt ?? now, completedAt: now },
+      },
+    ],
+  });
+});
+
+/**
+ * Records the latest child run's provider turn with `usedTokens` of a
+ * 100k context window in use, 1k of its input uncached plus 100 output.
+ */
+const reportTurnUsage = Effect.fn("GoalLoopTest.reportTurnUsage")(function* (
+  childThreadId: ThreadId,
+  usedTokens: number,
+) {
+  const orchestrator = yield* Orchestrator.OrchestratorV2;
+  const sink = yield* EventSink.EventSinkV2;
+  const now = yield* DateTime.now;
+  const runs = (yield* orchestrator.getThreadRecords(childThreadId, ["runs"])).runs;
+  const run = runs.at(-1)!;
+  yield* sink.write({
+    events: [
+      {
+        id: EventId.make(`event:${run.id}:turn-usage`),
+        type: "provider-turn.updated",
+        threadId: childThreadId,
+        occurredAt: now,
+        payload: {
+          id: ProviderTurnId.make(`turn:${run.id}`),
+          providerThreadId: run.providerThreadId!,
+          nodeId: run.rootNodeId!,
+          runAttemptId: run.activeAttemptId,
+          nativeTurnRef: null,
+          ordinal: runs.length,
+          status: "completed",
+          startedAt: now,
+          completedAt: now,
+          tokenUsage: { usedTokens, maxTokens: 100_000, updatedAt: DateTime.formatIso(now) },
+          turnTokenUsage: {
+            usageScope: "main_agent",
+            usageStatus: "complete",
+            inputTokens: usedTokens,
+            cachedInputTokens: usedTokens - 1_000,
+            outputTokens: 100,
+            hasSubagents: false,
+          },
+        },
       },
     ],
   });
@@ -447,7 +527,9 @@ const reportFromChild = (
     const goal = yield* readGoal(threadId);
     yield* orchestrator.dispatch({
       type: "thread.goal.report",
-      commandId: CommandId.make(`command:report:${threadId}:${goal.iteration}:${report.type}`),
+      commandId: CommandId.make(
+        `command:report:${threadId}:${goal.iteration}:${report.type === "note" ? report.text : report.status}`,
+      ),
       threadId,
       goalId,
       iteration: goal.iteration,
@@ -908,6 +990,66 @@ it.layer(TestLayer)("goal loop worker", (it) => {
     ),
   );
 
+  it.effect("continues a turn in place while context has room, then rolls over", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const { orchestrator, threadId, goalId } = yield* setup("loop-rollover");
+        const loop = yield* goalLoop;
+        yield* loop.sweep();
+        const childThreadId = (yield* readGoal(threadId)).current!.childThreadId;
+
+        // 30 % of the window used and a note recorded: the same thread goes on.
+        yield* reportTurnUsage(childThreadId, 30_000);
+        yield* reportFromChild(threadId, goalId, { type: "note", text: "Parser done" });
+        yield* completeChildRun(childThreadId);
+        yield* loop.sweep();
+        const continued = yield* readGoal(threadId);
+        assert.deepInclude(continued.current, { childThreadId, continuations: 1 });
+        const child = yield* orchestrator.getThreadRecords(childThreadId, ["runs", "messages"]);
+        assert.lengthOf(child.runs, 2);
+        assert.include(child.messages.at(-1)?.text, "Continue from T3 Code");
+        yield* loop.sweep();
+        assert.strictEqual((yield* readGoal(threadId)).current?.continuations, 1);
+
+        // Past 60 %, the iteration ends and the next one starts fresh.
+        yield* reportTurnUsage(childThreadId, 65_000);
+        yield* reportFromChild(threadId, goalId, { type: "note", text: "Writer done" });
+        yield* completeChildRun(childThreadId);
+        yield* loop.sweep();
+        const rolled = yield* readGoal(threadId);
+        assert.isNull(rolled.current);
+        assert.deepInclude(rolled.history.at(-1), {
+          outcome: "continued",
+          continuations: 1,
+          tokens: 30_100 + 65_100,
+          uncachedTokens: 2_200,
+        });
+        assert.deepInclude(rolled, { tokensUsed: 95_200, uncachedTokensUsed: 2_200 });
+        yield* loop.sweep();
+        const next = yield* readGoal(threadId);
+        assert.strictEqual(next.iteration, 2);
+        assert.notStrictEqual(next.current?.childThreadId, childThreadId);
+      }),
+    ),
+  );
+
+  it.effect("hands a turn without a note to a fresh iteration even with context to spare", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const { threadId } = yield* setup("loop-silent-turn");
+        const loop = yield* goalLoop;
+        yield* loop.sweep();
+        const childThreadId = (yield* readGoal(threadId)).current!.childThreadId;
+        yield* reportTurnUsage(childThreadId, 10_000);
+        yield* completeChildRun(childThreadId);
+        yield* loop.sweep();
+        const goal = yield* readGoal(threadId);
+        assert.isNull(goal.current);
+        assert.isUndefined(goal.history.at(-1)?.continuations);
+      }),
+    ),
+  );
+
   it.effect("keeps going when the completion check fails", () =>
     Effect.scoped(
       Effect.gen(function* () {
@@ -971,18 +1113,23 @@ it.layer(TestLayer)("goal loop worker", (it) => {
   it.effect("keeps a rejected wrap-up pending, enforces the time limit, and moves on", () =>
     Effect.scoped(
       Effect.gen(function* () {
+        // Below the floor, so the limit is 45 minutes.
         const { threadId } = yield* setup("loop-timeout", { iterationTimeoutMins: 30 });
         const loop = yield* goalLoop;
         yield* loop.sweep();
         const childThreadId = (yield* readGoal(threadId)).current!.childThreadId;
+        assert.strictEqual((yield* readGoal(threadId)).iterationTimeoutMins, 45);
 
-        yield* TestClock.adjust("23 minutes");
+        yield* TestClock.adjust("41 minutes");
         yield* loop.sweep();
         // This fixture has not opened a provider turn, so steering is rejected.
         // The worker must not mark the nudge delivered merely because it tried.
         assert.isUndefined((yield* readGoal(threadId)).current?.wrapUpSentAt);
 
-        yield* TestClock.adjust("8 minutes");
+        yield* TestClock.adjust("3 minutes");
+        yield* loop.sweep();
+        assert.isUndefined((yield* readGoal(threadId)).current?.timedOutAt);
+        yield* TestClock.adjust("2 minutes");
         yield* loop.sweep();
         assert.isString((yield* readGoal(threadId)).current?.timedOutAt);
 
@@ -1011,12 +1158,16 @@ it.layer(TestLayer)("goal loop worker", (it) => {
         usageWindows = window(10);
         yield* loop.sweep();
         yield* loop.sweep();
+        // The guard's reading is on the goal for the goal panel to show.
+        assert.deepInclude((yield* readGoal(threadId)).usageSample, {
+          windows: [{ id: "session", usedPercent: 10 }],
+          risePoints: 0,
+        });
         usageWindows = window(45);
         yield* loop.sweep();
-        assert.deepInclude(yield* readGoal(threadId), {
-          status: "paused",
-          statusReason: "burn_rate",
-        });
+        const paused = yield* readGoal(threadId);
+        assert.deepInclude(paused, { status: "paused", statusReason: "burn_rate" });
+        assert.strictEqual(paused.usageSample?.risePoints, 35);
         usageWindows = undefined;
       }),
     ),

@@ -1,70 +1,83 @@
 import type {
+  OrchestrationV2GoalIterationMarker,
   OrchestrationV2GoalProposal,
   OrchestrationV2ThreadGoalSummary,
   ThreadId,
 } from "@t3tools/contracts";
+import {
+  goalControlActions,
+  goalIsRunning,
+  goalNeedsAttention,
+  presentT3Goal,
+  type GoalControlAction,
+} from "@t3tools/client-runtime/state/thread-goals";
 import { TargetIcon } from "lucide-react";
 import { useRef, useState } from "react";
 
 import { Button } from "../ui/button";
 import { stackedThreadToast, toastManager } from "../ui/toast";
 import type { ComposerBannerStackItem } from "./ComposerBannerStack";
-import {
-  formatGoalTokens,
-  goalIsRunning,
-  goalNeedsAttention,
-  goalStatusLabel,
-} from "@t3tools/client-runtime/state/thread-goals";
 
-export type GoalControlAction = "pause" | "resume" | "stop" | "clear";
+const CONTROL_LABELS: Record<Exclude<GoalControlAction, "clear">, [string, string]> = {
+  resume: ["Resume", "Resuming..."],
+  pause: ["Pause", "Pausing..."],
+  stop: ["Stop", "Stopping..."],
+};
+
+function toastFailure(title: string) {
+  return (cause: unknown) =>
+    toastManager.add(
+      stackedThreadToast({
+        type: "error",
+        title,
+        description: cause instanceof Error ? cause.message : String(cause),
+      }),
+    );
+}
 
 interface GoalBannerProps {
   readonly goal: OrchestrationV2ThreadGoalSummary;
   readonly canControl: boolean;
   readonly onControl: (action: GoalControlAction) => Promise<void>;
   readonly onOpenIteration: (childThreadId: ThreadId) => void;
+  /** Offered while the goal is paused or blocked with no iteration running. */
+  readonly onEdit: (() => void) | null;
 }
 
-/** Composer banner for a thread's `/t3-goal` loop, with the controls that apply to its state. */
+/** Composer banner for a thread's `/t3-goal` loop, laid out like the native `/goal` row. */
 export function goalBannerItem(props: GoalBannerProps): ComposerBannerStackItem {
   const { goal } = props;
-  // A stopped goal's last iteration may still be winding down; it can only be
-  // cleared once that child is done.
-  const clearable =
-    (goal.status === "complete" || goal.status === "stopped") && goal.currentChildThreadId === null;
+  const presentation = presentT3Goal(goal);
+  const attention = goalNeedsAttention(goal);
   return {
     id: `t3-goal:${goal.id}`,
-    variant: goal.status === "complete" ? "success" : goalNeedsAttention(goal) ? "warning" : "info",
-    priority: goalNeedsAttention(goal) ? "urgent" : goalIsRunning(goal) ? "activity" : "notice",
+    variant: goal.status === "complete" ? "success" : attention ? "warning" : "info",
+    priority: attention ? "urgent" : goalIsRunning(goal) ? "activity" : "notice",
     icon: <TargetIcon />,
-    title: goalStatusLabel(goal),
-    // A blocked or finished goal leads with what the agent said; otherwise the objective.
-    description:
-      (goal.status === "blocked" || goal.status === "complete") && goal.summaryNote
-        ? goal.summaryNote
-        : goal.iteration > 0
-          ? `${goal.objective} · ${formatGoalTokens(goal.tokensUsed)}`
-          : goal.objective,
+    // Usage stays in the title so a long objective cannot clip it.
+    title:
+      presentation.usage === null
+        ? presentation.title
+        : `${presentation.title} · ${presentation.usage}`,
+    description: presentation.objective,
     actions: <GoalBannerActions key={`${goal.id}:${goal.status}`} {...props} />,
-    ...(clearable && props.canControl
+    ...(goalControlActions(goal).includes("clear") && props.canControl
       ? {
           dismissLabel: "Clear goal",
           onDismiss: () =>
-            void props.onControl("clear").catch((cause: unknown) =>
-              toastManager.add(
-                stackedThreadToast({
-                  type: "error",
-                  title: "Could not clear the goal",
-                  description: cause instanceof Error ? cause.message : String(cause),
-                }),
-              ),
-            ),
+            void props.onControl("clear").catch(toastFailure("Could not clear the goal")),
         }
       : {}),
   };
 }
 
-function GoalBannerActions({ goal, canControl, onControl, onOpenIteration }: GoalBannerProps) {
+function GoalBannerActions({
+  goal,
+  canControl,
+  onControl,
+  onOpenIteration,
+  onEdit,
+}: GoalBannerProps) {
   const [pending, setPending] = useState<GoalControlAction | null>(null);
   const [error, setError] = useState<string | null>(null);
   const run = async (action: GoalControlAction) => {
@@ -79,10 +92,6 @@ function GoalBannerActions({ goal, canControl, onControl, onOpenIteration }: Goa
     setPending(null);
   };
   const child = goal.currentChildThreadId;
-  const canResume =
-    goal.status === "paused" || goal.status === "blocked" || goal.status === "usageLimited";
-  const canPause = goal.status === "active" || goal.status === "usageLimited";
-  const canStop = canResume || goal.status === "active";
   return (
     <div className="flex flex-wrap items-center gap-2">
       {child !== null ? (
@@ -90,36 +99,29 @@ function GoalBannerActions({ goal, canControl, onControl, onOpenIteration }: Goa
           {goal.needsInput ? "Answer" : "Open iteration"}
         </Button>
       ) : null}
-      {canResume ? (
+      {onEdit !== null ? (
         <Button
           size="xs"
           variant="ghost"
           disabled={!canControl || pending !== null}
-          onClick={() => void run("resume")}
+          onClick={onEdit}
         >
-          {pending === "resume" ? "Resuming..." : "Resume"}
+          Edit
         </Button>
       ) : null}
-      {canPause && goal.status !== "usageLimited" ? (
-        <Button
-          size="xs"
-          variant="ghost"
-          disabled={!canControl || pending !== null}
-          onClick={() => void run("pause")}
-        >
-          {pending === "pause" ? "Pausing..." : "Pause"}
-        </Button>
-      ) : null}
-      {canStop ? (
-        <Button
-          size="xs"
-          variant="ghost"
-          disabled={!canControl || pending !== null}
-          onClick={() => void run("stop")}
-        >
-          {pending === "stop" ? "Stopping..." : "Stop"}
-        </Button>
-      ) : null}
+      {goalControlActions(goal).map((action) =>
+        action === "clear" ? null : (
+          <Button
+            key={action}
+            size="xs"
+            variant="ghost"
+            disabled={!canControl || pending !== null}
+            onClick={() => void run(action)}
+          >
+            {CONTROL_LABELS[action][pending === action ? 1 : 0]}
+          </Button>
+        ),
+      )}
       {error ? (
         <p role="alert" className="basis-full text-xs text-destructive">
           {error}
@@ -157,15 +159,7 @@ export function goalProposalBannerItem(props: GoalProposalBannerProps): Composer
       ? {
           dismissLabel: "Dismiss proposed goal",
           onDismiss: () =>
-            void props.onDismiss().catch((cause: unknown) =>
-              toastManager.add(
-                stackedThreadToast({
-                  type: "error",
-                  title: "Could not dismiss the proposed goal",
-                  description: cause instanceof Error ? cause.message : String(cause),
-                }),
-              ),
-            ),
+            void props.onDismiss().catch(toastFailure("Could not dismiss the proposed goal")),
         }
       : {}),
   };
@@ -203,4 +197,24 @@ function GoalProposalActions({ canStart, onStart, onEdit }: GoalProposalBannerPr
       ) : null}
     </div>
   );
+}
+
+/** Inline note on an iteration thread pointing back to its goal thread. */
+export function goalIterationBannerItem(
+  marker: OrchestrationV2GoalIterationMarker,
+  onOpenGoal: (threadId: ThreadId) => void,
+): ComposerBannerStackItem {
+  return {
+    id: `t3-goal-iteration:${marker.goalId}:${marker.iteration}`,
+    variant: "info",
+    priority: "notice",
+    icon: <TargetIcon />,
+    title: `Goal iteration ${marker.iteration}`,
+    description: "Progress in this iteration goes to the goal thread.",
+    actions: (
+      <Button size="xs" variant="ghost" onClick={() => onOpenGoal(marker.parentThreadId)}>
+        Open goal
+      </Button>
+    ),
+  };
 }

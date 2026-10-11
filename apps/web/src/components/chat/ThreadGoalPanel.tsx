@@ -1,11 +1,11 @@
 import { useAtomValue } from "@effect/atom-react";
 import { serverEnvironment } from "../../state/server";
 import { scopeThreadRef } from "@t3tools/client-runtime/environment";
-import type {
-  EnvironmentId,
-  OrchestrationV2GoalIterationOutcome,
-  OrchestrationV2ThreadGoal,
-  ThreadId,
+import {
+  goalIterationTimeoutMins,
+  type EnvironmentId,
+  type OrchestrationV2ThreadGoal,
+  type ThreadId,
 } from "@t3tools/contracts";
 import { useNavigate } from "@tanstack/react-router";
 import type { ReactNode } from "react";
@@ -14,23 +14,15 @@ import { cn } from "../../lib/utils";
 import { useThreadProjection } from "../../state/entities";
 import { buildThreadRouteParams } from "../../threadRoutes";
 import {
+  formatGoalBurnGuard,
   formatGoalTokens,
+  formatGoalUsage,
+  GOAL_ITERATION_OUTCOME_LABELS,
   goalStatusLabel,
   goalSummaryFromGoal,
 } from "@t3tools/client-runtime/state/thread-goals";
 import { ThreadDetailsSection } from "./ThreadDetailsSection";
 import { THREAD_DETAILS_PANEL_ROW_CONTENT_CLASS } from "./threadDetailsPanelStyles";
-
-const OUTCOME_LABELS: Record<OrchestrationV2GoalIterationOutcome, string> = {
-  continued: "Continued",
-  claimed_complete: "Completed",
-  check_failed: "Check failed",
-  blocked: "Blocked",
-  failed: "Failed",
-  interrupted: "Interrupted",
-  usage_limited: "Usage limit",
-  timed_out: "Out of time",
-};
 
 const NOTES_SHOWN = 5;
 
@@ -120,7 +112,7 @@ export function ThreadGoalPanel(props: {
             <IterationRow
               key={record.iteration}
               label={`Iteration ${record.iteration}`}
-              detail={`${OUTCOME_LABELS[record.outcome]} · ${formatGoalTokens(record.tokens)}`}
+              detail={`${GOAL_ITERATION_OUTCOME_LABELS[record.outcome]} · ${formatGoalTokens(record.tokens)}`}
               onOpen={() => openThread(record.childThreadId)}
             />
           ))}
@@ -131,18 +123,12 @@ export function ThreadGoalPanel(props: {
 }
 
 function goalFacts(goal: OrchestrationV2ThreadGoal): string {
-  const tokens =
-    goal.usageAccounting === "unavailable"
-      ? "token usage not reported"
-      : `${goal.usageAccounting === "estimated" ? "~" : ""}${formatGoalTokens(goal.tokensUsed)}`;
   return [
     goalStatusLabel(goalSummaryFromGoal(goal)),
     goal.iteration === 1 ? "1 iteration" : `${goal.iteration} iterations`,
-    tokens,
-    goal.burnGuard
-      ? `burn guard ${goal.burnGuard.maxPercentPoints}% / ${goal.burnGuard.windowMins}m`
-      : "no burn guard",
-    `${goal.iterationTimeoutMins ?? 120} min per iteration`,
+    formatGoalUsage(goal),
+    formatGoalBurnGuard(goal),
+    `${goalIterationTimeoutMins(goal)} min per iteration`,
   ].join(" · ");
 }
 

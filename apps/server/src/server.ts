@@ -143,8 +143,6 @@ import {
 import * as CloudCliTokenManager from "./cloud/CliTokenManager.ts";
 import * as CloudCliState from "./cloud/CliState.ts";
 import * as ServerSelfUpdate from "./cloud/selfUpdate.ts";
-import * as ForkUpdate from "./forkUpdate/ForkUpdate.ts";
-import * as Scheduler from "./scheduling/Scheduler.ts";
 import * as DesktopAppUpdate from "./desktopUpdate/DesktopAppUpdate.ts";
 import * as ServiceLauncherClient from "./cloud/serviceLauncherClient.ts";
 import * as ProcessDiagnostics from "./diagnostics/ProcessDiagnostics.ts";
@@ -727,13 +725,6 @@ const layerMakeRoutes = Layer.mergeAll(
   Layer.provide(PreviewBrowser.layer),
   Layer.provide(PreviewAutomationBroker.layer),
   Layer.provide(ServerSelfUpdate.layer.pipe(Layer.provide(layerDesktopAppUpdate))),
-  Layer.provide(
-    ForkUpdate.layer.pipe(
-      Layer.provide(Scheduler.layer),
-      Layer.provide(ProjectionStoreV2.layer),
-      Layer.provide(ProcessRunner.layer),
-    ),
-  ),
   Layer.provide(layerCommandReadiness),
   Layer.provide(ServerHttp.layerBrowserApiCors),
   Layer.provide(ServerHttp.layerHttpCompression),

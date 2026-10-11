@@ -2,7 +2,10 @@ import { useState } from "react";
 import type { SidebarThreadSummary } from "../../types";
 import { scopeThreadRef, scopedThreadKey } from "@t3tools/client-runtime/environment";
 import type { ScopedThreadRef } from "@t3tools/contracts";
-import { nestedIterationLabel, selectNestedGoalIterations } from "../Sidebar.logic";
+import {
+  goalIterationLabel,
+  shownGoalIterations,
+} from "@t3tools/client-runtime/state/thread-goals";
 import { cn } from "../../lib/utils";
 
 export function SidebarGoalIterations(props: {
@@ -14,24 +17,13 @@ export function SidebarGoalIterations(props: {
 }) {
   const [expanded, setExpanded] = useState(false);
   if (props.iterations.length === 0) return null;
-  const selected = props.iterations.find(
-    (thread) =>
-      scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id)) ===
-      props.activeRouteThreadKey,
-  );
-  const limit = expanded
-    ? props.iterations.length
-    : props.parked
-      ? props.goal?.currentChildThreadId
-        ? 1
-        : 0
-      : 3;
-  const shown = selectNestedGoalIterations(
-    props.iterations,
-    props.goal?.currentChildThreadId ?? null,
-    limit,
-  );
-  if (selected && !shown.includes(selected)) shown.push(selected);
+  const shown = shownGoalIterations({
+    iterations: props.iterations,
+    currentThreadId: props.goal?.currentChildThreadId,
+    selectedKey: props.activeRouteThreadKey,
+    expanded,
+    parked: props.parked,
+  });
   return (
     <div
       onPointerDown={(event) => event.stopPropagation()}
@@ -63,7 +55,7 @@ export function SidebarGoalIterations(props: {
                     : "text-sidebar-muted-foreground hover:bg-sidebar-row-hover",
                 )}
               >
-                <span className="min-w-0 flex-1 truncate">{nestedIterationLabel(thread)}</span>
+                <span className="min-w-0 flex-1 truncate">{goalIterationLabel(thread)}</span>
                 {running ? (
                   <span className="shrink-0 text-muted-foreground">
                     {props.goal?.needsInput ? "Input" : "Running"}

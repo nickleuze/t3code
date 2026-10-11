@@ -1,11 +1,4 @@
-import { GoalDialog, type GoalDialogSubmission } from "./chat/GoalDialog";
-import { goalBannerItem as t3GoalBannerItem, goalProposalBannerItem } from "./chat/GoalBanner";
-import {
-  goalIsLive,
-  goalComposerPlaceholder,
-  parseComposerGoalCommand,
-  goalDraftRequestMessage,
-} from "@t3tools/client-runtime/state/thread-goals";
+import { useThreadGoals } from "./chat/useThreadGoals";
 import { ThreadFind, ThreadFindCanvas, type ThreadFindControls } from "./chat/ThreadFindProvider";
 import { THREAD_FIND_BAR_RESERVED_HEIGHT } from "./chat/ThreadFindBar";
 import { usageLimitRecoveryBannerItem } from "./chat/UsageLimitRecoveryBanner";
@@ -80,7 +73,6 @@ import {
   type ServerProvider,
   type ResolvedKeybindingsConfig,
   type ScopedThreadRef,
-  type OrchestrationV2GoalProposal,
   type ThreadId,
   type ThreadLinkedPullRequest,
   type RunId,
@@ -1626,18 +1618,6 @@ export default function ChatView(props: ChatViewProps) {
   const updateThreadMetadata = useOrchestrationCommand(threadEnvironment.updateMetadata, {
     reportFailure: false,
   });
-  const setThreadGoal = useAtomCommand(threadEnvironment.setGoal, { reportFailure: false });
-  const controlThreadGoal = useAtomCommand(threadEnvironment.controlGoal, { reportFailure: false });
-  const messageThreadGoal = useAtomCommand(threadEnvironment.messageGoal, { reportFailure: false });
-  const dismissGoalProposal = useAtomCommand(threadEnvironment.dismissGoalProposal, {
-    reportFailure: false,
-  });
-  const canMutateGoals = useAtomValue(threadEnvironment.setGoal.permissionAtom(environmentId));
-  const [goalDialogOwner, setGoalDialogOwner] = useState<string | null>(null);
-  const [goalDialogObjective, setGoalDialogObjective] = useState<string | null>(null);
-  const [goalDialogProposal, setGoalDialogProposal] = useState<OrchestrationV2GoalProposal | null>(
-    null,
-  );
   const canWriteSourceControl = useEnvironmentScope(environmentId, AuthSourceControlWriteScope);
   const switchGitRef = useAtomCommand(vcsEnvironment.switchRef, { reportFailure: false });
   const setThreadRuntimeMode = useOrchestrationCommand(threadEnvironment.setRuntimeMode, {
@@ -3035,13 +3015,13 @@ export default function ChatView(props: ChatViewProps) {
   });
   const modelPickerLockedProvider = supportsProviderSwitchingViaHandoff ? null : lockedProvider;
   const pullRequestsCapabilityKnown = serverConfig !== null;
-  const supportsT3Goals = serverConfig?.environment.capabilities.t3Goals === true;
-  const goalCommandAvailable =
-    supportsT3Goals &&
-    canMutateGoals &&
-    isServerThread &&
-    activeThreadShell?.goalIteration == null &&
-    activeThread?.lineage.relationshipToParent !== "subagent";
+  const t3Goals = useThreadGoals({
+    environmentId,
+    thread: activeThreadShell,
+    supportsGoals: serverConfig?.environment.capabilities.t3Goals === true,
+    isServerThread,
+    isSubagent: activeThread?.lineage.relationshipToParent === "subagent",
+  });
   const supportsPullRequests = serverConfig?.environment.capabilities.pullRequests === true;
   const attachmentEnvironmentConfig = environmentById.get(environmentId)?.serverConfig ?? null;
   const attachmentUploadsCapabilityKnown = attachmentEnvironmentConfig !== null;
@@ -7839,108 +7819,11 @@ export default function ChatView(props: ChatViewProps) {
           },
         })
       : null;
-  const activeT3Goal = supportsT3Goals ? (activeThreadShell?.t3Goal ?? null) : null;
-  const openGoalThread = (threadId: ThreadId) =>
-    void navigate({
-      to: "/$environmentId/$threadId",
-      params: buildThreadRouteParams(scopeThreadRef(environmentId, threadId)),
-    });
-  const t3GoalBanner =
-    activeT3Goal !== null && activeThreadShell
-      ? t3GoalBannerItem({
-          goal: activeT3Goal,
-          canControl: canMutateGoals,
-          onControl: async (action) => {
-            const result = await controlThreadGoal({
-              environmentId,
-              input: {
-                type: "thread.goal.control",
-                commandId: CommandId.make(randomUUID()),
-                threadId: activeThreadShell.id,
-                goalId: activeT3Goal.id,
-                action,
-              },
-            });
-            if (result._tag === "Failure") throw squashAtomCommandFailure(result);
-          },
-          onOpenIteration: openGoalThread,
-        })
-      : null;
-  const t3Proposal = supportsT3Goals ? (activeThreadShell?.goalProposal ?? null) : null;
-  const t3ProposalBanner =
-    t3Proposal !== null && activeThreadShell && !(activeT3Goal !== null && goalIsLive(activeT3Goal))
-      ? goalProposalBannerItem({
-          proposal: t3Proposal,
-          canStart: goalCommandAvailable,
-          canDismiss: canMutateGoals,
-          onStart: async () => {
-            const result = await setThreadGoal({
-              environmentId,
-              input: {
-                type: "thread.goal.set",
-                commandId: CommandId.make(randomUUID()),
-                threadId: activeThreadShell.id,
-                objective: t3Proposal.objective,
-                doneWhen: t3Proposal.doneWhen,
-                background: t3Proposal.background,
-                checkCommand: t3Proposal.checkCommand,
-                permissions: t3Proposal.permissions,
-                ...(t3Proposal.iterationTimeoutMins === null
-                  ? {}
-                  : { iterationTimeoutMins: t3Proposal.iterationTimeoutMins }),
-              },
-            });
-            if (result._tag === "Failure") throw squashAtomCommandFailure(result);
-          },
-          onEdit: () => {
-            setGoalDialogOwner(
-              scopedThreadKey(scopeThreadRef(environmentId, activeThreadShell.id)),
-            );
-            setGoalDialogProposal(t3Proposal);
-            setGoalDialogObjective(t3Proposal.objective);
-          },
-          onDismiss: async () => {
-            const result = await dismissGoalProposal({
-              environmentId,
-              input: {
-                type: "thread.goal.proposal.dismiss",
-                commandId: CommandId.make(randomUUID()),
-                threadId: activeThreadShell.id,
-                proposalId: t3Proposal.id,
-              },
-            });
-            if (result._tag === "Failure") throw squashAtomCommandFailure(result);
-          },
-        })
-      : null;
-  const t3Iteration = supportsT3Goals ? (activeThreadShell?.goalIteration ?? null) : null;
-  const t3IterationBanner: ComposerBannerStackItem | null =
-    t3Iteration === null
-      ? null
-      : {
-          id: `t3-goal-iteration:${t3Iteration.goalId}:${t3Iteration.iteration}`,
-          variant: "info",
-          priority: "notice",
-          icon: <TargetIcon />,
-          title: `Goal iteration ${t3Iteration.iteration}`,
-          description: "Progress in this iteration goes to the goal thread.",
-          actions: (
-            <Button
-              size="xs"
-              variant="ghost"
-              onClick={() => openGoalThread(t3Iteration.parentThreadId)}
-            >
-              Open goal
-            </Button>
-          ),
-        };
   const composerBannerItems = useMemo<ComposerBannerStackItem[]>(() => {
     const limitRecoveryItems = limitRecoveryBanner === null ? [] : [limitRecoveryBanner];
     const backgroundWorkItems = [
       childInputBannerItem,
-      t3GoalBanner,
-      t3ProposalBanner,
-      t3IterationBanner,
+      ...t3Goals.bannerItems,
       goalBannerItem,
       backgroundWorkBannerItem,
     ].filter((item) => item !== null);
@@ -8015,9 +7898,7 @@ export default function ChatView(props: ChatViewProps) {
     isRestoringThreadBranch,
     backgroundWorkBannerItem,
     childInputBannerItem,
-    t3GoalBanner,
-    t3ProposalBanner,
-    t3IterationBanner,
+    t3Goals.bannerItems,
     goalBannerItem,
     localCheckoutBranchMismatch,
     projectCloneBannerItem,
@@ -8928,59 +8809,22 @@ export default function ChatView(props: ChatViewProps) {
       return;
     }
 
-    if (activeT3Goal !== null && goalIsLive(activeT3Goal) && activeThreadShell) {
-      if (directAnnotation || composerHasNonPromptContent || !canMutateGoals) {
-        toastManager.add(
-          stackedThreadToast({
-            type: "info",
-            title: "Could not message the goal",
-            description:
-              directAnnotation || composerHasNonPromptContent
-                ? "Send attachments and context in the iteration thread."
-                : "This connection cannot control goals.",
-          }),
-        );
-        return;
+    const goalSend = t3Goals.routeSend(
+      promptRef.current,
+      Boolean(directAnnotation) || composerHasNonPromptContent,
+    );
+    if (goalSend.kind === "handled") return;
+    if (goalSend.kind === "reply") {
+      const draft = promptRef.current;
+      // Keep anything typed while the reply was in flight.
+      if ((await t3Goals.sendReply(goalSend)) && promptRef.current === draft) {
+        promptRef.current = "";
+        setComposerDraftPrompt(composerDraftTarget, "");
+        composerRef.current?.resetCursorState();
       }
-      const text = promptRef.current.trim();
-      if (text.length === 0) return;
-      const result = await messageThreadGoal({
-        environmentId,
-        input: {
-          type: "thread.goal.message",
-          commandId: CommandId.make(randomUUID()),
-          threadId: activeThreadShell.id,
-          goalId: activeT3Goal.id,
-          text,
-        },
-      });
-      if (result._tag === "Failure") {
-        toastManager.add(
-          stackedThreadToast({
-            type: "error",
-            title: "Could not message the goal",
-            description: String(squashAtomCommandFailure(result)),
-          }),
-        );
-        return;
-      }
-      promptRef.current = "";
-      setComposerDraftPrompt(composerDraftTarget, "");
-      composerRef.current?.resetCursorState();
       return;
     }
-    if (!directAnnotation && !composerHasNonPromptContent) {
-      const command = parseComposerGoalCommand(promptRef.current);
-      if (command !== null) {
-        if (!goalCommandAvailable) {
-          toastManager.add(
-            stackedThreadToast({ type: "info", title: "T3 goals are unavailable in this thread" }),
-          );
-          return;
-        }
-        promptRef.current = goalDraftRequestMessage(command.objective);
-      }
-    }
+    promptRef.current = goalSend.text;
 
     const notifyDirectAnnotationAttached = () => {
       if (!directAnnotation) return;
@@ -11465,52 +11309,12 @@ export default function ChatView(props: ChatViewProps) {
     addFolders: (folders) => composerRef.current?.addDroppedFolders(folders),
   });
 
-  const startGoal = async (submission: GoalDialogSubmission) => {
-    if (
-      !activeThreadShell ||
-      !goalCommandAvailable ||
-      goalDialogOwner !== scopedThreadKey(scopeThreadRef(environmentId, activeThreadShell.id))
-    )
-      throw new Error("T3 goals are unavailable in this thread.");
-    const result = await setThreadGoal({
-      environmentId,
-      input: {
-        type: "thread.goal.set",
-        commandId: CommandId.make(randomUUID()),
-        threadId: activeThreadShell.id,
-        ...submission,
-      },
-    });
-    if (result._tag === "Failure") throw squashAtomCommandFailure(result);
-    setGoalDialogObjective(null);
-    setGoalDialogProposal(null);
-  };
-
   return (
     <div
       ref={setWorkspaceLayoutElement}
       className="relative flex min-h-0 min-w-0 flex-1 overflow-hidden bg-background"
     >
-      {goalDialogObjective !== null &&
-      activeThreadShell &&
-      goalDialogOwner === scopedThreadKey(scopeThreadRef(environmentId, activeThreadShell.id)) ? (
-        <GoalDialog
-          key={`${activeThreadShell.id}:${goalDialogProposal?.id ?? "new"}`}
-          initialObjective={goalDialogObjective}
-          initialDoneWhen={goalDialogProposal?.doneWhen}
-          initialPermissions={goalDialogProposal?.permissions}
-          initialCheckCommand={goalDialogProposal?.checkCommand}
-          initialTimeoutMins={goalDialogProposal?.iterationTimeoutMins}
-          initialBackground={goalDialogProposal?.background ?? null}
-          canStart={goalCommandAvailable}
-          runtimeMode={activeThreadShell.runtimeMode}
-          onSubmit={startGoal}
-          onClose={() => {
-            setGoalDialogObjective(null);
-            setGoalDialogProposal(null);
-          }}
-        />
-      ) : null}
+      {t3Goals.dialog}
       <Dialog
         open={
           deviceSetupThread !== null &&
@@ -11923,12 +11727,8 @@ export default function ChatView(props: ChatViewProps) {
                                 ) : null
                               }
                               bannerItems={composerBannerItems}
-                              goalCommandAvailable={goalCommandAvailable}
-                              goalPlaceholder={
-                                activeT3Goal !== null && goalIsLive(activeT3Goal)
-                                  ? goalComposerPlaceholder(activeT3Goal)
-                                  : undefined
-                              }
+                              goalCommandAvailable={t3Goals.commandAvailable}
+                              goalPlaceholder={t3Goals.placeholder}
                               resumeCompactionTokens={resumeCompactionTokens}
                               keepFullHistory={keepFullHistory}
                               onToggleKeepFullHistory={toggleKeepFullHistory}

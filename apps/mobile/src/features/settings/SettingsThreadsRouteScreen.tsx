@@ -8,7 +8,8 @@ import { useRef, useState } from "react";
 import { Pressable, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
-import { type SidebarFlatThreadSortOrder, DEFAULT_SERVER_SETTINGS } from "@t3tools/contracts";
+import { DEFAULT_SERVER_SETTINGS } from "@t3tools/contracts";
+import { FLAT_THREAD_SORT_OPTIONS } from "@t3tools/client-runtime/state/thread-sort";
 import { supportsSharedSettingsSync } from "@t3tools/client-runtime/state/shared-settings";
 import { AppText as Text } from "../../components/AppText";
 import { mobilePreferencesAtom, updateMobilePreferencesAtom } from "../../state/preferences";
@@ -327,23 +328,12 @@ function ThreadSortSettingsSection() {
   const selected = AsyncResult.isSuccess(preferences)
     ? (preferences.value.sidebarFlatThreadSortOrder ?? "manual")
     : null;
-  const options: readonly {
-    value: SidebarFlatThreadSortOrder;
-    label: string;
-    description: string;
-  }[] = [
-    { value: "manual", label: "Manual", description: "Keep your saved arrangement." },
-    {
-      value: "last_activity",
-      label: "Last activity",
-      description: "Newest message or completed turn first.",
-    },
-    { value: "updated_at", label: "Last message", description: "Newest user message first." },
-    { value: "created_at", label: "Created", description: "Newest threads first." },
-  ];
+  // The Working beta orders the inbox by time, so the choice would have no effect.
+  if (AsyncResult.isSuccess(preferences) && preferences.value.workingShelfEnabled === true)
+    return null;
   return (
     <SettingsSection title="Thread order">
-      {options.map((option, index) => (
+      {FLAT_THREAD_SORT_OPTIONS.map((option, index) => (
         <SettingsChoiceRow
           key={option.value}
           label={option.label}

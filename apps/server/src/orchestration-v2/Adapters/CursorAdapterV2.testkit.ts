@@ -724,7 +724,6 @@ export const recordCursorAgentSdkReplayTranscript = Effect.fn(
   const sendOptions = {
     model: cursorSdkModelSelection(input.modelSelection),
     mode: interactionMode === "plan" ? "plan" : "agent",
-    local: { customTools: {} },
   } as const;
   // Agents sometimes search the workspace's parent too; map it to /tmp so the
   // recording host's temp layout stays out of the fixture.

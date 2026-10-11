@@ -5,11 +5,8 @@ import * as Option from "effect/Option";
 import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
 import * as Semaphore from "effect/Semaphore";
-import type {
-  ProviderInstanceId,
-  SidebarFlatThreadSortOrder,
-  SidebarProjectGroupingMode,
-} from "@t3tools/contracts";
+import type { ProviderInstanceId, SidebarProjectGroupingMode } from "@t3tools/contracts";
+import { SidebarFlatThreadSortOrder } from "@t3tools/contracts";
 import type { ComposerEnterBehavior } from "../lib/composerEnterBehavior";
 import type { FollowUpBehavior } from "../lib/followUpBehavior";
 import { MOBILE_THEME_IDS, type MobileThemeId, type MobileThemeMode } from "../lib/mobileTheme";
@@ -95,6 +92,8 @@ export class MobilePreferencesStore extends Context.Service<
     ) => Effect.Effect<Preferences, MobilePreferencesSaveError>;
   }
 >()("@t3tools/mobile/persistence/MobilePreferencesStore") {}
+
+const isSidebarFlatThreadSortOrder = Schema.is(SidebarFlatThreadSortOrder);
 
 function sanitizePreferences(parsed: Preferences): Preferences {
   const preferences: {
@@ -191,11 +190,7 @@ function sanitizePreferences(parsed: Preferences): Preferences {
   if (typeof parsed.planModeEnabled === "boolean") {
     preferences.planModeEnabled = parsed.planModeEnabled;
   }
-  if (
-    ["manual", "last_activity", "updated_at", "created_at"].includes(
-      parsed.sidebarFlatThreadSortOrder ?? "",
-    )
-  ) {
+  if (isSidebarFlatThreadSortOrder(parsed.sidebarFlatThreadSortOrder)) {
     preferences.sidebarFlatThreadSortOrder = parsed.sidebarFlatThreadSortOrder;
   }
   if (typeof parsed.workingShelfEnabled === "boolean") {

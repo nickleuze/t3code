@@ -1,7 +1,7 @@
 {"type":"transcript_start","provider":"cursor","protocol":"cursor-agent-sdk.local","version":"1","scenario":"simple","metadata":{"generatedBy":"recordCursorAgentSdkReplayTranscript","nativeAgentId":"agent-8f8933e5-b50d-4c9b-aaf3-5bd1fadda6f6"}}
 {"type":"expect_outbound","label":"agent.open","frame":{"type":"agent.open","operation":"create","options":{"model":{"id":"composer-2.5"},"hasName":true,"mode":"agent","local":{"hasCwd":true,"autoReview":false,"settingSources":["project","user","team","mdm","plugins"],"sandboxEnabled":false,"enableAgentRetries":true}}}}
 {"type":"emit_inbound","label":"agent.opened","frame":{"type":"agent.opened","agentId":"agent-8f8933e5-b50d-4c9b-aaf3-5bd1fadda6f6"}}
-{"type":"expect_outbound","label":"run.start:1","frame":{"type":"run.start","message":"Respond with the following text: fixture simple ok","options":{"model":{"id":"composer-2.5"},"mode":"agent","local":{"hasCustomTools":true}}}}
+{"type":"expect_outbound","label":"run.start:1","frame":{"type":"run.start","message":"Respond with the following text: fixture simple ok","options":{"model":{"id":"composer-2.5"},"mode":"agent"}}}
 {"type":"emit_inbound","label":"run.started:1","frame":{"type":"run.started","runId":"run-42618f51-5137-4daa-8d57-c514aeed4187","agentId":"agent-8f8933e5-b50d-4c9b-aaf3-5bd1fadda6f6"}}
 {"type":"emit_inbound","label":"thinking-delta","frame":{"type":"interaction.update","runId":"run-42618f51-5137-4daa-8d57-c514aeed4187","update":{"type":"thinking-delta","text":"I will respond with "}}}
 {"type":"emit_inbound","label":"token-delta","frame":{"type":"interaction.update","runId":"run-42618f51-5137-4daa-8d57-c514aeed4187","update":{"type":"token-delta","tokens":5}}}

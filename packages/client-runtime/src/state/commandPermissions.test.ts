@@ -8,7 +8,6 @@ import { describe, expect, it } from "@effect/vitest";
 import { vi } from "vite-plus/test";
 import {
   AuthOrchestrationOperateScope,
-  AuthEnvironmentMaintainScope,
   AuthSettingsWriteScope,
   AuthSourceControlWriteScope,
   ThreadId,
@@ -82,36 +81,6 @@ describe("command permissions", () => {
         yield* cleanup.authorize(registry, env);
         registry.set(sessions(other), AsyncResult.success(grant(false)));
         expect(registry.get(cleanup.permissionAtom(other))).toBe(false);
-      }),
-    ),
-  );
-
-  it.effect("requires the destination maintenance grant for fork installation", () =>
-    Effect.scoped(
-      Effect.gen(function* () {
-        const registry = yield* setup;
-        const updater = createCommandPermissions(runtime, WS_METHODS.serverInstallForkUpdate);
-        registry.set(sessions(env), AsyncResult.success(grant(true)));
-        expect(registry.get(updater.permissionAtom(env))).toBe(false);
-        expect((yield* updater.authorize(registry, env).pipe(Effect.flip))._tag).toBe(
-          "EnvironmentAuthorizationError",
-        );
-        registry.set(
-          sessions(env),
-          AsyncResult.success({
-            ...grant(true),
-            scopes: [AuthEnvironmentMaintainScope],
-            permissions: [AuthEnvironmentMaintainScope],
-          }),
-        );
-        expect(registry.get(updater.permissionAtom(env))).toBe(true);
-        yield* updater.authorize(registry, env);
-        registry.set(sessions(other), AsyncResult.success(grant(false)));
-        expect(registry.get(updater.permissionAtom(other))).toBe(false);
-        registry.set(sessions(env), AsyncResult.success(grant(false)));
-        expect((yield* updater.authorize(registry, env).pipe(Effect.flip))._tag).toBe(
-          "EnvironmentAuthorizationError",
-        );
       }),
     ),
   );

@@ -68,9 +68,12 @@ export function resolveVersionMismatch(
 
   const clientCore = versionCore(normalizedClientVersion);
   const serverCore = versionCore(normalizedServerVersion);
+  // Fork: personal builds (`-nick.<run>`) share one core version, so they
+  // compare like nightlies.
+  const clientTrain = parseSemver(normalizedClientVersion)?.prerelease[0];
   const compareNightlyBuilds =
-    parseSemver(normalizedClientVersion)?.prerelease[0] === "nightly" &&
-    parseSemver(normalizedServerVersion)?.prerelease[0] === "nightly";
+    (clientTrain === "nightly" || clientTrain === "nick") &&
+    parseSemver(normalizedServerVersion)?.prerelease[0] === clientTrain;
   const serverIsBehind =
     parseSemver(clientCore) && parseSemver(serverCore)
       ? compareSemverVersions(

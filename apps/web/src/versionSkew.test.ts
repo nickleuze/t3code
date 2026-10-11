@@ -136,6 +136,19 @@ describe("versionSkew", () => {
     });
   });
 
+  it("compares fork builds on the same core version by build number", () => {
+    branding.APP_VERSION = "0.0.45-nick.11";
+
+    expect(resolveVersionMismatch("0.0.45-nick.10")).toEqual({
+      clientVersion: "0.0.45-nick.11",
+      serverVersion: "0.0.45-nick.10",
+      hint: MISMATCH_HINT,
+    });
+    expect(resolveVersionMismatch("0.0.45-nick.11")).toBeNull();
+    expect(resolveVersionMismatch("0.0.45-nick.12")).toBeNull();
+    expect(resolveVersionMismatch("0.0.45-nightly.20261010.1")).toBeNull();
+  });
+
   it("falls back to string inequality when a version is not semver", () => {
     expect(resolveVersionMismatch("dev")).toEqual({
       clientVersion: "0.0.34",

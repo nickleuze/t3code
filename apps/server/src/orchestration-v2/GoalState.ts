@@ -5,24 +5,25 @@
  *
  * @module GoalState
  */
-import type {
-  CheckpointRef,
-  CommandId,
-  ModelSelection,
-  OrchestrationV2AppThread,
-  OrchestrationV2GoalAdvanceStep,
-  OrchestrationV2GoalBurnGuard,
-  OrchestrationV2GoalCheckResult,
-  OrchestrationV2GoalIterationOutcome,
-  OrchestrationV2GoalIterationRecord,
-  OrchestrationV2GoalProgressNote,
-  OrchestrationV2GoalProposal,
-  OrchestrationV2GoalStatus,
-  OrchestrationV2GoalUsageAccounting,
-  OrchestrationV2ThreadGoal,
-  OrchestrationV2ThreadGoalSummary,
-  RuntimeMode,
-  ThreadId,
+import {
+  goalIterationTimeoutMins,
+  type CheckpointRef,
+  type CommandId,
+  type ModelSelection,
+  type OrchestrationV2AppThread,
+  type OrchestrationV2GoalAdvanceStep,
+  type OrchestrationV2GoalBurnGuard,
+  type OrchestrationV2GoalCheckResult,
+  type OrchestrationV2GoalIterationOutcome,
+  type OrchestrationV2GoalIterationRecord,
+  type OrchestrationV2GoalProgressNote,
+  type OrchestrationV2GoalProposal,
+  type OrchestrationV2GoalStatus,
+  type OrchestrationV2GoalUsageAccounting,
+  type OrchestrationV2ThreadGoal,
+  type OrchestrationV2ThreadGoalSummary,
+  type RuntimeMode,
+  type ThreadId,
 } from "@t3tools/contracts";
 
 const DEFAULT_GOAL_NO_PROGRESS_LIMIT = 3;
@@ -35,7 +36,6 @@ const MAX_GOAL_NOTE_CHARS = 2_000;
 export const MAX_GOAL_NOTES_TOTAL_CHARS = 8_000;
 const MAX_GOAL_HISTORY = 20;
 export const MAX_GOAL_CHECK_OUTPUT_CHARS = 4_000;
-const DEFAULT_GOAL_ITERATION_TIMEOUT_MINS = 120;
 const MAX_GOAL_USER_MESSAGE_CHARS = 4_000;
 const SHELL_SUMMARY_CHARS = 200;
 const SHELL_OBJECTIVE_CHARS = 120;
@@ -71,6 +71,11 @@ export type GoalCommandInput =
       readonly type: "message";
       readonly goalId: CommandId;
       readonly text: string;
+    }
+  | {
+      readonly type: "update";
+      readonly goalId: CommandId;
+      readonly brief: GoalBriefEdit;
     }
   | {
       readonly type: "control";
@@ -109,6 +114,14 @@ export type GoalCommandInput =
       readonly step: OrchestrationV2GoalAdvanceStep;
     };
 
+/** Brief fields a paused or blocked goal can change; omitted ones stay, null clears. */
+export interface GoalBriefEdit {
+  readonly objective?: string | undefined;
+  readonly doneWhen?: string | null | undefined;
+  readonly background?: string | null | undefined;
+  readonly permissions?: string | null | undefined;
+}
+
 export type GoalCommandResult =
   | { readonly ok: true; readonly goal: OrchestrationV2ThreadGoal | null }
   | { readonly ok: false; readonly reason: string };
@@ -121,12 +134,6 @@ export function goalIterationTitle(iteration: number, detail: string): string {
   const firstLine = detail.split("\n")[0]!.trim();
   const clipped = firstLine.length > 80 ? `${firstLine.slice(0, 79)}…` : firstLine;
   return `Goal #${iteration}: ${clipped}`;
-}
-
-export function goalIterationTimeoutMins(
-  goal: Pick<OrchestrationV2ThreadGoal, "iterationTimeoutMins">,
-) {
-  return goal.iterationTimeoutMins ?? DEFAULT_GOAL_ITERATION_TIMEOUT_MINS;
 }
 
 export type GoalProposalCommandInput =
@@ -205,6 +212,7 @@ export function applyGoalCommand(
       safetyCap: DEFAULT_GOAL_SAFETY_CAP,
       iteration: 0,
       tokensUsed: 0,
+      uncachedTokensUsed: 0,
       usageAccounting: "exact",
       modelSelection: command.modelSelection,
       runtimeMode: command.runtimeMode,
@@ -217,7 +225,9 @@ export function applyGoalCommand(
       doneWhen: command.doneWhen,
       background: command.background,
       permissions: command.permissions,
-      iterationTimeoutMins: command.iterationTimeoutMins ?? DEFAULT_GOAL_ITERATION_TIMEOUT_MINS,
+      iterationTimeoutMins: goalIterationTimeoutMins({
+        iterationTimeoutMins: command.iterationTimeoutMins,
+      }),
       handoffPath: null,
       resumeNote: null,
       createdAt: now,
@@ -236,6 +246,19 @@ export function applyGoalCommand(
       return applyControl(goal, command, now, touch);
     case "message":
       return applyMessage(goal, command.text, now, touch);
+    case "update":
+      if (goal.status !== "paused" && goal.status !== "blocked") {
+        return reject("Pause the goal before editing its brief.");
+      }
+      return touch({
+        ...goal,
+        ...(command.brief.objective === undefined ? {} : { objective: command.brief.objective }),
+        ...(command.brief.doneWhen === undefined ? {} : { doneWhen: command.brief.doneWhen }),
+        ...(command.brief.background === undefined ? {} : { background: command.brief.background }),
+        ...(command.brief.permissions === undefined
+          ? {}
+          : { permissions: command.brief.permissions }),
+      });
     case "iteration.start": {
       if (goal.status !== "active") return reject("The goal is not active.");
       if (goal.current !== null) return reject("An iteration is already running.");
@@ -433,6 +456,16 @@ function applyAdvance(
     case "resumed":
       if (goal.status !== "usageLimited") return accept(goal);
       return touch({ ...goal, status: "active", statusReason: null, resumeAt: null });
+    case "turn_continued": {
+      if (current === null || current.finished !== null) return reject("No iteration is running.");
+      return touch({
+        ...goal,
+        current: { ...current, continuations: (current.continuations ?? 0) + 1 },
+      });
+    }
+    case "usage_sampled":
+      // A reading is not a goal transition, so it leaves `updatedAt` alone.
+      return accept({ ...goal, usageSample: step.sample });
     case "messages_delivered": {
       if (current === null) return reject("No iteration is running.");
       return touch({
@@ -464,12 +497,20 @@ function applyAdvance(
       const withUsage = {
         ...goal,
         tokensUsed: goal.tokensUsed + step.tokens,
+        // Goals from before uncached tracking keep it unknown rather than undercounting.
+        ...(goal.uncachedTokensUsed === undefined
+          ? {}
+          : { uncachedTokensUsed: goal.uncachedTokensUsed + (step.uncachedTokens ?? 0) }),
         usageAccounting:
           goal.history.length === 0
             ? step.accounting
             : worseAccounting(goal.usageAccounting, step.accounting),
       };
-      const finished = { tokens: step.tokens, workspaceChanged: step.workspaceChanged };
+      const finished: Finished = {
+        tokens: step.tokens,
+        ...(step.uncachedTokens === undefined ? {} : { uncachedTokens: step.uncachedTokens }),
+        workspaceChanged: step.workspaceChanged,
+      };
       const claim = current.claim;
       if (
         step.childOutcome === "completed" &&
@@ -512,7 +553,7 @@ function applyAdvance(
 function finishIteration(
   goal: OrchestrationV2ThreadGoal,
   step: Extract<OrchestrationV2GoalAdvanceStep, { readonly type: "iteration_finished" }>,
-  finished: { readonly tokens: number; readonly workspaceChanged: boolean | null },
+  finished: Finished,
   now: string,
 ): Omit<OrchestrationV2ThreadGoal, "updatedAt"> {
   const current = goal.current!;
@@ -584,10 +625,12 @@ function finishIteration(
   }
 }
 
+type Finished = NonNullable<NonNullable<OrchestrationV2ThreadGoal["current"]>["finished"]>;
+
 function closeIteration(
   goal: OrchestrationV2ThreadGoal,
   outcome: OrchestrationV2GoalIterationOutcome,
-  finished: { readonly tokens: number; readonly workspaceChanged: boolean | null },
+  finished: Finished,
   now: string,
   overrides: Partial<OrchestrationV2ThreadGoal>,
 ): OrchestrationV2ThreadGoal {
@@ -597,7 +640,9 @@ function closeIteration(
     childThreadId: current.childThreadId,
     outcome,
     tokens: finished.tokens,
+    ...(finished.uncachedTokens === undefined ? {} : { uncachedTokens: finished.uncachedTokens }),
     workspaceChanged: finished.workspaceChanged,
+    ...(current.continuations ? { continuations: current.continuations } : {}),
     finishedAt: now,
   };
   const undelivered = (current.pendingMessages ?? []).map((message) => message.text);
@@ -672,6 +717,9 @@ export function goalSummary(
     statusReason: goal.statusReason,
     iteration: goal.iteration,
     tokensUsed: goal.tokensUsed,
+    ...(goal.uncachedTokensUsed === undefined
+      ? {}
+      : { uncachedTokensUsed: goal.uncachedTokensUsed }),
     needsInput: goal.current?.waitingOnRequest != null,
     currentChildThreadId: goal.current?.childThreadId ?? null,
     updatedAt: goal.updatedAt,

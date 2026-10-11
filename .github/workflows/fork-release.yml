@@ -1,10 +1,10 @@
 name: Fork release
 
 # Builds the macOS arm64 desktop app from every push to the fork's nick/v2
-# and publishes it as a GitHub release. Machines install it with
-# fork/update.sh (or fork/update-all.sh, or the app's update prompt). The
-# builds are signed with the fork's self-signed certificate, which Squirrel.Mac
-# does not accept, so Electron's built-in updater is switched off in them.
+# and publishes it as a GitHub release. Installed builds update through the
+# app's built-in updater: every build is signed with the fork's one
+# self-signed certificate, so Squirrel.Mac accepts each new build as the same
+# app. fork/update.sh installs a release by hand (first install, recovery).
 
 on:
   push:
@@ -26,6 +26,8 @@ jobs:
       contents: read
       pull-requests: read
 
+  # Checks and release share this run's github.sha, so a release can only
+  # publish the exact commit that passed.
   release:
     needs: checks
     if: github.repository == 'nickleuze/t3code' && github.ref == 'refs/heads/nick/v2' && needs.checks.result == 'success'
@@ -42,15 +44,8 @@ jobs:
             !/.repos/
           sparse-checkout-cone-mode: false
 
-      - uses: actions/setup-node@v6
-        with:
-          node-version-file: package.json
-
-      - name: Verify exact checked commit before building
-        env:
-          CI_RESULT: ${{ needs.checks.result }}
-          CI_CHECKED_SHA: ${{ needs.checks.outputs.checked-sha }}
-        run: node fork/release-gate.mjs release
+      - name: Require the checked commit
+        run: test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
@@ -75,15 +70,19 @@ jobs:
           base="$(node -p "require('./apps/desktop/package.json').version")"
           echo "version=${base}-nick.${GITHUB_RUN_NUMBER}" >> "$GITHUB_OUTPUT"
 
-      # No update feed: Squirrel.Mac cannot install ad-hoc signed builds. The
-      # build derives the feed from GITHUB_REPOSITORY, which Actions does not
-      # let a step override, so it is removed from this command's environment.
+      # As upstream's release does, so the server and web client report this
+      # build too and a machine on an older build is offered its update.
+      - name: Align package versions to release version
+        run: node scripts/update-release-package-versions.ts "${{ steps.version.outputs.version }}"
+
+      # The update feed is this repository's latest GitHub release.
       # T3 Connect sign-in and relay settings are baked into the build (locally
       # they come from .env). They are the same public values upstream ships;
       # without them the app cannot connect to other machines.
       - name: Build
         env:
           T3CODE_DESKTOP_VERSION: ${{ steps.version.outputs.version }}
+          T3CODE_DESKTOP_UPDATE_REPOSITORY: ${{ github.repository }}
           T3CODE_CLERK_PUBLISHABLE_KEY: ${{ vars.T3CODE_CLERK_PUBLISHABLE_KEY }}
           T3CODE_CLERK_JWT_TEMPLATE: ${{ vars.T3CODE_CLERK_JWT_TEMPLATE }}
           T3CODE_CLERK_CLI_OAUTH_CLIENT_ID: ${{ vars.T3CODE_CLERK_CLI_OAUTH_CLIENT_ID }}
@@ -95,16 +94,19 @@ jobs:
               exit 1
             fi
           done
-          env -u GITHUB_REPOSITORY -u T3CODE_DESKTOP_UPDATE_REPOSITORY \
-            PATH="$PWD/node_modules/.bin:$PATH" \
+          PATH="$PWD/node_modules/.bin:$PATH" \
             node scripts/build-desktop-artifact.ts --platform mac --target dmg --arch arm64
-          if unzip -l "release/T3-Code-${T3CODE_DESKTOP_VERSION}-arm64.zip" | grep -q "app-update.yml"; then
-            echo "Build still carries an update feed" >&2
+          feed="$(unzip -p "release/T3-Code-${T3CODE_DESKTOP_VERSION}-arm64.zip" "T3 Code (Alpha).app/Contents/Resources/app-update.yml")"
+          if ! grep -qx "owner: ${GITHUB_REPOSITORY%/*}" <<<"$feed" || ! grep -qx "repo: ${GITHUB_REPOSITORY#*/}" <<<"$feed"; then
+            echo "Build does not update from ${GITHUB_REPOSITORY}:" >&2
+            echo "$feed" >&2
             exit 1
           fi
 
       # Re-signs the ad-hoc build with the fork's certificate so every build
-      # keeps one identity and the Keychain does not ask again after updates.
+      # keeps one identity: Squirrel.Mac only installs an update whose
+      # signature satisfies the running app's designated requirement, and the
+      # Keychain does not ask again after updates.
       - name: Sign with the fork certificate
         env:
           VERSION: ${{ steps.version.outputs.version }}
@@ -120,12 +122,6 @@ jobs:
           FORK_SIGNING_P12="$p12" fork/sign-release.sh "release/T3-Code-${VERSION}-arm64.zip"
           rm -f "$p12"
 
-      - name: Recheck exact checked commit before publication
-        env:
-          CI_RESULT: ${{ needs.checks.result }}
-          CI_CHECKED_SHA: ${{ needs.checks.outputs.checked-sha }}
-        run: node fork/release-gate.mjs release
-
       - name: Publish release
         env:
           GH_TOKEN: ${{ github.token }}
@@ -133,18 +129,32 @@ jobs:
         run: |
           zip="T3-Code-${VERSION}-arm64.zip"
           test -f "release/${zip}"
-          # The app's update prompt runs this to install the release.
+          # Builds before the built-in updater (up to 0.0.45-nick.9) install
+          # through their update button, which runs this asset.
           cp fork/update.sh release/fork-update.sh
           cd release
           shasum -a 256 "${zip}" > SHA256SUMS
           sha="$(cut -d' ' -f1 SHA256SUMS)"
+          # Signing changed the zip, so the updater manifest electron-builder
+          # wrote is replaced with one for the signed zip only.
+          sha512="$(openssl dgst -sha512 -binary "${zip}" | base64)"
+          cat > latest-mac.yml <<EOF
+          version: ${VERSION}
+          files:
+            - url: ${zip}
+              sha512: ${sha512}
+              size: $(stat -f%z "${zip}")
+          path: ${zip}
+          sha512: ${sha512}
+          releaseDate: '$(date -u +%Y-%m-%dT%H:%M:%S.000Z)'
+          EOF
           printf '{"version":"%s","commit":"%s","zip":"%s","sha256":"%s","builtAt":"%s"}\n' \
             "${VERSION}" "${GITHUB_SHA}" "${zip}" "${sha}" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
             > fork-release.json
           notes="Built from ${GITHUB_SHA} on nick/v2.
 
-          Install from the app's update prompt, fork/update.sh, or fork/update-all.sh for every machine."
-          gh release create "fork-v${VERSION}" "${zip}" SHA256SUMS fork-release.json fork-update.sh \
+          Installed fork builds update from the app; fork/update.sh installs it by hand."
+          gh release create "fork-v${VERSION}" "${zip}" latest-mac.yml SHA256SUMS fork-release.json fork-update.sh \
             --repo "${GITHUB_REPOSITORY}" \
             --target "${GITHUB_SHA}" \
             --title "Fork ${VERSION}" \

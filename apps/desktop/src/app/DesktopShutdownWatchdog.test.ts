@@ -28,7 +28,7 @@ it.effect("stalled resource cleanup stops backends and allows the quit to finish
     yield* Deferred.await(stopped);
     yield* shutdown.awaitComplete;
     yield* TestClock.adjust("10 seconds");
-    assert.strictEqual(yield* Deferred.await(exited), 0);
+    assert.strictEqual(yield* Deferred.await(exited), 1);
     yield* Fiber.join(fiber);
   }).pipe(Effect.provide(DesktopShutdown.layer)),
 );
@@ -45,7 +45,7 @@ it.effect("a stalled emergency backend stop cannot stall the independent exit de
       Effect.forkChild,
     );
     yield* TestClock.adjust("30 seconds");
-    assert.strictEqual(yield* Deferred.await(exited), 0);
+    assert.strictEqual(yield* Deferred.await(exited), 1);
     yield* Fiber.join(fiber);
   }).pipe(Effect.provide(DesktopShutdown.layer)),
 );

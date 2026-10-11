@@ -1,5 +1,9 @@
 import { presentThreadShell } from "@t3tools/client-runtime/state/models";
-import { t3GoalOwnsActivity } from "@t3tools/shared/agentAwareness";
+import {
+  t3GoalAttention,
+  t3GoalHeadline,
+  t3GoalOwnsActivity,
+} from "@t3tools/shared/agentAwareness";
 import { useAtomValue } from "@effect/atom-react";
 import { useNavigate, useParams } from "@tanstack/react-router";
 import type { EnvironmentId, OrchestrationV2ThreadShell, ThreadId } from "@t3tools/contracts";
@@ -143,16 +147,11 @@ function EnvironmentNotifications({
         !thread.hasPendingApprovals &&
         !thread.hasPendingUserInput
       ) {
+        const goalAttention = t3GoalAttention(goal);
         status =
-          goal.needsInput ||
-          goal.status === "blocked" ||
-          (goal.status === "paused" && goal.statusReason !== "user")
-            ? "input"
-            : goal.status === "usageLimited"
-              ? "limited"
-              : goal.status === "active"
-                ? "working"
-                : "ready";
+          goalAttention === "input" || goalAttention === "limited" || goalAttention === "working"
+            ? goalAttention
+            : "ready";
       } else if (status === "ready" && thread.latestRun?.status === "failed") status = "failed";
       const attention =
         status === "input" || status === "approval" || status === "failed" || status === "limited"
@@ -183,11 +182,7 @@ function EnvironmentNotifications({
       const goalAttentionTitle =
         goal === null || status !== "input" || thread.hasPendingUserInput
           ? null
-          : goal.needsInput
-            ? "Goal needs input"
-            : goal.status === "blocked"
-              ? "Goal blocked"
-              : "Goal paused";
+          : t3GoalHeadline(goal);
       const title =
         kind === "completion"
           ? finishedGoal

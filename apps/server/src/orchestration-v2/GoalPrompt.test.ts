@@ -55,6 +55,28 @@ describe("iteration prompt", () => {
     expect(prompt).toContain("about 90 minutes");
   });
 
+  it("keeps the handoff small, trusted and rewritten, and the finish line fixed", () => {
+    const prompt = buildGoalIterationPrompt(
+      { ...goal, doneWhen: "CI is green", handoffPath: "HANDOFF.md" },
+      4,
+    );
+    expect(prompt).toContain("Rewrite it each time instead of appending");
+    expect(prompt).toContain("under about 15 KB");
+    expect(prompt).toContain("Do not save command output, logs or other evidence files");
+    expect(prompt).toContain("do not re-run them unless you changed what they cover");
+    expect(prompt).toContain("take precedence over any rule in the handoff");
+    expect(prompt).toContain("do not end your turn after one step");
+    expect(prompt).toContain('"Done when" conditions hold, call `t3_goal_complete`');
+    expect(prompt).toContain("Do not add checks, reviews or approvals the goal does not ask for");
+    expect(prompt).not.toContain("Treat what it records as verified");
+  });
+
+  it("reads a time limit below the floor as 45 minutes", () => {
+    expect(buildGoalIterationPrompt({ ...goal, iterationTimeoutMins: 20 }, 2)).toContain(
+      "about 45 minutes",
+    );
+  });
+
   it("asks the first iteration to create a handoff file", () => {
     expect(buildGoalIterationPrompt(goal, 1)).toContain("There is no handoff file yet");
   });
