@@ -118,7 +118,7 @@ export const layer = McpToolAccess.toLayer(TicketToolkit, {
       const { caller } = yield* readCaller();
       const tickets = yield* Tickets.TicketService;
       const projectId =
-        input.projectId === undefined ? (caller?.projectId ?? null) : input.projectId;
+        input.projectId === undefined ? (caller?.projectId ?? "all") : input.projectId;
       const query = input.query?.trim().toLowerCase() ?? "";
       const result = yield* tickets.list().pipe(Effect.mapError(ticketFailure));
       const candidates = result.tickets.filter(

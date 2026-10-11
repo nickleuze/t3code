@@ -250,9 +250,10 @@ describe("ticket toolkit handlers", () => {
       expect(
         (yield* harness.call("t3_ticket_list", { projectId: OTHER_PROJECT })).tickets,
       ).toMatchObject([{ title: "Other" }]);
-      expect((yield* harness.call("t3_ticket_list", {}, outside)).tickets).toMatchObject([
-        { title: "Unassigned" },
-      ]);
+      expect((yield* harness.call("t3_ticket_list", {}, outside)).tickets).toHaveLength(3);
+      expect(
+        (yield* harness.call("t3_ticket_list", { projectId: null }, outside)).tickets,
+      ).toMatchObject([{ title: "Unassigned" }]);
       expect(
         yield* harness.call("t3_ticket_list", { projectId: "all", limit: 1 }, readOnly),
       ).toMatchObject({
