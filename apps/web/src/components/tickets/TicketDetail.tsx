@@ -13,6 +13,7 @@ import { Textarea } from "../ui/textarea";
 import { Sheet, SheetPopup, SheetHeader, SheetTitle, SheetDescription } from "../ui/sheet";
 import { toastManager } from "../ui/toast";
 import { TicketPicker } from "./TicketPicker";
+import { TicketGithubSection } from "./TicketGithub";
 import { TicketLinks } from "./TicketLinks";
 import { TicketStartWork } from "./TicketStartWork";
 
@@ -156,6 +157,10 @@ export function TicketDetail({
             >
               Save changes
             </Button>
+            <TicketGithubSection
+              entry={entry}
+              unsaved={busy || Object.values(edited).some(Boolean) || pickedStatus !== null}
+            />
             <TicketStartWork entry={entry} />
             <h3 className="text-sm font-medium">Linked threads</h3>
             <TicketLinks entry={entry} editable />

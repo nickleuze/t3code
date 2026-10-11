@@ -125,6 +125,31 @@ const makeHarness = Effect.fn("makeTicketToolkitHarness")(function* (
   return { call, tickets, shells, seed };
 });
 
+it.effect("list rows include linked issue URL and state", () =>
+  Effect.gen(function* () {
+    const harness = yield* makeHarness();
+    const ticket = yield* harness.seed({ title: "GitHub link" });
+    yield* harness.tickets.setGithubIssues([
+      {
+        id: ticket.id,
+        issue: {
+          repository: "github.com/acme/project",
+          number: 42,
+          url: "https://github.com/acme/project/issues/42",
+          state: "open",
+          closedAt: null,
+          syncedAt: ticket.createdAt,
+        },
+      },
+    ]);
+    const result = yield* harness.call("t3_ticket_list", {});
+    expect(result.tickets[0].githubIssue).toEqual({
+      url: "https://github.com/acme/project/issues/42",
+      state: "open",
+    });
+  }),
+);
+
 describe("ticket toolkit handlers", () => {
   it.effect("creates agent tickets with the caller's project and an origin-only link", () =>
     Effect.gen(function* () {
@@ -231,6 +256,7 @@ describe("ticket toolkit handlers", () => {
             status: "in_progress",
             project: { id: PROJECT, title: "Main project" },
             bodyExcerpt: expect.stringMatching(/…$/),
+            githubIssue: null,
             workThreads: [{ id: WORK, title: "Parser work", status: "running" }],
             workThreadsOmitted: 0,
           },

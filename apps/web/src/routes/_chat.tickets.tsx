@@ -34,6 +34,7 @@ import { Tooltip, TooltipTrigger, TooltipPopup } from "../components/ui/tooltip"
 import { Input } from "../components/ui/input";
 import { Menu, MenuTrigger, MenuPopup, MenuItem } from "../components/ui/menu";
 import { TicketPicker } from "../components/tickets/TicketPicker";
+import { TicketGithubBoardActions, TicketIssueBadge } from "../components/tickets/TicketGithub";
 import { TicketLinks } from "../components/tickets/TicketLinks";
 import { TicketDetail } from "../components/tickets/TicketDetail";
 import { TicketStartWork } from "../components/tickets/TicketStartWork";
@@ -165,6 +166,7 @@ function TicketsPage() {
     <SidebarInset>
       <WorkspacePageHeader electron={isElectron}>
         <h1 className="flex-1 text-sm font-medium">Tickets</h1>
+        <TicketGithubBoardActions />
         {ids.length ? (
           <Button size="sm" onClick={() => openTicketCapture()}>
             New ticket
@@ -452,6 +454,7 @@ function TicketCard({
           {entry.ticket.body.trim()}
         </p>
       ) : null}
+      <TicketIssueBadge entry={entry} />
       <TicketLinks entry={entry} />
       <div className="flex flex-wrap items-center justify-between gap-1">
         <Menu>

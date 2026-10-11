@@ -83,31 +83,45 @@ const cases: {
     expected: "in_progress",
   },
   {
-    name: "new issue closure advances",
+    name: "issue closed after manual status advances to done",
     status: "inbox",
     threads: [],
-    issue: { state: "closed", syncedAt: after },
+    issue: { state: "closed", closedAt: after },
     expected: "done",
   },
   {
     name: "old issue closure ignored",
     status: "ready",
     threads: [],
-    issue: { state: "closed", syncedAt: before },
+    issue: { state: "closed", closedAt: before },
     expected: "ready",
   },
   {
     name: "equal issue closure ignored",
     status: "ready",
     threads: [],
-    issue: { state: "closed", syncedAt: at },
+    issue: { state: "closed", closedAt: at },
+    expected: "ready",
+  },
+  {
+    name: "manual reopen after close sticks across refreshes",
+    status: "ready",
+    threads: [],
+    issue: { state: "closed", closedAt: before },
+    expected: "ready",
+  },
+  {
+    name: "legacy closure with unknown close time is ignored",
+    status: "ready",
+    threads: [],
+    issue: { state: "closed" },
     expected: "ready",
   },
   {
     name: "open issue ignored",
     status: "ready",
     threads: [],
-    issue: { state: "open", syncedAt: after },
+    issue: { state: "open", closedAt: after },
     expected: "ready",
   },
   { name: "done is terminal", status: "done", threads: [thread(after, [after])], expected: "done" },
@@ -115,7 +129,7 @@ const cases: {
     name: "dropped is terminal even with a closed issue",
     status: "dropped",
     threads: [thread(after, [after])],
-    issue: { state: "closed", syncedAt: after },
+    issue: { state: "closed", closedAt: after },
     expected: "dropped",
   },
   {
@@ -176,6 +190,17 @@ describe("deriveTicketStatus", () => {
     expect(deriveTicketStatus(ticket, (id) => shells.get(id))).toBe(expected);
     expect(ticket.status).toBe(status);
   });
+});
+it("refresh timestamps never override a manual reopen after the issue close", () => {
+  for (const syncedAt of [at, after, "2026-10-12T12:00:00.000Z"]) {
+    const ticket = {
+      status: "ready" as const,
+      statusSetAt: at,
+      links: [],
+      githubIssue: { state: "closed" as const, closedAt: before, syncedAt },
+    };
+    expect(deriveTicketStatus(ticket, () => undefined)).toBe("ready");
+  }
 });
 it("builds a start prompt with markdown body and ticket provenance", () => {
   expect(

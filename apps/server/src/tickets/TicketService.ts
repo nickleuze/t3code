@@ -86,6 +86,14 @@ export const bootstrapSchema = Effect.gen(function* () {
 export class TicketService extends Context.Service<
   TicketService,
   {
+    // Internal persistence operations for the GitHub service; never exposed as generic RPC writes.
+    readonly importGithubIssue: (
+      input: TicketUpsertInput,
+      issue: TicketGithubIssue,
+    ) => Effect.Effect<TicketMutationResult, TicketError>;
+    readonly setGithubIssues: (
+      updates: ReadonlyArray<{ id: TicketId; issue: TicketGithubIssue | null; refresh?: boolean }>,
+    ) => Effect.Effect<number, TicketError>;
     readonly list: (input?: TicketListInput) => Effect.Effect<TicketListResult, TicketError>;
     readonly subscribeList: () => Stream.Stream<TicketListResult, TicketError>;
     readonly upsert: (input: TicketUpsertInput) => Effect.Effect<TicketMutationResult, TicketError>;
@@ -190,110 +198,151 @@ export const make = Effect.gen(function* () {
         );
       }),
     );
-  const upsert: TicketService["Service"]["upsert"] = (input) =>
-    mutate(
-      Effect.gen(function* () {
-        if (input.commandId !== undefined) {
-          const receipts = yield* sql<{ result_json: string }>`
+  const upsertEffect = (input: TicketUpsertInput) =>
+    Effect.gen(function* () {
+      if (input.commandId !== undefined) {
+        const receipts = yield* sql<{ result_json: string }>`
             SELECT result_json FROM fork_ticket_commands WHERE command_id = ${input.commandId}
           `;
-          if (receipts[0] !== undefined) {
-            return yield* decodeMutationJson(receipts[0].result_json);
-          }
+        if (receipts[0] !== undefined) {
+          return yield* decodeMutationJson(receipts[0].result_json);
         }
-        const timestamp = yield* now;
-        const id =
-          input.id ?? TicketId.make(`ticket:${input.commandId ?? (yield* crypto.randomUUIDv4)}`);
-        const existing = (yield* read(id, true))[0];
-        if (
-          (input.requireExisting === true && existing === undefined) ||
-          existing?.deletedAt != null
-        ) {
-          return yield* new TicketError({
-            message: "Ticket not found. Restore deleted tickets before editing.",
-            ticketId: id,
-          });
-        }
-        const title = input.title ?? existing?.title;
-        if (title === undefined) {
-          return yield* new TicketError({
-            message: "Title is required to create a ticket.",
-            ticketId: id,
-          });
-        }
-        if (
-          input.projectId !== undefined &&
-          input.projectId !== null &&
-          Option.isNone(yield* projects.get(input.projectId))
-        ) {
-          return yield* new TicketError({ message: "Project not found.", ticketId: id });
-        }
-        let sortKey = input.sortKey ?? existing?.sortKey;
-        if (sortKey === undefined) {
-          const rows = yield* sql<{ minSortKey: number | null }>`
+      }
+      const timestamp = yield* now;
+      const id =
+        input.id ?? TicketId.make(`ticket:${input.commandId ?? (yield* crypto.randomUUIDv4)}`);
+      const existing = (yield* read(id, true))[0];
+      if (
+        (input.requireExisting === true && existing === undefined) ||
+        existing?.deletedAt != null
+      ) {
+        return yield* new TicketError({
+          message: "Ticket not found. Restore deleted tickets before editing.",
+          ticketId: id,
+        });
+      }
+      const title = input.title ?? existing?.title;
+      if (title === undefined) {
+        return yield* new TicketError({
+          message: "Title is required to create a ticket.",
+          ticketId: id,
+        });
+      }
+      if (
+        input.projectId !== undefined &&
+        input.projectId !== null &&
+        Option.isNone(yield* projects.get(input.projectId))
+      ) {
+        return yield* new TicketError({ message: "Project not found.", ticketId: id });
+      }
+      let sortKey = input.sortKey ?? existing?.sortKey;
+      if (sortKey === undefined) {
+        const rows = yield* sql<{ minSortKey: number | null }>`
             SELECT MIN(sort_key) AS "minSortKey" FROM fork_tickets
             WHERE status = 'inbox' AND deleted_at IS NULL
           `;
-          const minSortKey = rows[0]?.minSortKey;
-          sortKey = minSortKey == null ? 0 : minSortKey - 1;
-        }
-        const ticket: Ticket = {
-          id,
-          projectId:
-            input.projectId === undefined ? (existing?.projectId ?? null) : input.projectId,
-          title,
-          body: input.body ?? existing?.body ?? "",
-          status: input.status ?? existing?.status ?? "inbox",
-          statusSetAt:
-            input.status === undefined ? (existing?.statusSetAt ?? timestamp) : timestamp,
-          sortKey,
-          createdBy: existing?.createdBy ?? input.createdBy ?? "user",
-          creationSource: existing?.creationSource ?? input.creationSource ?? "web",
-          originThreadId:
-            existing === undefined ? (input.originThreadId ?? null) : existing.originThreadId,
-          githubIssue: existing?.githubIssue ?? null,
-          links:
-            existing?.links ??
-            (input.creationSource === "mcp" && input.originThreadId != null
-              ? [{ threadId: input.originThreadId, role: "origin", linkedAt: timestamp }]
-              : []),
-          createdAt: existing?.createdAt ?? timestamp,
-          updatedAt: timestamp,
-          deletedAt: null,
-        };
-        const row = {
-          ticket_id: ticket.id,
-          project_id: ticket.projectId,
-          title: ticket.title,
-          body: ticket.body,
-          status: ticket.status,
-          status_set_at: ticket.statusSetAt,
-          sort_key: ticket.sortKey,
-          created_by: ticket.createdBy,
-          creation_source: ticket.creationSource,
-          origin_thread_id: ticket.originThreadId,
-          github_issue_json:
-            ticket.githubIssue === null ? null : yield* encodeGithubIssueJson(ticket.githubIssue),
-          created_at: ticket.createdAt,
-          updated_at: ticket.updatedAt,
-          deleted_at: ticket.deletedAt,
-        };
-        yield* sql`INSERT INTO fork_tickets ${sql.insert(row)}
+        const minSortKey = rows[0]?.minSortKey;
+        sortKey = minSortKey == null ? 0 : minSortKey - 1;
+      }
+      const ticket: Ticket = {
+        id,
+        projectId: input.projectId === undefined ? (existing?.projectId ?? null) : input.projectId,
+        title,
+        body: input.body ?? existing?.body ?? "",
+        status: input.status ?? existing?.status ?? "inbox",
+        statusSetAt: input.status === undefined ? (existing?.statusSetAt ?? timestamp) : timestamp,
+        sortKey,
+        createdBy: existing?.createdBy ?? input.createdBy ?? "user",
+        creationSource: existing?.creationSource ?? input.creationSource ?? "web",
+        originThreadId:
+          existing === undefined ? (input.originThreadId ?? null) : existing.originThreadId,
+        githubIssue: existing?.githubIssue ?? null,
+        links:
+          existing?.links ??
+          (input.creationSource === "mcp" && input.originThreadId != null
+            ? [{ threadId: input.originThreadId, role: "origin", linkedAt: timestamp }]
+            : []),
+        createdAt: existing?.createdAt ?? timestamp,
+        updatedAt: timestamp,
+        deletedAt: null,
+      };
+      const row = {
+        ticket_id: ticket.id,
+        project_id: ticket.projectId,
+        title: ticket.title,
+        body: ticket.body,
+        status: ticket.status,
+        status_set_at: ticket.statusSetAt,
+        sort_key: ticket.sortKey,
+        created_by: ticket.createdBy,
+        creation_source: ticket.creationSource,
+        origin_thread_id: ticket.originThreadId,
+        github_issue_json:
+          ticket.githubIssue === null ? null : yield* encodeGithubIssueJson(ticket.githubIssue),
+        created_at: ticket.createdAt,
+        updated_at: ticket.updatedAt,
+        deleted_at: ticket.deletedAt,
+      };
+      yield* sql`INSERT INTO fork_tickets ${sql.insert(row)}
       ON CONFLICT (ticket_id) DO UPDATE SET ${sql.update(row)}`;
-        // MCP creation and its origin link share the receipt transaction. A retry
-        // must not restore an unlinked origin or downgrade a later work link.
-        if (existing === undefined) {
-          for (const link of ticket.links) {
-            yield* sql`INSERT INTO fork_ticket_links (ticket_id, thread_id, role, linked_at)
+      // MCP creation and its origin link share the receipt transaction. A retry
+      // must not restore an unlinked origin or downgrade a later work link.
+      if (existing === undefined) {
+        for (const link of ticket.links) {
+          yield* sql`INSERT INTO fork_ticket_links (ticket_id, thread_id, role, linked_at)
           VALUES (${id}, ${link.threadId}, ${link.role}, ${link.linkedAt})`;
-          }
         }
-        const result = { ticket };
-        if (input.commandId !== undefined) {
-          yield* sql`INSERT INTO fork_ticket_commands (command_id, ticket_id, result_json)
+      }
+      const result = { ticket };
+      if (input.commandId !== undefined) {
+        yield* sql`INSERT INTO fork_ticket_commands (command_id, ticket_id, result_json)
         VALUES (${input.commandId}, ${id}, ${yield* encodeMutationJson(result)})`;
+      }
+      return result;
+    });
+  const upsert: TicketService["Service"]["upsert"] = (input) => mutate(upsertEffect(input));
+  const writeGithubIssue = Effect.fn("TicketService.writeGithubIssue")(function* (
+    id: TicketId,
+    issue: TicketGithubIssue | null,
+  ) {
+    yield* load(id, true);
+    yield* sql`UPDATE fork_tickets SET github_issue_json = ${issue === null ? null : yield* encodeGithubIssueJson(issue)}, updated_at = ${yield* now}
+      WHERE ticket_id = ${id}`;
+  });
+  const setGithubIssues: TicketService["Service"]["setGithubIssues"] = (updates) =>
+    mutate(
+      Effect.gen(function* () {
+        let count = 0;
+        for (const { id, issue, refresh } of updates) {
+          if (refresh) {
+            const current = (yield* read(id))[0];
+            if (
+              !current ||
+              current.githubIssue === null ||
+              issue === null ||
+              current.githubIssue.repository !== issue.repository ||
+              current.githubIssue.number !== issue.number
+            )
+              continue;
+          }
+          yield* writeGithubIssue(id, issue);
+          count++;
         }
-        return result;
+        return count;
+      }),
+    );
+  const importGithubIssue: TicketService["Service"]["importGithubIssue"] = (input, issue) =>
+    mutate(
+      Effect.gen(function* () {
+        const existing = (yield* read()).find(
+          (ticket) =>
+            ticket.githubIssue?.repository.toLowerCase() === issue.repository.toLowerCase() &&
+            ticket.githubIssue.number === issue.number,
+        );
+        if (existing !== undefined) return { ticket: existing };
+        const { ticket } = yield* upsertEffect(input);
+        yield* writeGithubIssue(ticket.id, issue);
+        return { ticket: yield* load(ticket.id) };
       }),
     );
   const deleteTicket: TicketService["Service"]["delete"] = (input) =>
@@ -347,6 +396,8 @@ export const make = Effect.gen(function* () {
     );
   return TicketService.of({
     list,
+    importGithubIssue,
+    setGithubIssues,
     subscribeList,
     upsert,
     delete: deleteTicket,

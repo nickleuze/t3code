@@ -89,6 +89,11 @@ const RPC_AGGREGATES = {
   [WS_METHODS.ticketsRestore]: "tickets",
   [WS_METHODS.ticketsLink]: "tickets",
   [WS_METHODS.ticketsUnlink]: "tickets",
+  [WS_METHODS.ticketsPublishIssue]: "tickets",
+  [WS_METHODS.ticketsImportIssue]: "tickets",
+  [WS_METHODS.ticketsUnlinkIssue]: "tickets",
+  [WS_METHODS.ticketsRefreshIssues]: "tickets",
+
   [WS_METHODS.scheduledTasksList]: "scheduledTasks",
   [WS_METHODS.scheduledTasksSubscribe]: "scheduledTasks",
   [WS_METHODS.scheduledTasksUpsert]: "scheduledTasks",

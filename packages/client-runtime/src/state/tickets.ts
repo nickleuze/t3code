@@ -63,6 +63,28 @@ export function createTicketEnvironmentAtoms<R, E>(
       });
     }
   });
+  const requireTicketGithub = requireTickets.pipe(
+    Effect.andThen(
+      Effect.gen(function* () {
+        const supervisor = yield* EnvironmentSupervisor;
+        const config = yield* getInitialServerConfig().pipe(
+          Effect.mapError(
+            () =>
+              new EnvironmentRpcUnavailableError({
+                environmentId: supervisor.target.environmentId,
+                message: "Could not load this environment's GitHub ticket capability.",
+              }),
+          ),
+        );
+        if (config.environment.capabilities.ticketGithub !== true) {
+          return yield* new EnvironmentRpcUnavailableError({
+            environmentId: config.environment.environmentId,
+            message: "This environment does not support GitHub ticket links.",
+          });
+        }
+      }),
+    ),
+  );
   const scheduler = createAtomCommandScheduler();
   const concurrency = {
     mode: "serial" as const,
@@ -95,6 +117,38 @@ export function createTicketEnvironmentAtoms<R, E>(
         withTickets(requestGuarded(ORCHESTRATION_V2_WS_METHODS.launchThread, input)),
     }),
     ticketIdsByThreadAtom,
+    publishIssue: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:server:tickets:publishIssue",
+      tag: WS_METHODS.ticketsPublishIssue,
+      execute: (input) =>
+        requireTicketGithub.pipe(
+          Effect.andThen(requestGuarded(WS_METHODS.ticketsPublishIssue, input)),
+        ),
+    }),
+    importIssue: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:server:tickets:importIssue",
+      tag: WS_METHODS.ticketsImportIssue,
+      execute: (input) =>
+        requireTicketGithub.pipe(
+          Effect.andThen(requestGuarded(WS_METHODS.ticketsImportIssue, input)),
+        ),
+    }),
+    unlinkIssue: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:server:tickets:unlinkIssue",
+      tag: WS_METHODS.ticketsUnlinkIssue,
+      execute: (input) =>
+        requireTicketGithub.pipe(
+          Effect.andThen(requestGuarded(WS_METHODS.ticketsUnlinkIssue, input)),
+        ),
+    }),
+    refreshIssues: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:server:tickets:refreshIssues",
+      tag: WS_METHODS.ticketsRefreshIssues,
+      execute: (input) =>
+        requireTicketGithub.pipe(
+          Effect.andThen(requestGuarded(WS_METHODS.ticketsRefreshIssues, input)),
+        ),
+    }),
     upsertTicket: createEnvironmentRpcCommand(runtime, {
       label: "environment-data:server:tickets:upsert",
       tag: WS_METHODS.ticketsUpsert,

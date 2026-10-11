@@ -345,6 +345,11 @@ import {
   TicketDeleteInput,
   TicketDeleteResult,
   TicketError,
+  TicketPublishIssueInput,
+  TicketImportIssueInput,
+  TicketUnlinkIssueInput,
+  TicketRefreshIssuesInput,
+  TicketRefreshIssuesResult,
   TicketListInput,
   TicketListResult,
   TicketSubscribeInput,
@@ -524,6 +529,10 @@ export const WS_METHODS = {
   ticketsRestore: "tickets.restore",
   ticketsLink: "tickets.link",
   ticketsUnlink: "tickets.unlink",
+  ticketsPublishIssue: "tickets.publishIssue",
+  ticketsImportIssue: "tickets.importIssue",
+  ticketsUnlinkIssue: "tickets.unlinkIssue",
+  ticketsRefreshIssues: "tickets.refreshIssues",
 
   // Scheduled tasks
   scheduledTasksList: "scheduledTasks.list",
@@ -1793,6 +1802,30 @@ const WsTicketsLinkRpc = Rpc.make(WS_METHODS.ticketsLink, {
   error: Schema.Union([TicketError, EnvironmentAuthorizationError]),
 });
 
+const WsTicketsPublishIssueRpc = Rpc.make(WS_METHODS.ticketsPublishIssue, {
+  payload: TicketPublishIssueInput,
+  success: TicketMutationResult,
+  error: Schema.Union([TicketError, EnvironmentAuthorizationError]),
+});
+
+const WsTicketsImportIssueRpc = Rpc.make(WS_METHODS.ticketsImportIssue, {
+  payload: TicketImportIssueInput,
+  success: TicketMutationResult,
+  error: Schema.Union([TicketError, EnvironmentAuthorizationError]),
+});
+
+const WsTicketsUnlinkIssueRpc = Rpc.make(WS_METHODS.ticketsUnlinkIssue, {
+  payload: TicketUnlinkIssueInput,
+  success: TicketMutationResult,
+  error: Schema.Union([TicketError, EnvironmentAuthorizationError]),
+});
+
+const WsTicketsRefreshIssuesRpc = Rpc.make(WS_METHODS.ticketsRefreshIssues, {
+  payload: TicketRefreshIssuesInput,
+  success: TicketRefreshIssuesResult,
+  error: Schema.Union([TicketError, EnvironmentAuthorizationError]),
+});
+
 const WsTicketsUnlinkRpc = Rpc.make(WS_METHODS.ticketsUnlink, {
   payload: TicketUnlinkInput,
   success: TicketMutationResult,
@@ -1957,6 +1990,11 @@ export const WsRpcGroup = RpcGroup.make(
   WsTicketsRestoreRpc,
   WsTicketsLinkRpc,
   WsTicketsUnlinkRpc,
+  WsTicketsPublishIssueRpc,
+  WsTicketsImportIssueRpc,
+  WsTicketsUnlinkIssueRpc,
+  WsTicketsRefreshIssuesRpc,
+
   WsScheduledTasksListRpc,
   WsScheduledTasksSubscribeRpc,
   WsScheduledTasksUpsertRpc,

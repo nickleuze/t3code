@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vite-plus/test";
 import * as Schema from "effect/Schema";
-import { Ticket, TicketListResult, TicketUpsertInput } from "./ticket.ts";
+import { Ticket, TicketGithubIssue, TicketListResult, TicketUpsertInput } from "./ticket.ts";
 import { ExecutionEnvironmentCapabilities } from "./environment.ts";
 
 const ticket = {
@@ -78,4 +78,17 @@ describe("ticket contracts", () => {
     expect(decodeCapability({ tickets: true })).toEqual({ tickets: true });
     expect(isTicket({ ...ticket, deletedAt: ticket.updatedAt })).toBe(true);
   });
+});
+
+it("defaults missing legacy issue close time to null and preserves known close times", () => {
+  const issue = {
+    repository: "github.com/acme/project",
+    number: 1,
+    url: "https://github.com/acme/project/issues/1",
+    state: "closed" as const,
+    syncedAt: ticket.updatedAt,
+  };
+  const decode = Schema.decodeSync(TicketGithubIssue);
+  expect(decode(issue).closedAt).toBeNull();
+  expect(decode({ ...issue, closedAt: ticket.updatedAt }).closedAt).toBe(ticket.updatedAt);
 });

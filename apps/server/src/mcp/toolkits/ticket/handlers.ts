@@ -68,6 +68,10 @@ const summaries = Effect.fn("mcp.ticketSummaries")(function* (tickets: ReadonlyA
               : null,
           },
     bodyExcerpt: excerpt(ticket.body, 160),
+    githubIssue:
+      ticket.githubIssue === null
+        ? null
+        : { url: ticket.githubIssue.url, state: ticket.githubIssue.state },
     workThreads: ticket.links
       .filter((link) => link.role === "work")
       .slice(0, 10)

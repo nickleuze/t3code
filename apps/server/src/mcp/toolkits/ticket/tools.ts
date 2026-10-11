@@ -73,6 +73,9 @@ const ListTool = Tool.make("t3_ticket_list", {
       Schema.Struct({
         ...TicketSummary.fields,
         bodyExcerpt: Schema.String,
+        githubIssue: Schema.NullOr(
+          Schema.Struct({ url: Schema.String, state: Schema.Literals(["open", "closed"]) }),
+        ),
         workThreads: Schema.Array(
           Schema.Struct({
             id: ThreadId,

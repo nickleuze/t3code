@@ -4,7 +4,10 @@ import type { ThreadId, Ticket, TicketStatus } from "@t3tools/contracts";
 export interface TicketStatusInput {
   readonly status: TicketStatus;
   readonly statusSetAt: string;
-  readonly githubIssue: { readonly state: "open" | "closed"; readonly syncedAt: string } | null;
+  readonly githubIssue: {
+    readonly state: "open" | "closed";
+    readonly closedAt?: string | null | undefined;
+  } | null;
   readonly links: Ticket["links"];
 }
 
@@ -46,7 +49,7 @@ export function deriveTicketStatus(
     if (thread.pullRequests?.some((pr) => pr.source !== "stack-dismissed" && newer(pr.linkedAt)))
       advance("in_review");
   }
-  if (ticket.githubIssue?.state === "closed" && newer(ticket.githubIssue.syncedAt)) return "done";
+  if (ticket.githubIssue?.state === "closed" && newer(ticket.githubIssue.closedAt)) return "done";
   return status;
 }
 

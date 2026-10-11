@@ -3,6 +3,7 @@ import { assert, it } from "@effect/vitest";
 import {
   AuthOrchestrationOperateScope,
   EnvironmentId,
+  ProjectId,
   ThreadId,
   TicketId,
   WS_METHODS,
@@ -43,7 +44,7 @@ const ticket: Ticket = {
   updatedAt: "2026-10-11T00:00:00.000Z",
   deletedAt: null,
 };
-const harness = Effect.fnUntraced(function* (supports?: boolean) {
+const harness = Effect.fnUntraced(function* (supports?: boolean, ticketGithub?: boolean) {
   const sent: { tag: string; input: unknown }[] = [];
   const snapshots = yield* Queue.unbounded<TicketListResult>();
   const client = Object.fromEntries([
@@ -53,12 +54,20 @@ const harness = Effect.fnUntraced(function* (supports?: boolean) {
       WS_METHODS.ticketsRestore,
       WS_METHODS.ticketsLink,
       WS_METHODS.ticketsUnlink,
+      WS_METHODS.ticketsPublishIssue,
+      WS_METHODS.ticketsImportIssue,
+      WS_METHODS.ticketsUnlinkIssue,
+      WS_METHODS.ticketsRefreshIssues,
     ].map((tag) => [
       tag,
       (input: unknown) =>
         Effect.sync(() => {
           sent.push({ tag, input });
-          return tag === WS_METHODS.ticketsDelete ? { id: ticket.id } : { ticket };
+          return tag === WS_METHODS.ticketsDelete
+            ? { id: ticket.id }
+            : tag === WS_METHODS.ticketsRefreshIssues
+              ? { refreshed: 0, failed: 0, skipped: false }
+              : { ticket };
         }),
     ]),
     [
@@ -76,7 +85,10 @@ const harness = Effect.fnUntraced(function* (supports?: boolean) {
         initialConfig: Effect.succeed({
           environment: {
             environmentId: env,
-            capabilities: supports === undefined ? {} : { tickets: supports },
+            capabilities:
+              supports === undefined
+                ? {}
+                : { tickets: supports, ...(ticketGithub === undefined ? {} : { ticketGithub }) },
           },
         }),
         client,
@@ -205,4 +217,29 @@ const grantedSessions = Atom.family((_id: EnvironmentId) =>
       scopes: [AuthOrchestrationOperateScope],
     }),
   ),
+);
+
+it.effect("gates GitHub commands on the optional capability before dispatch", () =>
+  Effect.gen(function* () {
+    for (const support of [undefined, false, true]) {
+      const h = yield* harness(true, support);
+      const operations = [
+        h.atoms.publishIssue.run(h.registry, { environmentId: env, input: { id: ticket.id } }),
+        h.atoms.importIssue.run(h.registry, {
+          environmentId: env,
+          input: { projectId: ProjectId.make("project"), issue: "#1" },
+        }),
+        h.atoms.unlinkIssue.run(h.registry, { environmentId: env, input: { id: ticket.id } }),
+        h.atoms.refreshIssues.run(h.registry, { environmentId: env, input: {} }),
+      ];
+      for (const operation of operations) {
+        yield* Effect.promise(async () => {
+          const result = await operation;
+          assert.equal(result._tag, support === true ? "Success" : "Failure");
+          if (result._tag === "Failure") assert.ok(isUnavailable(Cause.squash(result.cause)));
+        });
+      }
+      assert.equal(h.sent.length, support === true ? 4 : 0);
+    }
+  }),
 );

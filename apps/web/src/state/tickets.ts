@@ -43,3 +43,15 @@ export function useTicketWriteAllowed(
 ) {
   return useAtomValue(ticketEnvironment.upsertTicket.permissionAtom(environmentId));
 }
+
+export const ticketGithubEnvironmentIdsAtom = Atom.make((get) => {
+  const configs = get(environmentServerConfigsAtom);
+  return get(ticketEnvironmentIdsAtom).filter(
+    (id) => configs.get(id)?.environment.capabilities.ticketGithub === true,
+  );
+});
+export function useTicketGithubSupported(
+  environmentId: import("@t3tools/contracts").EnvironmentId,
+) {
+  return useAtomValue(ticketGithubEnvironmentIdsAtom).includes(environmentId);
+}

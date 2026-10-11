@@ -1,3 +1,4 @@
+import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 
 import {
@@ -35,6 +36,7 @@ export const TicketGithubIssue = Schema.Struct({
   number: Schema.Int.check(Schema.isGreaterThan(0)),
   url: TrimmedNonEmptyString,
   state: Schema.Literals(["open", "closed"]),
+  closedAt: Schema.NullOr(IsoDateTime).pipe(Schema.withDecodingDefault(Effect.succeed(null))),
   syncedAt: IsoDateTime,
 });
 export type TicketGithubIssue = typeof TicketGithubIssue.Type;
@@ -113,3 +115,21 @@ export class TicketError extends Schema.TaggedError<TicketError>()("TicketError"
   ticketId: Schema.optional(TicketId),
   cause: Schema.optional(Schema.Defect()),
 }) {}
+
+export const TicketPublishIssueInput = Schema.Struct({ id: TicketId });
+export type TicketPublishIssueInput = typeof TicketPublishIssueInput.Type;
+export const TicketImportIssueInput = Schema.Struct({
+  projectId: ProjectId,
+  issue: Schema.Union([TrimmedNonEmptyString, Schema.Int.check(Schema.isGreaterThan(0))]),
+});
+export type TicketImportIssueInput = typeof TicketImportIssueInput.Type;
+export const TicketUnlinkIssueInput = Schema.Struct({ id: TicketId });
+export type TicketUnlinkIssueInput = typeof TicketUnlinkIssueInput.Type;
+export const TicketRefreshIssuesInput = Schema.Struct({ force: Schema.optional(Schema.Boolean) });
+export type TicketRefreshIssuesInput = typeof TicketRefreshIssuesInput.Type;
+export const TicketRefreshIssuesResult = Schema.Struct({
+  refreshed: Schema.Int,
+  failed: Schema.Int,
+  skipped: Schema.Boolean,
+});
+export type TicketRefreshIssuesResult = typeof TicketRefreshIssuesResult.Type;
