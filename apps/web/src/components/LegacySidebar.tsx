@@ -1,3 +1,5 @@
+import { openTicketCapture } from "../ticketCapture";
+import { readServerConfigForTickets } from "../state/tickets";
 import { useSupportsMultiplePullRequests } from "~/hooks/useSupportsMultiplePullRequests";
 import { resolveThreadCurrentPullRequestLink } from "@t3tools/shared/threadPullRequests";
 import { Spinner } from "~/components/ui/spinner";
@@ -1722,7 +1724,7 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
 
         const actionHandlers = new Map<string, () => Promise<void> | void>();
         const makeLeaf = (
-          action: "rename" | "grouping" | "copy-path" | "delete",
+          action: "rename" | "grouping" | "copy-path" | "delete" | "ticket",
           member: SidebarProjectGroupMember,
           options?: {
             destructive?: boolean;
@@ -1732,6 +1734,11 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
           const id = `${action}:${member.physicalProjectKey}`;
           actionHandlers.set(id, () => {
             switch (action) {
+              case "ticket":
+                openTicketCapture({
+                  projectRef: { environmentId: member.environmentId, projectId: member.id },
+                });
+                return;
               case "rename":
                 openProjectRenameDialog(member);
                 return;
@@ -1755,7 +1762,7 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
         };
 
         const buildTargetedItem = (
-          action: "rename" | "grouping" | "copy-path" | "delete",
+          action: "rename" | "grouping" | "copy-path" | "delete" | "ticket",
           label: string,
           options?: {
             destructive?: boolean;
@@ -1801,6 +1808,15 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
               isDisabled: (member) =>
                 !readEnvironmentScope(member.environmentId, AuthOrchestrationOperateScope),
             }),
+            ...(project.memberProjects.some((member) =>
+              readServerConfigForTickets(member.environmentId),
+            )
+              ? [
+                  buildTargetedItem("ticket", "New ticket", {
+                    isDisabled: (member) => !readServerConfigForTickets(member.environmentId),
+                  }),
+                ]
+              : []),
             buildTargetedItem("grouping", "Group into..."),
             buildTargetedItem("copy-path", "Copy Path"),
             { id: "project-settings", label: "Project settings", icon: "settings" },

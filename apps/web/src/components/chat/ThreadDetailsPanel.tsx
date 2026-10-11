@@ -1,3 +1,4 @@
+import { ThreadTicketsPanel } from "../tickets/ThreadTickets";
 import type {
   EditorId,
   EnvironmentId,
@@ -171,6 +172,10 @@ export function ThreadDetailsPanel(props: ThreadDetailsPanelProps) {
                 ) : null}
               </div>
             </ThreadDetailsSection>
+          ) : null}
+
+          {!props.draftId ? (
+            <ThreadTicketsPanel environmentId={props.environmentId} threadId={props.threadId} />
           ) : null}
 
           {density === "full" && !props.draftId ? (

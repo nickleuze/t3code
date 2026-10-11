@@ -231,3 +231,19 @@ Choose **Snooze → Custom…** from a thread's menu to pick a date and time in 
 local time zone, or a duration in minutes, hours, or days. Durations start when
 you confirm; one day means 24 hours. On web and desktop, you can also snooze
 several selected threads together. Choose **Wake thread** to bring a thread back early.
+
+## Capture work as tickets
+
+On web and desktop, open **Tickets** from the sidebar or command palette to see
+ideas across projects and connected machines. Use **New ticket** to capture one;
+you can leave it without a project and choose a project when starting work.
+`ticket.new` and `tickets.open` can be assigned in **Settings > Keybindings** and
+have no default shortcuts.
+
+**Start work** opens a worktree draft. The ticket links to the thread when you
+first send it; leaving the draft does not start work. The adjacent menu also
+supports immediate launch, plan-first launch, and a draft that asks for a T3 goal.
+Status advances when newer linked work starts or gains a pull request. Moving a
+ticket to a status sets a manual override until newer work occurs. Done shows the
+last 14 days by default. Deleted tickets can be restored from **Recently deleted**
+or from the Undo notification.

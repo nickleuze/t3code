@@ -4606,6 +4606,10 @@ export function finalizePromotedDraftThreadByRef(threadRef: ScopedThreadRef): vo
     if (matches) {
       const target = DraftId.make(draftId);
       draftStore.markDraftThreadPromoting(target, threadRef);
+      // Ticket RPC state depends on the composer; load it only after promotion.
+      void import("./pendingTicketDrafts").then(({ linkFinalizedTicketDraft }) =>
+        linkFinalizedTicketDraft(draftId, threadRef),
+      );
       draftStore.finalizePromotedDraftThread(target);
     }
   }

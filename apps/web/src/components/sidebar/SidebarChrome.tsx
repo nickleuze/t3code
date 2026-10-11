@@ -1,3 +1,5 @@
+import { useTicketsSupported } from "../../state/tickets";
+import { TicketIcon } from "lucide-react";
 import { ArrowLeftIcon, ChartNoAxesColumnIcon, SettingsIcon } from "lucide-react";
 import type { ReactNode } from "react";
 import { memo, useCallback } from "react";
@@ -172,6 +174,7 @@ export const SidebarUtilityMenu = memo(function SidebarUtilityMenu() {
     select: (location) => isSidebarUtilityPage(location.pathname),
   });
   const pullRequestsSupported = usePullRequestsSupported();
+  const ticketsSupported = useTicketsSupported();
   const closeMobileSidebar = useCallback(() => {
     if (isMobile) {
       setOpenMobile(false);
@@ -217,6 +220,16 @@ export const SidebarUtilityMenu = memo(function SidebarUtilityMenu() {
             label="Settings"
             onClick={handleSettingsClick}
           />
+          {ticketsSupported ? (
+            <SidebarUtilityItem
+              icon={<TicketIcon />}
+              label="Tickets"
+              onClick={() => {
+                closeMobileSidebar();
+                void navigate({ to: "/tickets" });
+              }}
+            />
+          ) : null}
           {pullRequestsSupported ? (
             <SidebarUtilityItem
               icon={<PullRequestGlyph.pullRequest />}
