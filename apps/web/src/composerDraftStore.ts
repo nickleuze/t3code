@@ -1,3 +1,4 @@
+import { prunePendingTicketDrafts, usePendingTicketDrafts } from "./pendingTicketDraftStore";
 import { stripInlineContextReferences } from "./lib/composerContextReferences";
 import { elementContextToPreviewAnnotation } from "./lib/elementContext";
 import {
@@ -4403,6 +4404,23 @@ const composerDraftStore = create<ComposerDraftStoreState>()(
 
 export const useComposerDraftStore = composerDraftStore;
 
+// Wait for both persisted stores before comparing identities; an unhydrated
+// composer looks empty and must not erase a surviving draft's ticket link.
+function pruneMissingTicketDrafts() {
+  if (!composerDraftStore.persist.hasHydrated() || !usePendingTicketDrafts.persist.hasHydrated())
+    return;
+  prunePendingTicketDrafts(
+    new Set(Object.keys(composerDraftStore.getState().draftThreadsByThreadKey)),
+  );
+}
+composerDraftStore.persist.onFinishHydration(pruneMissingTicketDrafts);
+usePendingTicketDrafts.persist.onFinishHydration(pruneMissingTicketDrafts);
+composerDraftStore.subscribe((state, previous) => {
+  if (state.draftThreadsByThreadKey !== previous.draftThreadsByThreadKey)
+    pruneMissingTicketDrafts();
+});
+pruneMissingTicketDrafts();
+
 export function beginBackgroundDraftSubmissionByRef(threadRef: ScopedThreadRef): void {
   const threadKey = scopedThreadKey(threadRef);
   useComposerDraftStore.setState((state) => ({
@@ -4606,6 +4624,14 @@ export function finalizePromotedDraftThreadByRef(threadRef: ScopedThreadRef): vo
     if (matches) {
       const target = DraftId.make(draftId);
       draftStore.markDraftThreadPromoting(target, threadRef);
+      // Capture before removal prunes the sidecar. RPC code stays lazy so
+      // composer initialization does not depend on the ticket atom registry.
+      const pendingTicket = usePendingTicketDrafts.getState().links[draftId];
+      if (pendingTicket) {
+        void import("./pendingTicketDrafts").then(({ linkFinalizedTicketDraft }) =>
+          linkFinalizedTicketDraft(draftId, threadRef, pendingTicket),
+        );
+      }
       draftStore.finalizePromotedDraftThread(target);
     }
   }

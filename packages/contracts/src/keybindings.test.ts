@@ -326,3 +326,12 @@ it.effect("drops unknown fields in resolved keybinding rules", () =>
     }),
   ),
 );
+
+it.effect("accepts custom bindings for ticket capture and navigation", () =>
+  Effect.gen(function* () {
+    for (const command of ["ticket.new", "tickets.open"]) {
+      const parsed = yield* decode(KeybindingRule, { key: "mod+shift+i", command });
+      assert.strictEqual(parsed.command, command);
+    }
+  }),
+);

@@ -52,6 +52,8 @@ import * as ThreadLaunchService from "./ThreadLaunchService.ts";
 import * as ThreadLifecycleService from "./ThreadLifecycleService.ts";
 import * as ThreadForkService from "./ThreadForkService.ts";
 import * as TurnItemPositionStore from "./TurnItemPositionStore.ts";
+import * as TicketGithubService from "../tickets/TicketGithubService.ts";
+import * as TicketService from "../tickets/TicketService.ts";
 import * as ScheduledTaskService from "../scheduledTasks/ScheduledTaskService.ts";
 import * as SecretRequests from "../secrets/SecretRequests.ts";
 
@@ -351,6 +353,15 @@ export const layerProduction = Layer.mergeAll(
   layerThreadLaunchProvided,
   layerThreadLifecycleProvided,
   layerScheduledTaskProvided,
+  TicketService.layer.pipe(Layer.provide(ProjectStore.layer)),
+  TicketGithubService.layer.pipe(
+    Layer.provide(
+      Layer.mergeAll(
+        TicketService.layer.pipe(Layer.provide(ProjectStore.layer)),
+        layerProjectService,
+      ),
+    ),
+  ),
   layerSecretRequestsProvided,
   GoalLoopWorker.layer.pipe(
     Layer.provide(

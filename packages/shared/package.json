@@ -3,6 +3,10 @@
   "private": true,
   "type": "module",
   "exports": {
+    "./ticket": {
+      "types": "./src/ticket.ts",
+      "import": "./src/ticket.ts"
+    },
     "./authScopeOptions": {
       "types": "./src/authScopeOptions.ts",
       "import": "./src/authScopeOptions.ts"

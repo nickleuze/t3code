@@ -35,6 +35,8 @@ import * as AttachmentHandlers from "./toolkits/attachment/handlers.ts";
 import * as GoalMcpService from "./GoalMcpService.ts";
 import { GoalToolkit } from "./toolkits/goal/tools.ts";
 import * as GoalHandlers from "./toolkits/goal/handlers.ts";
+import { TicketToolkit } from "./toolkits/ticket/tools.ts";
+import * as TicketHandlers from "./toolkits/ticket/handlers.ts";
 import { ThreadToolkit } from "./toolkits/thread/tools.ts";
 import * as ThreadHandlers from "./toolkits/thread/handlers.ts";
 import * as ThreadMetadataMcpService from "./ThreadMetadataMcpService.ts";
@@ -821,6 +823,8 @@ export const layerGoalToolkit = toolkitRegistration(GoalToolkit, GoalHandlers.la
   Layer.provide(GoalMcpService.layer),
 );
 
+export const layerTicketToolkit = toolkitRegistration(TicketToolkit, TicketHandlers.layer);
+
 export const layerThreadToolkit = toolkitRegistration(ThreadToolkit, ThreadHandlers.layer);
 
 const layerWorktreeToolkitRegistration = toolkitRegistration(
@@ -878,6 +882,7 @@ export const layer = Layer.mergeAll(
   layerOrchestratorToolkit,
   layerThreadToolkit,
   layerGoalToolkit,
+  layerTicketToolkit,
   layerAttachmentToolkit,
   layerProjectRegistration,
   layerEnvironmentToolkit,

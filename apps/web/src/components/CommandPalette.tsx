@@ -1,5 +1,9 @@
 "use client";
 
+import { openTicketCapture } from "../ticketCapture";
+import { useTicketsSupported } from "../state/tickets";
+import { TicketIcon } from "lucide-react";
+
 import { threadPullRequestLinkMode } from "@t3tools/client-runtime/thread-pull-request-compatibility";
 import { visibleThreadPullRequests } from "@t3tools/shared/threadPullRequests";
 
@@ -500,6 +504,7 @@ export function CommandPalette({ children }: { children: ReactNode }) {
   const openAddProject = useCallback(() => dispatch({ _tag: "OpenAddProject" }), []);
   const openNewThreadIn = useCallback(() => dispatch({ _tag: "OpenNewThreadIn" }), []);
   const clearOpenIntent = useCallback(() => dispatch({ _tag: "ClearOpenIntent" }), []);
+  const ticketsSupported = useTicketsSupported();
   const keybindings = useAtomValue(primaryServerKeybindingsAtom);
   const { theme, themeHalves, resolvedTheme, appearanceMode, setAppearanceMode } = useTheme();
   const composerHandleRef = useRef<ChatComposerHandle | null>(null);
@@ -579,6 +584,15 @@ export function CommandPalette({ children }: { children: ReactNode }) {
         });
         return;
       }
+      if (ticketsSupported && (command === "ticket.new" || command === "tickets.open")) {
+        event.preventDefault();
+        event.stopPropagation();
+        if (event.repeat) return;
+        setOpen(false);
+        if (command === "ticket.new") openTicketCapture();
+        else void navigate({ to: "/tickets" });
+        return;
+      }
       if (command === "usage.open") {
         event.preventDefault();
         event.stopPropagation();
@@ -598,6 +612,7 @@ export function CommandPalette({ children }: { children: ReactNode }) {
     return () => window.removeEventListener("keydown", onKeyDown);
   }, [
     appearanceMode,
+    ticketsSupported,
     keybindings,
     navigate,
     previewOpen,
@@ -809,6 +824,7 @@ function OpenCommandPaletteDialog(props: {
   }, [activeThreadReferenceCopyTarget]);
   const projectOrder = useUiStateStore((store) => store.projectOrder);
   const threads = useThreadShells();
+  const ticketsSupported = useTicketsSupported();
   const keybindings = useAtomValue(primaryServerKeybindingsAtom);
   const {
     theme,
@@ -2259,6 +2275,31 @@ function OpenCommandPaletteDialog(props: {
       icon: <PullRequestGlyph.pullRequest className={ITEM_ICON_CLASS} />,
       run: async () => {
         await navigate({ to: "/pull-requests", search: readPullRequestListPreferences() });
+      },
+    });
+  }
+
+  if (ticketsSupported) {
+    actionItems.push({
+      kind: "action",
+      value: "action:ticket-new",
+      title: "New ticket",
+      searchTerms: ["ticket", "idea", "capture"],
+      icon: <TicketIcon className={ITEM_ICON_CLASS} />,
+      shortcutCommand: "ticket.new",
+      run: async () => {
+        openTicketCapture();
+      },
+    });
+    actionItems.push({
+      kind: "action",
+      value: "action:tickets-open",
+      title: "Open tickets",
+      searchTerms: ["tickets", "board", "ideas"],
+      icon: <TicketIcon className={ITEM_ICON_CLASS} />,
+      shortcutCommand: "tickets.open",
+      run: async () => {
+        await navigate({ to: "/tickets" });
       },
     });
   }

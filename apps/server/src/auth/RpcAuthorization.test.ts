@@ -50,6 +50,25 @@ describe("RPC authorization scopes", () => {
     );
   });
 
+  it("uses orchestration read for ticket lists and operate for mutations", () => {
+    for (const method of [WS_METHODS.ticketsList, WS_METHODS.ticketsSubscribe]) {
+      expect(requiredScopeForRpcMethod(method)).toBe(AuthOrchestrationReadScope);
+    }
+    for (const method of [
+      WS_METHODS.ticketsUpsert,
+      WS_METHODS.ticketsDelete,
+      WS_METHODS.ticketsRestore,
+      WS_METHODS.ticketsLink,
+      WS_METHODS.ticketsUnlink,
+      WS_METHODS.ticketsPublishIssue,
+      WS_METHODS.ticketsImportIssue,
+      WS_METHODS.ticketsUnlinkIssue,
+      WS_METHODS.ticketsRefreshIssues,
+    ]) {
+      expect(requiredScopeForRpcMethod(method)).toBe(AuthOrchestrationOperateScope);
+    }
+  });
+
   it("keeps webhook delivery logs, which hold request bodies, behind operate scope", () => {
     for (const method of [
       WS_METHODS.scheduledTasksListWebhookDeliveries,

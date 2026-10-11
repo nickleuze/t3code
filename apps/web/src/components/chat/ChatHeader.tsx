@@ -1,3 +1,4 @@
+import { ThreadTicketChips } from "../tickets/ThreadTickets";
 import {
   AuthOrchestrationOperateScope,
   type EnvironmentId,
@@ -306,6 +307,9 @@ export const ChatHeader = memo(function ChatHeader({
       )}
       onContextMenu={handleHeaderContextMenu}
     >
+      {isServerThread ? (
+        <ThreadTicketChips environmentId={activeThreadEnvironmentId} threadId={activeThreadId} />
+      ) : null}
       <WorkspaceBreadcrumb
         ariaLabel="Thread breadcrumb"
         className="flex-1 overflow-clip [overflow-clip-margin:2px]"

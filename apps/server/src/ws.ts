@@ -122,6 +122,8 @@ import * as ProviderSessionManager from "./orchestration-v2/ProviderSessionManag
 import * as ThreadLaunchService from "./orchestration-v2/ThreadLaunchService.ts";
 import * as ThreadMessageIntake from "./orchestration-v2/ThreadMessageIntake.ts";
 import * as IdAllocator from "@t3tools/provider-core/server/IdAllocator";
+import * as TicketGithub from "./tickets/TicketGithubService.ts";
+import * as Tickets from "./tickets/TicketService.ts";
 import * as ScheduledTasks from "./scheduledTasks/ScheduledTaskService.ts";
 import * as SecretRequests from "./secrets/SecretRequests.ts";
 import {
@@ -1221,6 +1223,8 @@ const layerWsRpc = (
       };
       const threadLaunch = yield* ThreadLaunchService.ThreadLaunchService;
       const providerSessionManager = yield* ProviderSessionManager.ProviderSessionManagerV2;
+      const tickets = yield* Tickets.TicketService;
+      const ticketGithub = yield* TicketGithub.TicketGithubService;
       const scheduledTasks = yield* ScheduledTasks.ScheduledTaskService;
       const secretRequests = yield* SecretRequests.SecretRequests;
       const pullRequests = yield* PullRequestService.PullRequestService;
@@ -2038,6 +2042,18 @@ const layerWsRpc = (
               Effect.andThen(subscribeOrchestrationV2Thread(input)),
             ),
           ),
+        [WS_METHODS.ticketsList]: (input) => tickets.list(input),
+        [WS_METHODS.ticketsSubscribe]: () => ticketGithub.subscribeList(),
+        [WS_METHODS.ticketsUpsert]: (input) => tickets.upsert(input),
+        [WS_METHODS.ticketsDelete]: (input) => tickets.delete(input),
+        [WS_METHODS.ticketsRestore]: (input) => tickets.restore(input),
+        [WS_METHODS.ticketsLink]: (input) => tickets.link(input),
+        [WS_METHODS.ticketsUnlink]: (input) => tickets.unlink(input),
+        [WS_METHODS.ticketsPublishIssue]: (input) => ticketGithub.publishIssue(input),
+        [WS_METHODS.ticketsImportIssue]: (input) => ticketGithub.importIssue(input),
+        [WS_METHODS.ticketsUnlinkIssue]: (input) => ticketGithub.unlinkIssue(input),
+        [WS_METHODS.ticketsRefreshIssues]: (input) => ticketGithub.refreshIssues(input),
+
         [WS_METHODS.scheduledTasksList]: (_input) =>
           scheduledTasks.list().pipe(Effect.map(withVisibleWebhookUrls)),
         [WS_METHODS.scheduledTasksSubscribe]: (_input) =>
