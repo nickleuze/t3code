@@ -57,6 +57,7 @@ const summaries = Effect.fn("mcp.ticketSummaries")(function* (tickets: ReadonlyA
   );
   return tickets.map((ticket) => ({
     id: ticket.id,
+    readableId: ticket.readableId ?? null,
     title: excerpt(ticket.title, 200),
     status: deriveTicketStatus(ticket, (id) => shells.get(id)),
     project:
@@ -90,7 +91,13 @@ const summaries = Effect.fn("mcp.ticketSummaries")(function* (tickets: ReadonlyA
 
 const summary = Effect.fn("mcp.ticketSummary")(function* (ticket: Ticket) {
   const [row] = yield* summaries([ticket]);
-  return { id: ticket.id, title: ticket.title, status: row!.status, project: row!.project };
+  return {
+    id: ticket.id,
+    readableId: row!.readableId,
+    title: ticket.title,
+    status: row!.status,
+    project: row!.project,
+  };
 });
 
 export const layer = McpToolAccess.toLayer(TicketToolkit, {
@@ -263,6 +270,19 @@ export const layer = McpToolAccess.toLayer(TicketToolkit, {
         )
         .pipe(Effect.mapError(ticketFailure));
       return yield* summary(ticket);
+    }),
+  ),
+  t3_ticket_project_map: McpToolAccess.writes((input) =>
+    Effect.gen(function* () {
+      const tickets = yield* Tickets.TicketService;
+      const { projects } = yield* tickets.projectsMap(input).pipe(Effect.mapError(ticketFailure));
+      return {
+        projects: projects.map(({ key, displayName, projectId }) => ({
+          key,
+          displayName,
+          projectId,
+        })),
+      };
     }),
   ),
   t3_ticket_link_thread: McpToolAccess.writesThreads(

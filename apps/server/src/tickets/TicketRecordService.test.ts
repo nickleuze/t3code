@@ -198,6 +198,7 @@ it.effect("automatic sync debounces writes and retries a queued push with clocke
       machines: Effect.succeed({ clock: "Clock test" }),
       configure: () => Effect.die("unused"),
       registerProject: () => Effect.void,
+      writeSnapshot: () => Effect.die("unused"),
       refresh: Effect.gen(function* () {
         if (!pending) {
           yield* Deferred.succeed(started, undefined);

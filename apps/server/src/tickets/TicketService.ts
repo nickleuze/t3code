@@ -30,6 +30,7 @@ import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as PubSub from "effect/PubSub";
 import * as Schema from "effect/Schema";
+import * as Scope from "effect/Scope";
 import * as Semaphore from "effect/Semaphore";
 import * as Stream from "effect/Stream";
 import * as SqlClient from "effect/sql/SqlClient";
@@ -44,6 +45,11 @@ import {
   migratedTicketId,
   type TicketRecordState,
 } from "./TicketRecord.ts";
+import {
+  matchReadableTicketId,
+  parseReadableTicketId,
+  readableTicketIds,
+} from "./TicketNumbers.ts";
 
 export const bootstrapSchema = Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient;
@@ -139,6 +145,11 @@ export type TicketObservation = {
   model?: string | undefined;
   referenceKind?: "goal" | "task";
 };
+/** Ticket ids touched by one committed write; `created` lists tickets that gained their created event. */
+export type TicketChange = {
+  readonly ids: ReadonlyArray<TicketId>;
+  readonly created: ReadonlyArray<TicketId>;
+};
 export class TicketService extends Context.Service<
   TicketService,
   {
@@ -160,6 +171,8 @@ export class TicketService extends Context.Service<
     readonly syncConfigure: (remote: string) => Effect.Effect<TicketSyncStatus, TicketError>;
     readonly list: (input?: TicketListInput) => Effect.Effect<TicketListResult, TicketError>;
     readonly subscribeList: () => Stream.Stream<TicketListResult, TicketError>;
+    /** Every committed change, unbounded so workers never miss a created ticket. */
+    readonly subscribeChanges: Effect.Effect<PubSub.Subscription<TicketChange>, never, Scope.Scope>;
     readonly upsert: (
       input: TicketUpsertInput,
       by?: TicketAuthor,
@@ -252,8 +265,32 @@ export const make = Effect.gen(function* () {
       return ref;
     }).pipe(Effect.orElseSucceed(() => ref));
   yield* bootstrapSchema.pipe(mapError);
-  const changes = yield* PubSub.sliding<void>(1);
+  // Unbounded so no subscriber loses a ticket id; list subscribers coalesce batches.
+  const changes = yield* PubSub.unbounded<TicketChange>();
   const lock = yield* Semaphore.make(1);
+  // Collected while the lock is held and published after the transaction commits.
+  const touched = { ids: new Set<TicketId>(), created: new Set<TicketId>() };
+  const resetTouched = Effect.sync(() => {
+    touched.ids.clear();
+    touched.created.clear();
+  });
+  const publishTouched = Effect.suspend(() => {
+    const change: TicketChange = { ids: [...touched.ids], created: [...touched.created] };
+    touched.ids.clear();
+    touched.created.clear();
+    return PubSub.publish(changes, change);
+  });
+  // Runs one write under the lock; publishes its change only after commit.
+  const serialized = <A, E, R>(effect: Effect.Effect<A, E, R>, publish: (a: A) => boolean) =>
+    lock.withPermit(
+      Effect.gen(function* () {
+        yield* resetTouched;
+        const result = yield* sql.withTransaction(effect).pipe(Effect.onError(() => resetTouched));
+        if (publish(result)) yield* publishTouched;
+        else yield* resetTouched;
+        return result;
+      }),
+    );
   const ulid = ticketIds();
   const author = (by?: Omit<TicketAuthor, "machine">): TicketAuthor => ({
     actor: "user",
@@ -267,12 +304,27 @@ export const make = Effect.gen(function* () {
       const signed = by ?? author();
       return { eventId: `${ulid(Date.parse(at))}-${signed.machine}`, ticketId: id, at, by: signed };
     });
+  const projectTicketIds = (key: string) =>
+    sql<{ ticket_id: string }>`
+      SELECT ticket_id FROM fork_ticket_records
+      WHERE json_extract(state_json, '$.ticket.projectKey') = ${key}`.pipe(
+      Effect.map((rows) => rows.map((row) => row.ticket_id)),
+    );
+  // Accepts a ULID, a legacy v1 id, or a readable `<projectKey>-<suffix>` ID.
   const resolveId = (id: TicketId) =>
     Effect.gen(function* () {
       const rows = yield* sql<{
         ticket_id: string;
       }>`SELECT ticket_id FROM fork_ticket_legacy_ids WHERE legacy_id = ${id}`;
-      return rows[0] === undefined ? id : TicketId.make(rows[0].ticket_id);
+      if (rows[0] !== undefined) return TicketId.make(rows[0].ticket_id);
+      if (/^[0-9A-HJKMNP-TV-Z]{26}$/.test(id)) return id;
+      const readable = parseReadableTicketId(id);
+      if (readable === null) return id;
+      const match = matchReadableTicketId(
+        readable.suffix,
+        yield* projectTicketIds(readable.projectKey),
+      );
+      return match === null ? id : TicketId.make(match);
     });
   const eventsFor = (id: TicketId) =>
     Effect.gen(function* () {
@@ -328,6 +380,8 @@ export const make = Effect.gen(function* () {
         }
         yield* sql`INSERT INTO fork_ticket_events (event_id, ticket_id, event_json) VALUES (${event.eventId}, ${event.ticketId}, ${json})`;
         affected.add(event.ticketId);
+        touched.ids.add(event.ticketId);
+        if (event.type === "created") touched.created.add(event.ticketId);
       }
       for (const id of affected) {
         const state = projectTicket(yield* eventsFor(id));
@@ -335,11 +389,12 @@ export const make = Effect.gen(function* () {
       }
     });
   const importEvents = (events: readonly TicketEvent[]) =>
-    lock.withPermit(sql.withTransaction(importEffect(events))).pipe(
-      Effect.tap(() => PubSub.publish(changes, undefined)),
-      mapError,
-    );
-  const readState = (id: TicketId, includeDeleted = false) =>
+    serialized(importEffect(events), () => true).pipe(mapError);
+  const readState = (
+    id: TicketId,
+    includeDeleted = false,
+    readable?: ReadonlyMap<string, string>,
+  ) =>
     Effect.gen(function* () {
       const resolved = yield* resolveId(id);
       const rows = yield* sql<{
@@ -361,10 +416,19 @@ export const make = Effect.gen(function* () {
           }>`SELECT project_id FROM fork_ticket_project_map WHERE project_key = ${key}`
         : [];
       const registry = sync ? yield* sync.registry : {};
+      const readableId = key
+        ? ((
+            readable ??
+            readableTicketIds(
+              (yield* projectTicketIds(key)).map((ticketId) => ({ id: ticketId, projectKey: key })),
+            )
+          ).get(state.ticket.id) ?? null)
+        : null;
       return {
         ...state,
         ticket: {
           ...state.ticket,
+          readableId,
           projectId: mapping[0]?.project_id ? ProjectId.make(mapping[0].project_id) : null,
           projectName: key ? (registry[key] ?? key) : null,
         },
@@ -373,9 +437,15 @@ export const make = Effect.gen(function* () {
   const get = (id: TicketId) => readState(id).pipe(mapError);
   const list = (input: TicketListInput = {}) =>
     Effect.gen(function* () {
-      const rows = yield* sql<{ ticket_id: string }>`SELECT ticket_id FROM fork_ticket_records`;
+      const rows = yield* sql<{
+        ticket_id: string;
+        project_key: string | null;
+      }>`SELECT ticket_id, json_extract(state_json, '$.ticket.projectKey') AS project_key FROM fork_ticket_records`;
+      const readable = readableTicketIds(
+        rows.map((row) => ({ id: row.ticket_id, projectKey: row.project_key })),
+      );
       const states = yield* Effect.forEach(rows, (row) =>
-        readState(TicketId.make(row.ticket_id), true),
+        readState(TicketId.make(row.ticket_id), true, readable),
       );
       return {
         tickets: states
@@ -396,11 +466,7 @@ export const make = Effect.gen(function* () {
       yield* importEffect(events);
     });
   const mutate = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
-    lock.withPermit(sql.withTransaction(effect)).pipe(
-      Effect.tap(() => PubSub.publish(changes, undefined)),
-      Effect.uninterruptible,
-      mapError,
-    );
+    serialized(effect, () => true).pipe(Effect.uninterruptible, mapError);
   const projectKey = (id: ProjectId) =>
     Effect.gen(function* () {
       const project = yield* projects.get(id);
@@ -636,90 +702,81 @@ export const make = Effect.gen(function* () {
     );
   // Only live observers call this method. Import/rebuild never synthesize events.
   const observe = (input: TicketObservation) =>
-    lock
-      .withPermit(
-        sql.withTransaction(
-          Effect.gen(function* () {
-            let changed = false;
-            const machine = sync?.machine ?? "test";
-            for (const { id, reference: local } of yield* ticketsLinkedToThread(
-              input.threadId,
+    serialized(
+      Effect.gen(function* () {
+        let changed = false;
+        const machine = sync?.machine ?? "test";
+        for (const { id, reference: local } of yield* ticketsLinkedToThread(
+          input.threadId,
+          machine,
+        )) {
+          if (local.role === "origin") continue;
+          const state = yield* readState(id);
+          const history = yield* eventsFor(id);
+          const observationKey = deterministicEventId(input.threadId, input.key, machine);
+          if (history.some((e) => e.type === "auto" && e.observationKey === observationKey))
+            continue;
+          const by = author({
+            actor: "agent",
+            thread: input.threadId,
+            ...(input.model ? { model: input.model } : {}),
+          });
+          const events: TicketEvent[] = [];
+          const latestWork = state.references
+            .filter((l) => l.kind === "thread" && l.role === "work")
+            .sort((a, b) => b.at.localeCompare(a.at) || b.eventId.localeCompare(a.eventId))[0];
+          const currentWork =
+            local.role === "work" &&
+            latestWork?.ref === local.ref &&
+            latestWork.machine === machine;
+          const active =
+            state.ticket.status === "in_progress" || state.ticket.status === "in_review";
+          if (input.kind === "pr_linked" && input.isDraft) continue;
+          if (input.kind === "pr_linked" || input.referenceKind)
+            events.push({
+              ...(yield* base(id, by)),
+              type: "link",
+              kind: input.referenceKind ?? "pr",
+              ref: input.ref,
+              role: local.role,
               machine,
-            )) {
-              if (local.role === "origin") continue;
-              const state = yield* readState(id);
-              const history = yield* eventsFor(id);
-              const observationKey = deterministicEventId(input.threadId, input.key, machine);
-              if (history.some((e) => e.type === "auto" && e.observationKey === observationKey))
-                continue;
-              const by = author({
-                actor: "agent",
-                thread: input.threadId,
-                ...(input.model ? { model: input.model } : {}),
-              });
-              const events: TicketEvent[] = [];
-              const latestWork = state.references
-                .filter((l) => l.kind === "thread" && l.role === "work")
-                .sort((a, b) => b.at.localeCompare(a.at) || b.eventId.localeCompare(a.eventId))[0];
-              const currentWork =
-                local.role === "work" &&
-                latestWork?.ref === local.ref &&
-                latestWork.machine === machine;
-              const active =
-                state.ticket.status === "in_progress" || state.ticket.status === "in_review";
-              if (input.kind === "pr_linked" && input.isDraft) continue;
-              if (input.kind === "pr_linked" || input.referenceKind)
-                events.push({
-                  ...(yield* base(id, by)),
-                  type: "link",
-                  kind: input.referenceKind ?? "pr",
-                  ref: input.ref,
-                  role: local.role,
-                  machine,
-                  title: input.title,
-                  machineLabel: (yield* sync ? sync.status : Effect.succeed({ label: "Test" }))
-                    .label,
-                });
-              if (
-                currentWork &&
-                ((input.kind === "pr_linked" && state.ticket.status === "in_progress") ||
-                  (input.kind === "pr_merged" &&
-                    active &&
-                    history.some(
-                      (e) =>
-                        e.type === "auto" &&
-                        e.kind === "pr_linked" &&
-                        e.ref === input.ref &&
-                        e.by.thread === input.threadId &&
-                        e.by.machine === machine,
-                    )))
-              )
-                events.push({
-                  ...(yield* base(id, by)),
-                  type: "stage",
-                  stage: input.kind === "pr_merged" ? "done" : "in_review",
-                  reason: input.kind,
-                });
-              events.push({
-                ...(yield* base(id, by)),
-                type: "auto",
-                kind: input.kind,
-                ref: input.ref,
-                observationKey,
-              });
-              yield* commitEvents(events);
-              changed = true;
-            }
-            return changed;
-          }),
-        ),
-      )
-      .pipe(
-        Effect.tap((changed) => (changed ? PubSub.publish(changes, undefined) : Effect.void)),
-        Effect.asVoid,
-        Effect.uninterruptible,
-        mapError,
-      );
+              title: input.title,
+              machineLabel: (yield* sync ? sync.status : Effect.succeed({ label: "Test" })).label,
+            });
+          if (
+            currentWork &&
+            ((input.kind === "pr_linked" && state.ticket.status === "in_progress") ||
+              (input.kind === "pr_merged" &&
+                active &&
+                history.some(
+                  (e) =>
+                    e.type === "auto" &&
+                    e.kind === "pr_linked" &&
+                    e.ref === input.ref &&
+                    e.by.thread === input.threadId &&
+                    e.by.machine === machine,
+                )))
+          )
+            events.push({
+              ...(yield* base(id, by)),
+              type: "stage",
+              stage: input.kind === "pr_merged" ? "done" : "in_review",
+              reason: input.kind,
+            });
+          events.push({
+            ...(yield* base(id, by)),
+            type: "auto",
+            kind: input.kind,
+            ref: input.ref,
+            observationKey,
+          });
+          yield* commitEvents(events);
+          changed = true;
+        }
+        return changed;
+      }),
+      (changed) => changed,
+    ).pipe(Effect.asVoid, Effect.uninterruptible, mapError);
   const entry = (input: TicketEntryInput, by?: TicketAuthor, namespace = "user") =>
     mutate(
       Effect.gen(function* () {
@@ -815,7 +872,12 @@ export const make = Effect.gen(function* () {
       Effect.gen(function* () {
         if (input.projectId !== null && Option.isNone(yield* projects.get(input.projectId)))
           return yield* new TicketError({ message: "Project not found." });
-        if (sync) yield* sync.registerProject(input.key, input.displayName ?? input.key);
+        // Keep the synced display name unless the caller supplies a new one.
+        if (sync)
+          yield* sync.registerProject(
+            input.key,
+            input.displayName ?? (yield* sync.registry)[input.key] ?? input.key,
+          );
         yield* sql`INSERT INTO fork_ticket_project_map (project_key, project_id) VALUES (${input.key}, ${input.projectId}) ON CONFLICT (project_key) DO UPDATE SET project_id = excluded.project_id`;
         return yield* projectsList;
       }),
@@ -930,7 +992,11 @@ export const make = Effect.gen(function* () {
         yield* refresh.pipe(Effect.ignore, Effect.forkScoped);
         return Stream.concat(
           Stream.fromEffect(list()),
-          Stream.fromSubscription(subscription).pipe(Stream.mapEffect(() => list())),
+          // One list per pulled batch keeps the old coalescing of bursts.
+          Stream.fromSubscription(subscription).pipe(
+            Stream.chunks,
+            Stream.mapEffect(() => list()),
+          ),
         );
       }),
     );
@@ -985,6 +1051,7 @@ export const make = Effect.gen(function* () {
       sync ? sync.configure(remote).pipe(Effect.tap(() => refresh)) : syncUnavailable,
     list,
     subscribeList,
+    subscribeChanges: PubSub.subscribe(changes),
     upsert,
     get,
     author,

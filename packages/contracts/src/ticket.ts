@@ -52,6 +52,8 @@ const TicketCreationSource = Schema.Literals(["web", "mobile", "mcp", "github"])
 
 export const Ticket = Schema.Struct({
   id: TicketId,
+  /** Derived `<projectKey>-<ULID suffix>`; null for Ideas without a project or area. */
+  readableId: Schema.optional(Schema.NullOr(Schema.String)),
   projectKey: Schema.optional(Schema.NullOr(Schema.String)),
   projectName: Schema.optional(Schema.NullOr(Schema.String)),
   record: Schema.optional(Schema.Boolean),

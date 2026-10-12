@@ -147,6 +147,10 @@ const T3_MCP_TOOLS: Readonly<Record<string, T3McpToolDefinition>> = {
     ["Update", "Updating", "Updated", "a ticket's thread link"],
     "ticket-link",
   ),
+  t3_ticket_project_map: tool(
+    ["Map", "Mapping", "Mapped", "a ticket project key"],
+    "ticket-update",
+  ),
   schedule_task: tool(
     ["Schedule", "Scheduling", "Scheduled", "a recurring task"],
     "schedule-create",
