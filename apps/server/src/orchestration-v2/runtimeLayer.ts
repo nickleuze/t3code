@@ -54,6 +54,8 @@ import * as ThreadForkService from "./ThreadForkService.ts";
 import * as TurnItemPositionStore from "./TurnItemPositionStore.ts";
 import * as TicketObservations from "../tickets/TicketObservations.ts";
 import * as TicketHandoffNudge from "../tickets/TicketHandoffNudge.ts";
+import * as TicketSnapshot from "../tickets/TicketSnapshot.ts";
+import * as TicketTriage from "../tickets/TicketTriage.ts";
 import * as TicketSyncService from "../tickets/TicketSyncService.ts";
 import * as ProjectLaunchDefaults from "../project/ProjectLaunchDefaults.ts";
 import * as TicketLaunchService from "../tickets/TicketLaunchService.ts";
@@ -403,6 +405,20 @@ export const layerProduction = Layer.mergeAll(
         layerEventSinkProvided,
         layerTickets,
         layerRuntimePolicyProvided,
+      ),
+    ),
+  ),
+  TicketSnapshot.layer.pipe(
+    Layer.provide(Layer.mergeAll(layerTickets, layerTicketSync, ProjectStore.layer)),
+  ),
+  TicketTriage.layer.pipe(
+    Layer.provide(
+      Layer.mergeAll(
+        layerTickets,
+        ProjectStore.layer,
+        TicketTriage.layerAgentClassifier.pipe(
+          Layer.provide(Layer.merge(layerThreadLaunchProvided, layerManagedProjectFoldersProvided)),
+        ),
       ),
     ),
   ),

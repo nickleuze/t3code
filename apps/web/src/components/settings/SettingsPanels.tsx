@@ -2416,6 +2416,20 @@ export function GeneralSettingsPanel() {
             />
           }
         />
+        <SettingsRow
+          serverScoped
+          settingKeys={["ticketTriage"]}
+          title="Ticket triage"
+          description="File new Inbox Ideas under a Project when the match is clear; otherwise leave a Needs Nick question."
+          control={
+            <ScopedSwitch
+              settingKeys={["ticketTriage"]}
+              checked={settings.ticketTriage}
+              onCheckedChange={(checked) => updateSettings({ ticketTriage: Boolean(checked) })}
+              aria-label="Ticket triage"
+            />
+          }
+        />
         {supportsAutoSettlement ? (
           <>
             <SettingsRow

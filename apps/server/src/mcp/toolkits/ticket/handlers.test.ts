@@ -255,6 +255,7 @@ describe("ticket toolkit handlers", () => {
         tickets: [
           {
             id: ticket.id,
+            readableId: `ticket-test-${ticket.id.slice(-6)}`,
             title: "Improve parser",
             status: "in_progress",
             project: { id: PROJECT, title: "Main project" },

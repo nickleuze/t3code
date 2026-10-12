@@ -236,6 +236,15 @@ function EnvironmentTicketSettings({ environmentId }: { environmentId: Environme
           onCheckedChange={(checked) => update({ ticketHandoffNudge: Boolean(checked) })}
         />
       </label>
+      <label className="flex items-center justify-between gap-3">
+        Triage new Ideas
+        <Switch
+          aria-label="Ticket triage"
+          checked={settings.ticketTriage}
+          disabled={!allowed}
+          onCheckedChange={(checked) => update({ ticketTriage: Boolean(checked) })}
+        />
+      </label>
       <section aria-label="Ticket project mappings" className="grid gap-3">
         <h3 className="font-medium">Project mapping</h3>
         {AsyncResult.isSuccess(mappings) ? (

@@ -40,6 +40,8 @@ const shared = {
 
 const TicketSummary = Schema.Struct({
   id: TicketId,
+  // Derived `<projectKey>-<suffix>` Ticket ID; null for Ideas with no project.
+  readableId: Schema.optional(Schema.NullOr(Schema.String)),
   title: Schema.String,
   status: TicketStatus,
   project: Schema.NullOr(Schema.Struct({ id: ProjectId, title: Schema.NullOr(Schema.String) })),
@@ -131,7 +133,7 @@ const LinkThreadTool = Tool.make("t3_ticket_link_thread", {
 const GetTool = Tool.make("t3_ticket_get", {
   ...shared,
   description:
-    "Read the ticket before working: current state, decisions, questions, last handoff and recent timeline (last 30 events).",
+    "Read the ticket before working: current state, decisions, questions, last handoff and recent timeline (last 30 events). Accepts the ULID or the readable Ticket ID (e.g. lighting-director-4K7QXM).",
   parameters: Schema.Struct({ ticket: TicketId }),
   success: Schema.Struct({
     ticket: Ticket,
@@ -192,6 +194,27 @@ const StartTool = Tool.make("t3_ticket_start", {
 })
   .annotate(Tool.Readonly, false)
   .annotate(Tool.Destructive, false);
+const ProjectMapTool = Tool.make("t3_ticket_project_map", {
+  ...shared,
+  description:
+    "Map a ticket project key to a T3 project on this machine, e.g. after a Project Home folder moved and was registered as a new T3 project. Tickets keep their key (and readable IDs); new tickets filed from that T3 project reuse it. Pass projectId null to unmap. Without displayName the synced name is kept. Returns every known key with its mapping. Mappings are per machine: run it on each Mac.",
+  parameters: Schema.Struct({
+    key: TrimmedNonEmptyString,
+    projectId: Schema.NullOr(ProjectId),
+    displayName: Schema.optional(TrimmedNonEmptyString),
+  }),
+  success: Schema.Struct({
+    projects: Schema.Array(
+      Schema.Struct({
+        key: Schema.String,
+        displayName: Schema.String,
+        projectId: Schema.NullOr(ProjectId),
+      }),
+    ),
+  }),
+})
+  .annotate(Tool.Readonly, false)
+  .annotate(Tool.Destructive, false);
 export const TicketToolkit = Toolkit.make(
   StartTool,
   CreateTool,
@@ -201,4 +224,5 @@ export const TicketToolkit = Toolkit.make(
   GetTool,
   EntryTool,
   LinkTool,
+  ProjectMapTool,
 );

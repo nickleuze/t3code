@@ -31,6 +31,13 @@ export class TicketSyncService extends Context.Service<
     readonly machines: Effect.Effect<Readonly<Record<string, string>>, TicketError>;
     readonly registry: Effect.Effect<Readonly<Record<string, string>>, TicketError>;
     readonly registerProject: (key: string, name: string) => Effect.Effect<void, TicketError>;
+    /**
+     * Makes `snapshot/` in the backlog clone hold exactly `files` (paths
+     * relative to it), then commits and pushes only when something changed.
+     */
+    readonly writeSnapshot: (
+      files: ReadonlyMap<string, string>,
+    ) => Effect.Effect<{ readonly committed: boolean }, TicketError>;
     readonly machine: string;
     readonly label: string;
   }
@@ -55,6 +62,8 @@ const Config = Schema.Struct({
 });
 
 const isTicketError = Schema.is(TicketError);
+const SNAPSHOT_MESSAGE = "Snapshot tickets as Markdown";
+const SNAPSHOT_PATH = /^[A-Za-z0-9_-][A-Za-z0-9._-]*\/[A-Za-z0-9_-][A-Za-z0-9._-]*\.md$/;
 const decodeConfig = Schema.decodeUnknownEffect(Schema.fromJsonString(Config));
 const encodeConfig = Schema.encodeEffect(Schema.fromJsonString(Config));
 const decodeRegistry = Schema.decodeUnknownEffect(
@@ -359,6 +368,63 @@ export const make = Effect.gen(function* () {
         }),
       )
       .pipe(mapError);
+  const writeSnapshot = (files: ReadonlyMap<string, string>) =>
+    lock
+      .withPermit(
+        Effect.gen(function* () {
+          if (state.remote === null || !(yield* fs.exists(path.join(repo, ".git"))))
+            return yield* new TicketError({
+              message: "Ticket sync is not configured; the snapshot needs the backlog clone.",
+            });
+          if (
+            (yield* checked(["diff", "--name-only", "--diff-filter=U"])).trim() ||
+            (yield* fs.exists(path.join(repo, ".git/rebase-merge"))) ||
+            (yield* fs.exists(path.join(repo, ".git/rebase-apply")))
+          )
+            return yield* new TicketError({
+              message: "Ticket clone has an unresolved rebase conflict; snapshot skipped.",
+            });
+          const root = path.join(repo, "snapshot");
+          for (const [relative, contents] of files) {
+            if (!SNAPSHOT_PATH.test(relative))
+              return yield* new TicketError({ message: `Invalid snapshot path: ${relative}` });
+            const target = path.join(root, ...relative.split("/"));
+            if (!(yield* fs.exists(target)) || (yield* fs.readFileString(target)) !== contents)
+              yield* write({ filePath: target, contents });
+          }
+          if (yield* fs.exists(root))
+            for (const entry of yield* fs.readDirectory(root, { recursive: true })) {
+              const relative = entry.split(path.sep).join("/");
+              if (relative.endsWith(".md") && !files.has(relative))
+                yield* fs.remove(path.join(root, entry));
+            }
+          yield* checked(["add", "--all", "--", "snapshot"]);
+          if (!(yield* checked(["diff", "--cached", "--name-only", "--", "snapshot"])).trim())
+            return { committed: false };
+          yield* checked(["commit", "-m", SNAPSHOT_MESSAGE]);
+          const push = git(["push", "-u", "origin", `HEAD:${state.branch}`]);
+          let result = yield* push;
+          if (result.code !== 0) {
+            const pull = yield* git(["pull", "--rebase", "origin", state.branch]);
+            result = pull.code === 0 ? yield* push : pull;
+          }
+          if (result.code !== 0) {
+            // Drop only our own derived snapshot commit so event sync never
+            // inherits a snapshot conflict; the next run regenerates it.
+            yield* git(["rebase", "--abort"]);
+            if ((yield* git(["log", "-1", "--format=%s"])).stdout.trim() === SNAPSHOT_MESSAGE)
+              yield* checked(["reset", "--keep", "HEAD~1"]);
+            return yield* new TicketError({
+              message: "Ticket snapshot push failed; it will retry.",
+              cause: result.stderr.slice(-400),
+            });
+          }
+          state.lastPushAt = yield* now;
+          yield* save();
+          return { committed: true };
+        }),
+      )
+      .pipe(mapError);
   const setLabel = (label: string) =>
     lock
       .withPermit(
@@ -439,6 +505,7 @@ export const make = Effect.gen(function* () {
     machines,
     registry,
     registerProject,
+    writeSnapshot,
     machine: state.machine,
     label: state.label,
   });

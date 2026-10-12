@@ -337,3 +337,58 @@ it.effect("subscription emits full active lists after every mutation", () =>
     assert.equal((yield* Queue.take(snapshots)).tickets.length, 1);
   }).pipe(Effect.provide(layer)),
 );
+
+it.effect("get and list return readable IDs that resolve back to the ticket", () =>
+  Effect.gen(function* () {
+    const service = yield* Tickets.TicketService;
+    const { ticket } = yield* service.upsert({
+      title: "Fix rim light",
+      projectKey: "lighting-director",
+    });
+    const idea = (yield* service.upsert({ title: "Loose idea" })).ticket;
+    const readable = `lighting-director-${ticket.id.slice(-6)}`;
+    assert.equal(ticket.readableId, readable);
+    assert.equal(idea.readableId, null);
+    assert.equal((yield* service.get(ticket.id)).ticket.readableId, readable);
+    const listed = (yield* service.list()).tickets;
+    assert.equal(listed.find((t) => t.id === ticket.id)?.readableId, readable);
+    assert.equal(listed.find((t) => t.id === idea.id)?.readableId, null);
+    // t3_ticket_get and every other id input accept the readable form, case-insensitively.
+    assert.equal((yield* service.get(TicketId.make(readable))).ticket.id, ticket.id);
+    assert.equal((yield* service.get(TicketId.make(readable.toLowerCase()))).ticket.id, ticket.id);
+    const edited = yield* service.upsert({ id: TicketId.make(readable), body: "via readable id" });
+    assert.equal(edited.ticket.id, ticket.id);
+    assert.equal(edited.ticket.body, "via readable id");
+    yield* fail(service.get(TicketId.make("lighting-director-ZZZZZZ")));
+    yield* fail(service.get(TicketId.make(`other-project-${ticket.id.slice(-6)}`)));
+  }).pipe(Effect.provide(layer)),
+);
+
+it.effect("project map keeps a moved Home's key instead of hash-suffixing it", () =>
+  Effect.gen(function* () {
+    const service = yield* Tickets.TicketService;
+    const sql = yield* SqlClient.SqlClient;
+    const insertProject = (id: ProjectId, root: string) =>
+      sql`INSERT INTO projection_projects (project_id, title, workspace_root, scripts_json, created_at, updated_at)
+      VALUES (${id}, 'lighting-director', ${root}, '[]', '2026-10-11T00:00:00.000Z', '2026-10-11T00:00:00.000Z')`;
+    const before = ProjectId.make("project:old-home");
+    const moved = ProjectId.make("project:new-home");
+    const fresh = ProjectId.make("project:fresh");
+    yield* insertProject(before, "/Users/nick/Projects/lighting-director");
+    yield* insertProject(moved, "/Users/nick/Projects/photography/lighting-director");
+    yield* insertProject(fresh, "/Users/nick/Projects/creative/lighting-director");
+    const old = (yield* service.upsert({ title: "Old ticket", projectId: before })).ticket;
+    assert.equal(old.projectKey, "lighting-director");
+    // An unmapped project with a taken basename gets a hash-suffixed key.
+    const split = (yield* service.upsert({ title: "Split", projectId: fresh })).ticket;
+    assert.match(split.projectKey ?? "", /^lighting-director-[a-z0-9]{8}$/);
+    const { projects } = yield* service.projectsMap({ key: "lighting-director", projectId: moved });
+    assert.equal(projects.find((p) => p.key === "lighting-director")?.projectId, moved);
+    const filed = (yield* service.upsert({ title: "After move", projectId: moved })).ticket;
+    assert.equal(filed.projectKey, "lighting-director");
+    assert.equal(filed.projectId, moved);
+    const reread = (yield* service.get(old.id)).ticket;
+    assert.equal(reread.projectId, moved);
+    assert.equal(reread.readableId, old.readableId);
+  }).pipe(Effect.provide(layer)),
+);
