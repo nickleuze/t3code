@@ -162,6 +162,7 @@ const LinkTool = Tool.make("t3_ticket_link", {
     ticket: TicketId,
     kind: TicketReferenceKind,
     ref: Schema.optional(TrimmedNonEmptyString),
+    title: Schema.optional(TrimmedNonEmptyString),
     role: Schema.optional(TicketLinkRole),
   }),
   success: TicketSummary,

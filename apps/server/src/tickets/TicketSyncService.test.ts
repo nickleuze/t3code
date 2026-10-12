@@ -176,6 +176,7 @@ it.effect(
       yield* fs.rename(path.join(aHome, "tickets-repo"), path.join(aHome, "preserved-clone"));
       yield* a.refresh.pipe(Effect.flip);
       assert.ok((yield* a.status).lastError?.includes("missing or corrupt"));
+      assert.isFalse((yield* a.setupCheck).clonePresent);
       yield* a.configure(remote);
       assert.equal((yield* a.refresh).length, 1);
       assert.equal((yield* a.status).lastError, null);
@@ -193,5 +194,73 @@ it.effect("configuring an existing repo keeps project names registered before co
     assert.equal((yield* a.refresh).length, 0);
     assert.equal((yield* a.registry).lighting, "Lighting Director");
     assert.ok(yield* fs.exists(path.join(home, "tickets-repo/registry/projects.json")));
+  }).pipe(Effect.provide(layer)),
+);
+
+it.effect(
+  "setup check verifies local clone, remote/auth and registry, and detects corruption",
+  () =>
+    Effect.gen(function* () {
+      const { a, fs, path, aHome, remote } = yield* setup;
+      assert.deepStrictEqual(yield* a.setupCheck, {
+        clonePresent: true,
+        remoteReachable: true,
+        authOk: true,
+        registryParsed: true,
+        messages: [],
+      });
+      yield* a.setLabel("Mac mini");
+      assert.equal((yield* a.status).label, "Mac mini");
+      yield* fs.writeFileString(path.join(aHome, "tickets-repo/registry/projects.json"), "invalid");
+      assert.isFalse((yield* a.setupCheck).registryParsed);
+      yield* fs.rename(remote, `${remote}-offline`);
+      const offline = yield* a.setupCheck;
+      assert.isFalse(offline.remoteReachable);
+      assert.isNull(offline.authOk);
+    }).pipe(Effect.provide(layer)),
+);
+it.effect("sent archive prunes exact events at HEAD and retains events missing from HEAD", () =>
+  Effect.gen(function* () {
+    const { a, fs, path, aHome, created, ids } = yield* setup;
+    yield* a.append([created]);
+    yield* a.refresh;
+    const archive = path.join(aHome, "tickets-sent");
+    assert.deepStrictEqual(yield* fs.readDirectory(archive), []);
+    const missing = { ...created, eventId: `${ids(2000)}-${a.machine}` };
+    yield* fs.writeFileString(
+      path.join(archive, `${missing.eventId}.json`),
+      JSON.stringify(missing),
+    );
+    yield* a.refresh;
+    assert.deepStrictEqual(yield* fs.readDirectory(archive), [`${missing.eventId}.json`]);
+  }).pipe(Effect.provide(layer)),
+);
+it.effect("pull network failure is retryable rather than a conflict", () =>
+  Effect.gen(function* () {
+    const { root, aHome, remote, fs, path } = yield* setup;
+    const runner = yield* Processes.ProcessRunner;
+    const interrupted = yield* Sync.make.pipe(
+      Effect.provide(ServerConfig.layerTest(root, aHome)),
+      Effect.provideService(Processes.ProcessRunner, {
+        ...runner,
+        run: (input) =>
+          input.args?.[0] === "pull"
+            ? Effect.succeed({
+                code: 1,
+                stdout: "",
+                stderr: "Could not resolve host",
+                timedOut: false,
+                stdoutTruncated: false,
+                stderrTruncated: false,
+                stdoutInvalidUtf8: false,
+                stderrInvalidUtf8: false,
+              })
+            : runner.run(input),
+      }),
+    );
+    const error = yield* interrupted.refresh.pipe(Effect.flip);
+    assert.include(error.message, "pull failed, will retry");
+    assert.notInclude(error.message, "conflict");
+    assert.ok(yield* fs.exists(path.join(remote, "HEAD")));
   }).pipe(Effect.provide(layer)),
 );

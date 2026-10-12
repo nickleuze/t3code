@@ -115,6 +115,8 @@ export function projectTicket(events: readonly TicketEvent[]): TicketRecordState
         role: e.role,
         linkedAt: e.at,
         machine: e.machine,
+        title: e.title,
+        machineLabel: e.machineLabel,
       })),
   });
   const decisions = entries.filter((e) => e.kind === "decision" && !superseded.has(e.eventId));
@@ -127,6 +129,19 @@ export function projectTicket(events: readonly TicketEvent[]): TicketRecordState
       questions: questions.map((e) => ({ eventId: e.eventId, text: e.text })),
       lastHandoff,
       blocked,
+      resultReady:
+        ticket.status !== "done" &&
+        ticket.status !== "dropped" &&
+        entries.some(
+          (e) =>
+            e.kind === "result" &&
+            !sorted.some(
+              (later) =>
+                later.eventId > e.eventId &&
+                later.type === "stage" &&
+                ["reopen", "start_work", "accepted"].includes(later.reason),
+            ),
+        ),
       prs: [...references.values()].filter((e) => e.kind === "pr").map((e) => e.ref),
     },
   });

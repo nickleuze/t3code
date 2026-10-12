@@ -23,7 +23,7 @@ import {
 } from "@dnd-kit/core";
 import { SortableContext, useSortable, verticalListSortingStrategy } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
-import { ArrowUpRightIcon, ListFilterIcon, GripVerticalIcon } from "lucide-react";
+import { ArrowUpRightIcon, GripVerticalIcon } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { TicketSyncStatus } from "../components/tickets/TicketSyncStatus";
 import { WorkspacePageHeader } from "../components/WorkspacePageHeader";
@@ -33,9 +33,9 @@ import { Button } from "../components/ui/button";
 import { Badge } from "../components/ui/badge";
 import { Tooltip, TooltipTrigger, TooltipPopup } from "../components/ui/tooltip";
 import { Input } from "../components/ui/input";
-import { Menu, MenuTrigger, MenuPopup, MenuItem } from "../components/ui/menu";
 import { TicketPicker } from "../components/tickets/TicketPicker";
-import { TicketIssueBadge } from "../components/tickets/TicketGithub";
+import { TicketActions } from "../components/tickets/TicketActions";
+import { TicketMarkers } from "../components/tickets/TicketMarkers";
 import { TicketLinks } from "../components/tickets/TicketLinks";
 import { TicketDetail } from "../components/tickets/TicketDetail";
 import { TicketStartWork } from "../components/tickets/TicketStartWork";
@@ -478,7 +478,6 @@ function TicketCard({
   const environment = useEnvironments().environments.find(
     (e) => e.environmentId === entry.environmentId,
   );
-  const upsert = useAtomCommand(ticketEnvironment.upsertTicket);
   return (
     <article
       ref={setNodeRef}
@@ -531,43 +530,10 @@ function TicketCard({
           {entry.ticket.body.trim()}
         </p>
       ) : null}
-      <TicketIssueBadge entry={entry} />
+      <TicketMarkers entry={entry} />
       <TicketLinks entry={entry} />
       <div className="flex flex-wrap items-center justify-between gap-1">
-        <Menu>
-          <MenuTrigger
-            render={
-              <Button
-                size={narrow ? "icon-touch" : "icon-xs"}
-                variant="ghost"
-                disabled={!canWrite}
-                aria-label={`Set status for ${entry.ticket.title}`}
-              />
-            }
-          >
-            <ListFilterIcon />
-          </MenuTrigger>
-          <MenuPopup>
-            {Object.entries(TICKET_STATUS_LABELS).map(([value, label]) => (
-              <MenuItem
-                key={value}
-                density={narrow ? "phone" : "default"}
-                onClick={() => {
-                  void upsert({
-                    environmentId: entry.environmentId,
-                    input: {
-                      id: entry.ticket.id,
-                      requireExisting: true,
-                      status: value as TicketStatus,
-                    },
-                  });
-                }}
-              >
-                {label}
-              </MenuItem>
-            ))}
-          </MenuPopup>
-        </Menu>
+        <TicketActions entry={entry} />
         <div className="opacity-100 sm:opacity-0 sm:group-hover:opacity-100 sm:group-focus-within:opacity-100">
           <TicketStartWork entry={entry} />
         </div>

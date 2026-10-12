@@ -44,7 +44,7 @@ describe("ticket launch", () => {
     );
     expect(rpc.link.mock.calls[1]?.[0]).toEqual({
       environmentId,
-      input: { id: ticketId, threadId: input.threadId, role: "work" },
+      input: { id: ticketId, threadId: input.threadId, role: "work", title: input.title },
     });
   });
   it("an ambiguous failure keeps the link and retries the identical command and thread", async () => {

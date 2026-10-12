@@ -52,7 +52,7 @@ import * as ThreadLaunchService from "./ThreadLaunchService.ts";
 import * as ThreadLifecycleService from "./ThreadLifecycleService.ts";
 import * as ThreadForkService from "./ThreadForkService.ts";
 import * as TurnItemPositionStore from "./TurnItemPositionStore.ts";
-import * as TicketGithubService from "../tickets/TicketGithubService.ts";
+import * as TicketObservations from "../tickets/TicketObservations.ts";
 import * as TicketHandoffNudge from "../tickets/TicketHandoffNudge.ts";
 import * as TicketSyncService from "../tickets/TicketSyncService.ts";
 import * as TicketService from "../tickets/TicketService.ts";
@@ -350,7 +350,7 @@ export const layer = Layer.mergeAll(
 
 const layerTicketSync = TicketSyncService.layer.pipe(Layer.provide(ProcessRunner.layer));
 const layerTickets = TicketService.layer.pipe(
-  Layer.provide(ProjectStore.layer),
+  Layer.provide(Layer.merge(ProjectStore.layer, ProjectionStore.layer)),
   Layer.provide(layerTicketSync),
 );
 
@@ -362,7 +362,6 @@ export const layerProduction = Layer.mergeAll(
   layerThreadLifecycleProvided,
   layerScheduledTaskProvided,
   layerTickets,
-  TicketGithubService.layer.pipe(Layer.provide(Layer.mergeAll(layerTickets, layerProjectService))),
   layerTicketSync,
   layerSecretRequestsProvided,
   GoalLoopWorker.layer.pipe(
@@ -378,8 +377,18 @@ export const layerProduction = Layer.mergeAll(
   UsageLimitRecoveryWorker.layer.pipe(
     Layer.provide(Layer.mergeAll(ProjectionStore.layer, layerThreadManagementProvided)),
   ),
+  TicketObservations.layer.pipe(
+    Layer.provide(Layer.mergeAll(layerEventSinkProvided, layerTickets, ProjectionStore.layer)),
+  ),
   TicketHandoffNudge.layer.pipe(
-    Layer.provide(Layer.mergeAll(layerOrchestratorProvided, layerEventSinkProvided, layerTickets)),
+    Layer.provide(
+      Layer.mergeAll(
+        layerOrchestratorProvided,
+        layerEventSinkProvided,
+        layerTickets,
+        layerRuntimePolicyProvided,
+      ),
+    ),
   ),
   ThreadReportBack.layer.pipe(
     Layer.provide(

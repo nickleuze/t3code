@@ -1,4 +1,9 @@
-import { TicketError, TicketEvent, TicketSyncStatus } from "@t3tools/contracts";
+import {
+  TicketError,
+  TicketEvent,
+  TicketSyncStatus,
+  type TicketSetupCheck,
+} from "@t3tools/contracts";
 import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
@@ -16,6 +21,8 @@ import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
 export class TicketSyncService extends Context.Service<
   TicketSyncService,
   {
+    readonly setupCheck: Effect.Effect<TicketSetupCheck, TicketError>;
+    readonly setLabel: (label: string) => Effect.Effect<TicketSyncStatus, TicketError>;
     readonly status: Effect.Effect<TicketSyncStatus, TicketError>;
     readonly configure: (remote: string) => Effect.Effect<TicketSyncStatus, TicketError>;
     readonly append: (events: readonly TicketEvent[]) => Effect.Effect<void, TicketError>;
@@ -116,21 +123,27 @@ export const make = Effect.gen(function* () {
         SSH_ASKPASS_REQUIRE: "never",
       },
     });
-  const checked = (args: readonly string[], cwd = repo) =>
-    git(args, cwd).pipe(
-      Effect.flatMap((output) =>
-        output.code === 0
-          ? Effect.succeed(output.stdout)
-          : Effect.fail(
-              new TicketError({
-                message:
-                  args[0] === "pull"
-                    ? "Ticket sync pull/rebase failed. Resolve the clone conflict manually; local events are kept."
-                    : `Ticket sync ${args[0]} failed. Local events are queued.`,
-              }),
-            ),
-      ),
+  const hasConflict = Effect.gen(function* () {
+    const markers = yield* git(["diff", "--name-only", "--diff-filter=U"]);
+    return (
+      Boolean(markers.stdout.trim()) ||
+      (yield* fs.exists(path.join(repo, ".git/rebase-merge"))) ||
+      (yield* fs.exists(path.join(repo, ".git/rebase-apply")))
     );
+  });
+  const checked = (args: readonly string[], cwd = repo) =>
+    Effect.gen(function* () {
+      const output = yield* git(args, cwd);
+      if (output.code === 0) return output.stdout;
+      return yield* new TicketError({
+        message:
+          args[0] === "pull"
+            ? (yield* hasConflict)
+              ? "Ticket sync pull/rebase conflict. Resolve the clone conflict manually; local events are kept."
+              : "Ticket sync pull failed, will retry. Local events are queued."
+            : `Ticket sync ${args[0]} failed. Local events are queued.`,
+      });
+    });
   const registry = Effect.gen(function* () {
     const target =
       state.remote === null ? localRegistryPath : path.join(repo, "registry/projects.json");
@@ -239,6 +252,15 @@ export const make = Effect.gen(function* () {
     state.lastPullAt = yield* now;
     yield* fs.makeDirectory(archive, { recursive: true });
     for (const file of pending) yield* fs.rename(path.join(outbox, file), path.join(archive, file));
+    // An archived event is redundant only once its exact bytes are committed.
+    // Checking HEAD (rather than the working tree) preserves retry recovery.
+    for (const file of yield* fs.readDirectory(archive)) {
+      const contents = yield* fs.readFileString(path.join(archive, file));
+      const event = yield* decodeEvent(contents);
+      const committed = yield* git(["show", `HEAD:tickets/${event.ticketId}/${file}`]);
+      if (committed.code === 0 && committed.stdout === contents)
+        yield* fs.remove(path.join(archive, file));
+    }
     state.registryPending = false;
     yield* save();
     return yield* readEvents;
@@ -257,8 +279,12 @@ export const make = Effect.gen(function* () {
     ),
   );
   const status = Effect.gen(function* () {
+    const queued = yield* Effect.forEach(yield* fs.readDirectory(outbox), (file) =>
+      fs.readFileString(path.join(outbox, file)).pipe(Effect.flatMap(decodeEvent)),
+    );
     return {
       ...state,
+      pendingTicketIds: [...new Set(queued.map((e) => e.ticketId))],
       configured: state.remote !== null,
       pendingEvents: (yield* fs.readDirectory(outbox)).length + (state.registryPending ? 1 : 0),
       lastError,
@@ -332,6 +358,65 @@ export const make = Effect.gen(function* () {
         }),
       )
       .pipe(mapError);
+  const setLabel = (label: string) =>
+    lock
+      .withPermit(
+        Effect.gen(function* () {
+          state.label = label;
+          yield* save();
+          if (state.remote !== null) {
+            yield* write({
+              filePath: path.join(repo, "machines", `${state.machine}.json`),
+              contents: yield* encodeJson({ id: state.machine, label }),
+            });
+            state.registryPending = true;
+            yield* save();
+          }
+          return yield* status;
+        }),
+      )
+      .pipe(mapError);
+  const setupCheck = lock
+    .withPermit(
+      Effect.gen(function* () {
+        const messages: string[] = [];
+        const clonePresent =
+          (yield* fs.exists(path.join(repo, ".git"))) &&
+          (yield* git(["rev-parse", "--git-dir"])).code === 0;
+        if (!clonePresent) messages.push("Clone missing or corrupt.");
+        const remote =
+          state.remote === null
+            ? null
+            : yield* git(["ls-remote", "--", state.remote], config.baseDir);
+        const remoteReachable = remote?.code === 0;
+        const authFailed =
+          remote !== null &&
+          /authentication|permission denied|could not read Username|access denied|publickey|not authorized/i.test(
+            remote.stderr,
+          );
+        // A failed network probe cannot establish authentication either way.
+        const authOk = remoteReachable ? true : authFailed ? false : null;
+        if (!remoteReachable)
+          messages.push(
+            authFailed
+              ? "Remote authentication failed."
+              : "Remote unavailable or not configured; authentication could not be checked.",
+          );
+        const registryResult = yield* Effect.result(
+          Effect.gen(function* () {
+            const target =
+              state.remote === null ? localRegistryPath : path.join(repo, "registry/projects.json");
+            if (!(yield* fs.exists(target))) return false;
+            yield* decodeRegistry(yield* fs.readFileString(target));
+            return true;
+          }),
+        );
+        const registryParsed = registryResult._tag === "Success" && registryResult.success;
+        if (!registryParsed) messages.push("Project registry missing or invalid.");
+        return { clonePresent, remoteReachable, authOk, registryParsed, messages };
+      }),
+    )
+    .pipe(mapError);
   const machines = Effect.gen(function* () {
     const labels: Record<string, string> = { [state.machine]: state.label };
     const root = path.join(repo, "machines");
@@ -343,6 +428,8 @@ export const make = Effect.gen(function* () {
     return labels;
   }).pipe(mapError);
   return TicketSyncService.of({
+    setupCheck,
+    setLabel,
     status,
     configure,
     append,

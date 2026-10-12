@@ -140,7 +140,7 @@ export const layer = McpToolAccess.toLayer(TicketToolkit, {
           });
         const { ticket } = yield* tickets
           .reference(
-            { id: input.ticket, kind: input.kind, ref, role: input.role },
+            { id: input.ticket, kind: input.kind, ref, role: input.role, title: input.title },
             tickets.author({
               actor: "agent",
               ...(caller ? { thread: caller.id, model: caller.modelSelection.model } : {}),

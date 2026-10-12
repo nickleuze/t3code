@@ -7,6 +7,7 @@ import {
   TicketMutationResult,
   type Ticket,
   type TicketAuthor,
+  type TicketActionInput,
   type TicketUpsertInput,
   type TicketListInput,
   type TicketListResult,
@@ -19,8 +20,8 @@ import {
   type TicketTimelineResult,
   type TicketProjectsResult,
   type TicketSyncStatus,
+  type TicketSetupCheck,
   type TicketProjectMapInput,
-  type TicketGithubIssue,
 } from "@t3tools/contracts";
 import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
@@ -33,6 +34,7 @@ import * as Semaphore from "effect/Semaphore";
 import * as Stream from "effect/Stream";
 import * as SqlClient from "effect/sql/SqlClient";
 import * as Path from "effect/Path";
+import * as ProjectionStore from "../orchestration-v2/ProjectionStore.ts";
 import * as ProjectStore from "../orchestration-v2/ProjectStore.ts";
 import * as TicketSync from "./TicketSyncService.ts";
 import {
@@ -117,11 +119,26 @@ type ReferenceInput = {
   ref: string;
   role?: "work" | "origin" | "planning" | "review" | undefined;
   unlink?: boolean;
+  title?: string | undefined;
+};
+export type TicketObservation = {
+  threadId: ThreadId;
+  key: string;
+  kind: Extract<TicketEvent, { type: "auto" }>["kind"];
+  ref: string;
+  title?: string | undefined;
+  isDraft?: boolean;
+  model?: string | undefined;
+  referenceKind?: "goal" | "task";
 };
 export class TicketService extends Context.Service<
   TicketService,
   {
+    readonly action: (input: TicketActionInput) => Effect.Effect<TicketMutationResult, TicketError>;
+    readonly observe: (input: TicketObservation) => Effect.Effect<void, TicketError>;
     readonly syncRefresh: () => Effect.Effect<TicketSyncStatus, TicketError>;
+    readonly setupCheck: Effect.Effect<TicketSetupCheck, TicketError>;
+    readonly machineLabel: (label: string) => Effect.Effect<TicketSyncStatus, TicketError>;
     readonly syncStatus: Effect.Effect<TicketSyncStatus, TicketError>;
     readonly syncConfigure: (remote: string) => Effect.Effect<TicketSyncStatus, TicketError>;
     readonly list: (input?: TicketListInput) => Effect.Effect<TicketListResult, TicketError>;
@@ -164,14 +181,6 @@ export class TicketService extends Context.Service<
       input: typeof TicketProjectMapInput.Type,
     ) => Effect.Effect<TicketProjectsResult, TicketError>;
     readonly author: (by?: Omit<TicketAuthor, "machine">) => TicketAuthor;
-    // Compatibility with v1 transports; GitHub integration is retired for records.
-    readonly importGithubIssue: (
-      input: TicketUpsertInput,
-      issue: TicketGithubIssue,
-    ) => Effect.Effect<TicketMutationResult, TicketError>;
-    readonly setGithubIssues: (
-      updates: ReadonlyArray<{ id: TicketId; issue: TicketGithubIssue | null; refresh?: boolean }>,
-    ) => Effect.Effect<number, TicketError>;
   }
 >()("t3/tickets/TicketService") {}
 const isTicketError = Schema.is(TicketError);
@@ -200,6 +209,31 @@ export const make = Effect.gen(function* () {
   const projects = yield* ProjectStore.ProjectStoreV2;
   const syncOption = yield* Effect.serviceOption(TicketSync.TicketSyncService);
   const sync = Option.getOrUndefined(syncOption);
+  const projection = Option.getOrUndefined(
+    yield* Effect.serviceOption(ProjectionStore.ProjectionStoreV2),
+  );
+  const titleFor = (kind: ReferenceInput["kind"], ref: string, title?: string, caller?: ThreadId) =>
+    Effect.gen(function* () {
+      if (title !== undefined) return title;
+      if (!projection) return ref;
+      if (kind === "thread") return (yield* projection.getThread(ThreadId.make(ref))).title;
+      if (kind === "goal" && caller) {
+        const thread = yield* projection.getThread(caller);
+        if (thread.goal?.id === ref) return thread.goal.objective;
+      }
+      if (kind === "goal")
+        return (
+          (yield* projection.getGoalThreads()).find((t) => t.goal?.id === ref)?.goal?.objective ??
+          ref
+        );
+      if (kind === "task" && caller)
+        return (
+          (yield* projection.getThreadRecords(caller, ["subagents"])).subagents.find(
+            (task) => task.id === ref,
+          )?.title ?? ref
+        );
+      return ref;
+    }).pipe(Effect.orElseSucceed(() => ref));
   yield* bootstrapSchema.pipe(mapError);
   const changes = yield* PubSub.sliding<void>(1);
   const lock = yield* Semaphore.make(1);
@@ -394,6 +428,8 @@ export const make = Effect.gen(function* () {
               type: "link",
               kind: "thread",
               ref: input.originThreadId,
+              title: yield* titleFor("thread", input.originThreadId),
+              machineLabel: (yield* sync ? sync.status : Effect.succeed({ label: "Test" })).label,
               role: "origin",
               machine: sync?.machine ?? "test",
             });
@@ -438,7 +474,9 @@ export const make = Effect.gen(function* () {
           (link) => link.kind === input.kind && link.ref === input.ref && link.machine === machine,
         );
         const role = input.role ?? "work";
-        if (input.unlink ? !existing : existing?.role === role) return { ticket: state.ticket };
+        const title = yield* titleFor(input.kind, input.ref, input.title, by?.thread);
+        if (input.unlink ? !existing : existing?.role === role && existing?.title === title)
+          return { ticket: state.ticket };
         yield* commitEvents([
           {
             ...(yield* base(id, by)),
@@ -447,6 +485,8 @@ export const make = Effect.gen(function* () {
             ref: input.ref,
             role,
             machine,
+            title,
+            machineLabel: (yield* sync ? sync.status : Effect.succeed({ label: "Test" })).label,
           },
         ]);
         return { ticket: (yield* readState(id)).ticket };
@@ -469,17 +509,27 @@ export const make = Effect.gen(function* () {
               )
             )
               return { ticket: state.ticket };
-            const events: TicketEvent[] = [
-              {
+            const events: TicketEvent[] = [];
+            const title = yield* titleFor("thread", input.threadId, input.title);
+            const existing = state.references.find(
+              (link) =>
+                link.kind === "thread" && link.ref === input.threadId && link.machine === machine,
+            );
+            if (!existing || existing.role !== input.role || existing.title !== title)
+              events.push({
                 ...(yield* base(id, by)),
                 type: "link",
                 kind: "thread",
                 ref: input.threadId,
-                role: "work",
+                role: input.role,
                 machine,
-              },
-            ];
-            if (state.ticket.status === "inbox" || state.ticket.status === "ready")
+                title,
+                machineLabel: (yield* sync ? sync.status : Effect.succeed({ label: "Test" })).label,
+              });
+            if (
+              input.role !== "planning" &&
+              (state.ticket.status === "inbox" || state.ticket.status === "ready")
+            )
               events.push({
                 ...(yield* base(id, by)),
                 type: "stage",
@@ -496,7 +546,120 @@ export const make = Effect.gen(function* () {
             return { ticket: (yield* readState(id)).ticket };
           }),
         )
-      : reference({ id: input.id, kind: "thread", ref: input.threadId, role: input.role }, by);
+      : reference(
+          {
+            id: input.id,
+            kind: "thread",
+            ref: input.threadId,
+            role: input.role,
+            title: input.title,
+          },
+          by,
+        );
+  const action = (input: TicketActionInput) =>
+    mutate(
+      Effect.gen(function* () {
+        const state = yield* readState(input.id);
+        const terminal = state.ticket.status === "done" || state.ticket.status === "dropped";
+        if (input.action === "reopen" && !terminal) return { ticket: state.ticket };
+        if (input.action === "accept" && !state.ticket.workState?.resultReady)
+          return yield* new TicketError({ message: "No result is ready to accept." });
+        if (input.action === "drop" && state.ticket.status === "dropped")
+          return { ticket: state.ticket };
+        yield* commitEvents([
+          {
+            ...(yield* base(state.ticket.id)),
+            type: "stage",
+            stage:
+              input.action === "reopen" ? "ready" : input.action === "drop" ? "dropped" : "done",
+            reason:
+              input.action === "accept"
+                ? "accepted"
+                : input.action === "drop"
+                  ? "dropped"
+                  : "reopen",
+          },
+        ]);
+        return { ticket: (yield* readState(state.ticket.id)).ticket };
+      }),
+    );
+  // Only live observers call this method. Import/rebuild never synthesize events.
+  const observe = (input: TicketObservation) =>
+    mutate(
+      Effect.gen(function* () {
+        const machine = sync?.machine ?? "test";
+        for (const { id } of (yield* list()).tickets) {
+          const state = yield* readState(id);
+          const local = state.references.find(
+            (l) =>
+              l.kind === "thread" &&
+              l.ref === input.threadId &&
+              l.machine === machine &&
+              l.role !== "origin",
+          );
+          if (!local) continue;
+          const history = yield* eventsFor(id);
+          const observationKey = deterministicEventId(input.threadId, input.key, machine);
+          if (history.some((e) => e.type === "auto" && e.observationKey === observationKey))
+            continue;
+          const by = author({
+            actor: "agent",
+            thread: input.threadId,
+            ...(input.model ? { model: input.model } : {}),
+          });
+          const events: TicketEvent[] = [];
+          const latestWork = state.references
+            .filter((l) => l.kind === "thread" && l.role === "work")
+            .sort((a, b) => b.at.localeCompare(a.at) || b.eventId.localeCompare(a.eventId))[0];
+          const currentWork =
+            local.role === "work" &&
+            latestWork?.ref === local.ref &&
+            latestWork.machine === machine;
+          const active =
+            state.ticket.status === "in_progress" || state.ticket.status === "in_review";
+          if (input.kind === "pr_linked" && input.isDraft) continue;
+          if (input.kind === "pr_linked" || input.referenceKind)
+            events.push({
+              ...(yield* base(id, by)),
+              type: "link",
+              kind: input.referenceKind ?? "pr",
+              ref: input.ref,
+              role: local.role,
+              machine,
+              title: input.title,
+              machineLabel: (yield* sync ? sync.status : Effect.succeed({ label: "Test" })).label,
+            });
+          if (
+            currentWork &&
+            ((input.kind === "pr_linked" && state.ticket.status === "in_progress") ||
+              (input.kind === "pr_merged" &&
+                active &&
+                history.some(
+                  (e) =>
+                    e.type === "auto" &&
+                    e.kind === "pr_linked" &&
+                    e.ref === input.ref &&
+                    e.by.thread === input.threadId &&
+                    e.by.machine === machine,
+                )))
+          )
+            events.push({
+              ...(yield* base(id, by)),
+              type: "stage",
+              stage: input.kind === "pr_merged" ? "done" : "in_review",
+              reason: input.kind,
+            });
+          events.push({
+            ...(yield* base(id, by)),
+            type: "auto",
+            kind: input.kind,
+            ref: input.ref,
+            observationKey,
+          });
+          yield* commitEvents(events);
+        }
+      }),
+    );
   const entry = (input: TicketEntryInput, by?: TicketAuthor, namespace = "user") =>
     mutate(
       Effect.gen(function* () {
@@ -741,9 +904,6 @@ export const make = Effect.gen(function* () {
       }
     }).pipe(Effect.forkScoped);
   }
-  const retired = Effect.fail(
-    new TicketError({ message: "GitHub issue mirroring is retired for ticket work records." }),
-  );
   const syncUnavailable = Effect.fail(
     new TicketError({ message: "Ticket sync is unavailable in this environment." }),
   );
@@ -753,6 +913,10 @@ export const make = Effect.gen(function* () {
       return yield* sync ? sync.status : syncUnavailable;
     });
   return TicketService.of({
+    action,
+    observe,
+    setupCheck: sync ? sync.setupCheck : syncUnavailable,
+    machineLabel: (label) => (sync ? sync.setLabel(label) : syncUnavailable),
     syncRefresh,
     syncStatus: sync ? sync.status : syncUnavailable,
     syncConfigure: (remote) =>
@@ -792,8 +956,6 @@ export const make = Effect.gen(function* () {
     refresh,
     projectsList,
     projectsMap,
-    importGithubIssue: () => retired,
-    setGithubIssues: () => retired,
   });
 });
 export const layer = Layer.effect(TicketService, make);

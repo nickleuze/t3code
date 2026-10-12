@@ -125,25 +125,10 @@ const makeHarness = Effect.fn("makeTicketToolkitHarness")(function* (
   return { call, tickets, shells, seed };
 });
 
-it.effect("work records reject retired issue mirrors and list a null issue", () =>
+it.effect("work records list a null legacy issue field", () =>
   Effect.gen(function* () {
     const harness = yield* makeHarness();
-    const ticket = yield* harness.seed({ title: "GitHub link" });
-    yield* harness.tickets
-      .setGithubIssues([
-        {
-          id: ticket.id,
-          issue: {
-            repository: "github.com/acme/project",
-            number: 42,
-            url: "https://github.com/acme/project/issues/42",
-            state: "open",
-            closedAt: null,
-            syncedAt: ticket.createdAt,
-          },
-        },
-      ])
-      .pipe(Effect.flip);
+    yield* harness.seed({ title: "Work record" });
     const result = yield* harness.call("t3_ticket_list", {});
     expect(result.tickets[0].githubIssue).toBeNull();
   }),

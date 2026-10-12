@@ -123,6 +123,8 @@ it.effect("automatic sync debounces writes and retries a queued push with clocke
     let reject = true;
     let lastError: string | null = null;
     const sync = Sync.TicketSyncService.of({
+      setupCheck: Effect.die("unused"),
+      setLabel: () => Effect.die("unused"),
       machine: "clock",
       label: "Clock test",
       status: Effect.sync(() => ({
@@ -194,9 +196,178 @@ it.effect("an ordinary pre-link leaves stage alone and does not suppress first-s
     assert.equal((yield* tickets.link({ ...link, startWork: true })).ticket.status, "in_progress");
     yield* tickets.link({ ...link, startWork: true });
     assert.equal(
+      (yield* tickets.timeline({ id: ticket.id })).events.filter((e) => e.type === "link").length,
+      1,
+    );
+    assert.equal(
       (yield* tickets.timeline({ id: ticket.id })).events.filter((event) => event.type === "auto")
         .length,
       1,
     );
+  }).pipe(Effect.provide(layer)),
+);
+
+it.effect("link snapshots retain title and machine label and refresh on rename", () =>
+  Effect.gen(function* () {
+    const tickets = yield* Tickets.TicketService;
+    const { ticket } = yield* tickets.upsert({ title: "Snapshots" });
+    const input = { id: ticket.id, kind: "thread" as const, ref: "work", title: "Implementation" };
+    yield* tickets.reference(input);
+    yield* tickets.reference(input);
+    yield* tickets.reference({ ...input, title: "Renamed" });
+    const state = yield* tickets.get(ticket.id);
+    assert.equal(state.references[0]?.title, "Renamed");
+    assert.equal(state.references[0]?.machineLabel, "Test");
+    assert.equal(state.ticket.links[0]?.title, "Renamed");
+    assert.equal(
+      (yield* tickets.timeline({ id: ticket.id })).events.filter((e) => e.type === "link").length,
+      2,
+    );
+  }).pipe(Effect.provide(layer)),
+);
+
+it.effect(
+  "PR on Inbox records only; started work moves to review, merge after manual review moves done",
+  () =>
+    Effect.gen(function* () {
+      const tickets = yield* Tickets.TicketService;
+      const { ticket } = yield* tickets.upsert({ title: "PR transitions" });
+      const threadId = ThreadId.make("implementation");
+      yield* tickets.link({ id: ticket.id, threadId, role: "work" });
+      const pr = {
+        threadId,
+        key: "linked-1",
+        kind: "pr_linked" as const,
+        ref: "https://fixture.local/pr/1",
+        title: "#1: First",
+      };
+      yield* tickets.observe(pr);
+      assert.equal((yield* tickets.get(ticket.id)).ticket.status, "inbox");
+      yield* tickets.link({ id: ticket.id, threadId, role: "work", startWork: true });
+      yield* tickets.observe({
+        ...pr,
+        key: "draft",
+        ref: "https://fixture.local/pr/2",
+        isDraft: true,
+      });
+      assert.equal((yield* tickets.get(ticket.id)).ticket.status, "in_progress");
+      yield* tickets.observe({ ...pr, key: "linked-2", ref: "https://fixture.local/pr/2" });
+      assert.equal((yield* tickets.get(ticket.id)).ticket.status, "in_review");
+      yield* tickets.reference({
+        id: ticket.id,
+        kind: "pr",
+        ref: "https://fixture.local/pr/2",
+        title: "Renamed PR",
+      });
+      yield* tickets.upsert({ id: ticket.id, status: "in_review" });
+      const merged = {
+        threadId,
+        key: "merged-2",
+        kind: "pr_merged" as const,
+        ref: "https://fixture.local/pr/2",
+      };
+      yield* tickets.observe(merged);
+      assert.equal((yield* tickets.get(ticket.id)).ticket.status, "done");
+      yield* tickets.action({ id: ticket.id, action: "reopen" });
+      assert.equal((yield* tickets.get(ticket.id)).ticket.status, "ready");
+      yield* tickets.observe(merged);
+      yield* tickets.rebuild;
+      assert.equal((yield* tickets.get(ticket.id)).ticket.status, "ready");
+      const events = (yield* tickets.timeline({ id: ticket.id })).events;
+      assert.equal(events.filter((e) => e.type === "auto" && e.kind === "pr_merged").length, 1);
+      assert.equal(events.filter((e) => e.type === "stage" && e.reason === "pr_linked").length, 1);
+    }).pipe(Effect.provide(layer)),
+);
+
+it.effect("result never changes stage; accept, drop and reopen carry explicit reasons", () =>
+  Effect.gen(function* () {
+    const tickets = yield* Tickets.TicketService;
+    const { ticket } = yield* tickets.upsert({ title: "Result" });
+    yield* tickets.entry(
+      { id: ticket.id, kind: "result", text: "Ready for Nick" },
+      tickets.author({
+        actor: "agent",
+        thread: ThreadId.make("result-agent"),
+        model: "gpt-6.1-sol",
+      }),
+    );
+    assert.equal((yield* tickets.get(ticket.id)).ticket.status, "inbox");
+    assert.isTrue((yield* tickets.get(ticket.id)).ticket.workState?.resultReady);
+    assert.equal(
+      (yield* tickets.action({ id: ticket.id, action: "accept" })).ticket.status,
+      "done",
+    );
+    assert.equal(
+      (yield* tickets.action({ id: ticket.id, action: "reopen" })).ticket.status,
+      "ready",
+    );
+    assert.isFalse((yield* tickets.get(ticket.id)).ticket.workState?.resultReady);
+    assert.equal(
+      (yield* tickets.action({ id: ticket.id, action: "drop" })).ticket.status,
+      "dropped",
+    );
+    assert.equal(
+      (yield* tickets.action({ id: ticket.id, action: "reopen" })).ticket.status,
+      "ready",
+    );
+    assert.deepStrictEqual(
+      (yield* tickets.timeline({ id: ticket.id })).events
+        .filter((e) => e.type === "stage")
+        .map((e) => e.reason),
+      ["accepted", "reopen", "dropped", "reopen"],
+    );
+  }).pipe(Effect.provide(layer)),
+);
+
+it.effect("planning start and non-PR observations do not move stages; goal/task refs persist", () =>
+  Effect.gen(function* () {
+    const tickets = yield* Tickets.TicketService;
+    const { ticket } = yield* tickets.upsert({ title: "Planning" });
+    const threadId = ThreadId.make("plan");
+    yield* tickets.link({ id: ticket.id, threadId, role: "planning", startWork: true });
+    assert.equal((yield* tickets.get(ticket.id)).ticket.status, "inbox");
+    for (const kind of [
+      "thread_settled",
+      "needs_input",
+      "goal_iteration_done",
+      "task_done",
+      "pr_closed",
+    ] as const)
+      yield* tickets.observe({ threadId, key: kind, kind, ref: threadId });
+    for (const referenceKind of ["goal", "task"] as const)
+      yield* tickets.observe({
+        threadId,
+        key: referenceKind,
+        kind: "thread_started",
+        ref: referenceKind,
+        referenceKind,
+        title: `${referenceKind} title`,
+      });
+    assert.equal((yield* tickets.get(ticket.id)).ticket.status, "inbox");
+    assert.deepStrictEqual(
+      (yield* tickets.get(ticket.id)).references.map((l) => l.kind),
+      ["thread", "goal", "task"],
+    );
+  }).pipe(Effect.provide(layer)),
+);
+
+it.effect("a superseded work thread and a closed PR do not change manual stages", () =>
+  Effect.gen(function* () {
+    const tickets = yield* Tickets.TicketService;
+    const { ticket } = yield* tickets.upsert({ title: "Old work" });
+    const old = ThreadId.make("old"),
+      current = ThreadId.make("current");
+    yield* tickets.link({ id: ticket.id, threadId: old, role: "work", startWork: true });
+    yield* TestClock.adjust("1 second");
+    yield* tickets.link({ id: ticket.id, threadId: current, role: "work", startWork: true });
+    yield* tickets.observe({ threadId: old, key: "old-pr", kind: "pr_linked", ref: "old-pr" });
+    assert.equal((yield* tickets.get(ticket.id)).ticket.status, "in_progress");
+    yield* tickets.observe({
+      threadId: current,
+      key: "closed",
+      kind: "pr_closed",
+      ref: "closed-pr",
+    });
+    assert.equal((yield* tickets.get(ticket.id)).ticket.status, "in_progress");
   }).pipe(Effect.provide(layer)),
 );

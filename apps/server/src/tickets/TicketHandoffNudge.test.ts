@@ -20,6 +20,7 @@ it.effect(
     Effect.gen(function* () {
       const threadId = ThreadId.make("work");
       let runId = RunId.make("tools");
+      let interactionMode = "plan";
       let items = [{ type: "dynamic_tool", runId }];
       let messages: { role: string; text: string }[] = [];
       const dispatched: OrchestrationV2ServerCommand[] = [];
@@ -40,7 +41,7 @@ it.effect(
             Effect.sync(
               () =>
                 ({
-                  thread: { id: threadId, archivedAt: null, deletedAt: null },
+                  thread: { id: threadId, archivedAt: null, deletedAt: null, interactionMode },
                   runs: [
                     {
                       id: runId,
@@ -64,6 +65,10 @@ it.effect(
       const { ticket } = yield* tickets.upsert({ title: "Nudge" });
       yield* tickets.link({ id: ticket.id, threadId, role: "planning" });
       const nudge = yield* Nudge.make.pipe(Effect.provideContext(context));
+      yield* nudge.observe({ id: runId, threadId });
+      yield* nudge.drain;
+      assert.equal(dispatched.length, 0);
+      interactionMode = "default";
       yield* nudge.observe({ id: runId, threadId });
       yield* nudge.drain;
       yield* nudge.observe({ id: runId, threadId });
@@ -122,4 +127,36 @@ it("chat-only turns and disabled reminders do not qualify", () => {
   assert.isFalse(
     Nudge.needsTicketHandoff({ ...base, enabled: false, items: [{ type: "dynamic_tool" }] }),
   );
+});
+
+it("plan, read-only and terminal records never get a write nudge", () => {
+  const base = {
+    enabled: true,
+    thread: ThreadId.make("work"),
+    machine: "A",
+    startedAt: "2026-10-12T00:00:00.000Z",
+    completedAt: "2026-10-12T00:00:01.000Z",
+    events: [],
+    items: [{ type: "dynamic_tool" as const }],
+    isNudgeTurn: false,
+  };
+  assert.isTrue(Nudge.needsTicketHandoff(base));
+  for (const excluded of [
+    { interactionMode: "plan" },
+    { readOnly: true },
+    { stage: "done" },
+    { stage: "dropped" },
+  ])
+    assert.isFalse(Nudge.needsTicketHandoff({ ...base, ...excluded }));
+});
+
+it("native read-only sandbox forms suppress the handoff write", () => {
+  for (const policy of [
+    "read-only",
+    { type: "read-only" },
+    { type: "readOnly", networkAccess: true },
+  ])
+    assert.isTrue(Nudge.ticketPolicyReadOnly(policy));
+  for (const policy of [undefined, null, "workspace-write", { type: "workspaceWrite" }])
+    assert.isFalse(Nudge.ticketPolicyReadOnly(policy));
 });

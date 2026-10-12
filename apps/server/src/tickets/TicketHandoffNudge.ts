@@ -12,6 +12,7 @@ import * as Layer from "effect/Layer";
 import * as Stream from "effect/Stream";
 import * as EventSink from "../orchestration-v2/EventSink.ts";
 import * as Orchestrator from "../orchestration-v2/Orchestrator.ts";
+import * as RuntimePolicy from "../orchestration-v2/RuntimePolicy.ts";
 import * as Settings from "../serverSettings.ts";
 import * as Tickets from "./TicketService.ts";
 
@@ -28,8 +29,20 @@ const TOOL_TYPES = new Set([
   "todo_list",
   "user_input_request",
 ]);
+export function ticketPolicyReadOnly(sandbox: unknown): boolean {
+  return (
+    sandbox === "read-only" ||
+    (sandbox !== null &&
+      typeof sandbox === "object" &&
+      "type" in sandbox &&
+      (sandbox.type === "read-only" || sandbox.type === "readOnly"))
+  );
+}
 export function needsTicketHandoff(input: {
   enabled: boolean;
+  interactionMode?: string;
+  readOnly?: boolean;
+  stage?: string;
   thread: ThreadId;
   machine: string;
   startedAt: string;
@@ -41,6 +54,10 @@ export function needsTicketHandoff(input: {
 }): boolean {
   return (
     input.enabled &&
+    input.interactionMode !== "plan" &&
+    !input.readOnly &&
+    input.stage !== "done" &&
+    input.stage !== "dropped" &&
     !input.isNudgeTurn &&
     input.items.some(
       (item) =>
@@ -63,6 +80,7 @@ export const make = Effect.gen(function* () {
   const orchestrator = yield* Orchestrator.OrchestratorV2;
   const tickets = yield* Tickets.TicketService;
   const settings = yield* Settings.ServerSettingsService;
+  const runtimePolicy = yield* Effect.serviceOption(RuntimePolicy.RuntimePolicyV2);
   const nudged = new Set<string>();
   const worker = yield* makeDrainableWorker(
     (run: { id: import("@t3tools/contracts").RunId; threadId: ThreadId }) =>
@@ -74,7 +92,19 @@ export const make = Effect.gen(function* () {
           ["runs", "turnItems", "messages"],
           { turnItemRunId: run.id, runIds: [run.id], messageRunIds: [run.id] },
         );
-        if (thread.deletedAt !== null || thread.archivedAt !== null) return;
+        if (
+          thread.deletedAt !== null ||
+          thread.archivedAt !== null ||
+          thread.interactionMode === "plan"
+        )
+          return;
+        if (runtimePolicy._tag === "Some") {
+          const policy = yield* runtimePolicy.value.resolve({
+            thread,
+            modelSelection: thread.modelSelection,
+          });
+          if (ticketPolicyReadOnly(policy.sandboxPolicy)) return;
+        }
         const finished = runs.find((r) => r.id === run.id);
         if (!finished?.startedAt || !finished.completedAt) return;
         const machine = tickets.author().machine;
@@ -92,6 +122,8 @@ export const make = Effect.gen(function* () {
           if (
             needsTicketHandoff({
               enabled: true,
+              interactionMode: thread.interactionMode,
+              stage: ticket.status,
               thread: thread.id,
               machine,
               startedAt: DateTime.formatIso(finished.startedAt),

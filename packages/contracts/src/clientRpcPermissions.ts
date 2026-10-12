@@ -36,6 +36,8 @@ export const CLIENT_GUARDED_RPC_SCOPES = {
   [WS_METHODS.vcsSwitchRef]: AuthSourceControlWriteScope,
   [WS_METHODS.vcsInit]: AuthSourceControlWriteScope,
 
+  [WS_METHODS.ticketsAction]: AuthOrchestrationOperateScope,
+  [WS_METHODS.ticketsMachineLabel]: AuthSettingsWriteScope,
   [WS_METHODS.ticketsSyncConfigure]: AuthSettingsWriteScope,
   [WS_METHODS.ticketsSyncRefresh]: AuthOrchestrationOperateScope,
   [WS_METHODS.ticketsProjectsMap]: AuthOrchestrationOperateScope,
@@ -45,10 +47,6 @@ export const CLIENT_GUARDED_RPC_SCOPES = {
   [WS_METHODS.ticketsRestore]: AuthOrchestrationOperateScope,
   [WS_METHODS.ticketsLink]: AuthOrchestrationOperateScope,
   [WS_METHODS.ticketsUnlink]: AuthOrchestrationOperateScope,
-  [WS_METHODS.ticketsPublishIssue]: AuthOrchestrationOperateScope,
-  [WS_METHODS.ticketsImportIssue]: AuthOrchestrationOperateScope,
-  [WS_METHODS.ticketsUnlinkIssue]: AuthOrchestrationOperateScope,
-  [WS_METHODS.ticketsRefreshIssues]: AuthOrchestrationOperateScope,
 
   [WS_METHODS.scheduledTasksUpsert]: AuthOrchestrationOperateScope,
   [WS_METHODS.scheduledTasksSetEnabled]: AuthOrchestrationOperateScope,
