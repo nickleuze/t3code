@@ -26,6 +26,7 @@ import {
   type OrchestrationV2ServerCommand,
   type OrchestrationV2ThreadGoal,
   type OrchestrationV2ThreadShell,
+  type OrchestrationV2TurnItem,
   type ServerProviderUsageWindow,
 } from "@t3tools/contracts";
 import * as HostProcess from "@t3tools/shared/HostProcess";
@@ -41,6 +42,7 @@ import * as ProcessRunner from "../processRunner.ts";
 import * as ProviderRegistry from "../provider/ProviderRegistry.ts";
 import * as Scheduler from "../scheduling/Scheduler.ts";
 import * as VcsDriverRegistry from "../vcs/VcsDriverRegistry.ts";
+import * as EffectOutbox from "./EffectOutbox.ts";
 import { goalIterationTitle, isLiveGoal, MAX_GOAL_CHECK_OUTPUT_CHARS } from "./GoalState.ts";
 import { buildGoalIterationPrompt } from "./GoalPrompt.ts";
 import * as Orchestrator from "./Orchestrator.ts";
@@ -182,17 +184,22 @@ function usageSampleChanged(
   });
 }
 
-/** How a finished child ended, as the goal reducer understands it. */
+/**
+ * How a finished child ended, as the goal reducer understands it. A user Stop
+ * interrupts a run; only restart reconciliation cancels one that started.
+ */
 export function childOutcome(
   resultRun: Pick<OrchestrationV2Run, "status"> | undefined,
   shell: Pick<OrchestrationV2ThreadShell, "lastErrorClass" | "usageLimitResetAt"> | null,
 ): {
-  readonly outcome: "completed" | "failed" | "interrupted" | "usage_limited";
+  readonly outcome: "completed" | "failed" | "interrupted" | "restarted" | "usage_limited";
   readonly resumeAt: string | null;
 } {
   switch (resultRun?.status) {
     case "completed":
       return { outcome: "completed", resumeAt: null };
+    case "cancelled":
+      return { outcome: "restarted", resumeAt: null };
     case "failed":
       return shell?.lastErrorClass === "usage_limit"
         ? { outcome: "usage_limited", resumeAt: shell.usageLimitResetAt ?? null }
@@ -200,6 +207,29 @@ export function childOutcome(
     default:
       return { outcome: "interrupted", resumeAt: null };
   }
+}
+
+/** The questions the user answered in a child, as `"question": answer` lines. */
+export function childUserAnswers(
+  turnItems: ReadonlyArray<OrchestrationV2TurnItem>,
+): ReadonlyArray<string> {
+  return turnItems.flatMap((item) => {
+    if (item.type !== "user_input_request" || item.questionAnswer === undefined) return [];
+    const { answers, questionTextById } = item.questionAnswer;
+    return Object.entries(answers).flatMap(([questionId, answer]) => {
+      const text = Array.isArray(answer)
+        ? answer.filter((value) => typeof value === "string").join(", ")
+        : typeof answer === "string"
+          ? answer
+          : JSON.stringify(answer);
+      if (text === undefined || text.trim().length === 0) return [];
+      const question =
+        questionTextById?.[questionId] ??
+        item.questions.find((candidate) => candidate.id === questionId)?.question ??
+        questionId;
+      return [`"${question}": ${text}`];
+    });
+  });
 }
 
 const isLiveRun = (run: OrchestrationV2Run) =>
@@ -216,6 +246,7 @@ export const make = Effect.gen(function* () {
   const vcs = yield* VcsDriverRegistry.VcsDriverRegistry;
   const processRunner = yield* ProcessRunner.ProcessRunner;
   const providers = yield* ProviderRegistry.ProviderRegistry;
+  const outbox = yield* EffectOutbox.EffectOutboxV2;
   const checks = yield* FiberMap.make<string, void, never>();
   // Usage samples live in memory: after a restart the guard re-warms over its
   // window instead of judging a rise it did not observe.
@@ -553,14 +584,19 @@ export const make = Effect.gen(function* () {
       }
 
       const child = yield* orchestrator
-        .getThreadRecords(current.childThreadId, [
-          "runs",
-          "messages",
-          "subagents",
-          "providerThreads",
-          "providerTurns",
-          "runtimeRequests",
-        ])
+        .getThreadRecords(
+          current.childThreadId,
+          [
+            "runs",
+            "messages",
+            "subagents",
+            "providerThreads",
+            "providerTurns",
+            "runtimeRequests",
+            "turnItems",
+          ],
+          { turnItemTypes: ["user_input_request", "run_interrupt_request"] },
+        )
         .pipe(Effect.option);
       // Finished iterations are named for what they did, from their last note.
       const lastNote = goal.progressNotes.findLast((note) => note.iteration === current.iteration);
@@ -726,28 +762,51 @@ export const make = Effect.gen(function* () {
         }
       }
 
+      // With "continue threads after a server update" on, a restart resumes the
+      // cut turn in this same thread, so the iteration is not over yet.
+      if (progress.resultRun?.status === "cancelled") {
+        const continuation = yield* outbox.get(
+          `effect:restart-continuation:${progress.resultRun.id}`,
+        );
+        if (
+          Option.isSome(continuation) &&
+          (continuation.value.status === "pending" || continuation.value.status === "running")
+        ) {
+          return;
+        }
+      }
+
       if (!interrupting && (yield* continueInPlace(thread, goal, records, progress, nowMs))) return;
 
       const shell = yield* orchestrator
         .getThreadShell(current.childThreadId)
         .pipe(Effect.orElseSucceed(() => null));
       const ended = childOutcome(progress.resultRun, shell);
+      // A Stop the restart cut off before it landed is still the user's Stop.
+      const outcome =
+        ended.outcome === "restarted" &&
+        records.turnItems.some(
+          (item) => item.type === "run_interrupt_request" && item.runId === progress.resultRun?.id,
+        )
+          ? "interrupted"
+          : ended.outcome;
       const usage = childIterationTokens(records.providerTurns);
       // Without a future reset time, back off rather than relaunching a child
       // that will hit the same limit on the next sweep.
       const resumeAt =
-        ended.outcome !== "usage_limited"
+        outcome !== "usage_limited"
           ? null
           : ended.resumeAt !== null && Date.parse(ended.resumeAt) > nowMs
             ? ended.resumeAt
             : DateTime.formatIso(DateTime.makeUnsafe(nowMs + USAGE_LIMIT_FALLBACK_BACKOFF_MS));
       yield* finish({
-        childOutcome: ended.outcome,
+        childOutcome: outcome,
         tokens: usage.tokens,
         uncachedTokens: usage.uncachedTokens,
         accounting: usage.accounting,
         workspaceChanged: yield* workspaceChanged(thread, goal, current.baselineRef),
         resumeAt,
+        userAnswers: childUserAnswers(records.turnItems),
       });
     });
 

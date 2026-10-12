@@ -496,6 +496,17 @@ function applyAdvance(
       if (current === null || current.finished !== null) return reject("No iteration is running.");
       const withUsage = {
         ...goal,
+        // Answers the user gave inside the child survive it even when it ends
+        // before rewriting the handoff, such as when a restart cuts it short.
+        progressNotes: (step.userAnswers ?? []).reduce(
+          (notes, answer) =>
+            appendNote(notes, {
+              iteration: current.iteration,
+              text: `The user answered ${answer}`.slice(0, MAX_GOAL_NOTE_CHARS),
+              at: now,
+            }),
+          goal.progressNotes,
+        ),
         tokensUsed: goal.tokensUsed + step.tokens,
         // Goals from before uncached tracking keep it unknown rather than undercounting.
         ...(goal.uncachedTokensUsed === undefined
@@ -585,6 +596,9 @@ function finishIteration(
         now,
         settled ? {} : { status: "paused", statusReason: "child_interrupted" },
       );
+    case "restarted":
+      // The user did not stop it, so the next iteration simply carries on.
+      return closeIteration(goal, "interrupted", finished, now, {});
     case "usage_limited":
       return closeIteration(
         goal,

@@ -26,6 +26,7 @@ import * as ProcessRunner from "../processRunner.ts";
 import * as ProviderRegistry from "../provider/ProviderRegistry.ts";
 import * as VcsDriverRegistry from "../vcs/VcsDriverRegistry.ts";
 import { CodexProviderCapabilitiesV2 } from "./Adapters/CodexAdapterV2.ts";
+import * as EffectOutbox from "./EffectOutbox.ts";
 import * as EventSink from "./EventSink.ts";
 import * as GoalLoopWorker from "./GoalLoopWorker.ts";
 import * as Orchestrator from "./Orchestrator.ts";
@@ -51,6 +52,7 @@ const TestLayer = Layer.mergeAll(
   layerDatabase,
   ProjectionStore.layer.pipe(Layer.provide(layerDatabase)),
   ProjectStore.layer.pipe(Layer.provide(layerDatabase)),
+  EffectOutbox.layer.pipe(Layer.provide(layerDatabase)),
   ProviderReplayHarness.layerWithRegistry(
     { name: "goal-loop" },
     ProviderAdapterRegistry.layerFromAdapters([adapter]),
@@ -95,73 +97,6 @@ const setup = Effect.fn("GoalLoopTest.setup")(function* (
 });
 
 it.layer(TestLayer)("goal commands", (it) => {
-  it.effect("rejects stale update recovery after a subsequent user pause", () =>
-    Effect.gen(function* () {
-      const { orchestrator, threadId, goalId } = yield* setup("update-pause-identity");
-      const pauseId = CommandId.make("update:pause");
-      yield* orchestrator.dispatch({
-        type: "thread.goal.control",
-        commandId: pauseId,
-        threadId,
-        goalId,
-        action: "pause",
-      });
-      assert.strictEqual(
-        (yield* orchestrator.getThreadRecords(threadId, [])).thread.goal?.lastControlCommandId,
-        pauseId,
-      );
-      // A repeated user Pause must invalidate automatic recovery even with the same clock.
-      yield* orchestrator.dispatch({
-        type: "thread.goal.control",
-        commandId: CommandId.make("user:pause"),
-        threadId,
-        goalId,
-        action: "pause",
-      });
-      const stale = yield* orchestrator
-        .dispatch({
-          type: "thread.goal.control",
-          commandId: CommandId.make("update:resume:stale"),
-          threadId,
-          goalId,
-          action: "resume",
-          expectedControlCommandId: pauseId,
-        })
-        .pipe(Effect.result);
-      assert.strictEqual(stale._tag, "Failure");
-      assert.strictEqual(
-        (yield* orchestrator.getThreadRecords(threadId, [])).thread.goal?.status,
-        "paused",
-      );
-      yield* orchestrator.dispatch({
-        type: "thread.goal.control",
-        commandId: CommandId.make("user:resume"),
-        threadId,
-        goalId,
-        action: "resume",
-      });
-      yield* orchestrator.dispatch({
-        type: "thread.goal.control",
-        commandId: CommandId.make("update:pause:2"),
-        threadId,
-        goalId,
-        action: "pause",
-      });
-      yield* orchestrator.dispatch({
-        type: "thread.goal.control",
-        commandId: CommandId.make("update:resume:2"),
-        threadId,
-        goalId,
-        action: "resume",
-        expectedControlCommandId: CommandId.make("update:pause:2"),
-      });
-      assert.strictEqual(
-        (yield* orchestrator.getThreadRecords(threadId, [])).thread.goal?.status,
-        "active",
-      );
-    }),
-  );
-
   it.effect(
     "rejects automatic settlement of a live goal even with a matching snapshot timestamp",
     () =>
@@ -375,7 +310,6 @@ it.layer(TestLayer)("goal commands", (it) => {
         objective: "Make every test pass and merge",
         permissions: "Merge the PR once CI is green",
         status: "paused",
-        lastControlCommandId: CommandId.make("goal-update:pause"),
       });
       assert.strictEqual(
         (yield* orchestrator.getThreadShell(threadId))?.t3Goal?.objective,
@@ -1141,6 +1075,105 @@ it.layer(TestLayer)("goal loop worker", (it) => {
 
         yield* loop.sweep();
         assert.strictEqual((yield* readGoal(threadId)).iteration, 2);
+      }),
+    ),
+  );
+
+  it.effect("carries on after a restart cuts an iteration, keeping the user's answers", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const { orchestrator, threadId } = yield* setup("loop-server-restart");
+        const loop = yield* goalLoop;
+        yield* loop.sweep();
+        const childThreadId = (yield* readGoal(threadId)).current!.childThreadId;
+        const run = (yield* orchestrator.getThreadRecords(childThreadId, ["runs"])).runs[0]!;
+        const sink = yield* EventSink.EventSinkV2;
+        const now = yield* DateTime.now;
+        // The user answered a question, then restart reconciliation cancelled the
+        // run and left a continuation to resume it in place.
+        yield* sink.writeWithEffects({
+          commandId: CommandId.make("restart:reconcile"),
+          events: [
+            {
+              id: EventId.make("restart:question"),
+              type: "turn-item.updated",
+              threadId: childThreadId,
+              occurredAt: now,
+              payload: {
+                id: TurnItemId.make("restart:question"),
+                type: "user_input_request",
+                threadId: childThreadId,
+                runId: run.id,
+                nodeId: run.rootNodeId,
+                providerThreadId: null,
+                providerTurnId: null,
+                nativeItemRef: null,
+                parentItemId: null,
+                ordinal: 1,
+                status: "completed",
+                title: null,
+                startedAt: now,
+                completedAt: now,
+                updatedAt: now,
+                requestId: RuntimeRequestId.make("restart:question"),
+                questions: [
+                  {
+                    id: "priority",
+                    header: "Priority",
+                    question: "Which priority applies when it is omitted?",
+                    options: [],
+                  },
+                ],
+                questionAnswer: {
+                  requestId: "restart:question",
+                  answers: { priority: "normal" },
+                  attachmentsByQuestionId: {},
+                },
+              },
+            },
+            {
+              id: EventId.make("restart:run"),
+              type: "run.updated",
+              threadId: childThreadId,
+              runId: run.id,
+              occurredAt: now,
+              payload: { ...run, status: "cancelled", startedAt: now, completedAt: now },
+            },
+          ],
+          effects: [
+            {
+              id: `effect:restart-continuation:${run.id}`,
+              commandId: CommandId.make("restart:reconcile"),
+              threadId: childThreadId,
+              request: { type: "provider-runtime.continue", sourceRunId: run.id },
+            },
+          ],
+        });
+        yield* loop.sweep();
+        assert.strictEqual((yield* readGoal(threadId)).current?.childThreadId, childThreadId);
+
+        // The continuation declined, so the iteration ends without pausing the goal.
+        const outbox = yield* EffectOutbox.EffectOutboxV2;
+        yield* outbox.cancelUnsettled({
+          threadId: childThreadId,
+          effectTypes: ["provider-runtime.continue"],
+          reason: "Declined",
+        });
+        yield* loop.sweep();
+        const cut = yield* readGoal(threadId);
+        assert.deepInclude(cut, { status: "active", statusReason: null, current: null });
+        assert.strictEqual(cut.history.at(-1)?.outcome, "interrupted");
+
+        yield* loop.sweep();
+        const next = yield* readGoal(threadId);
+        assert.strictEqual(next.iteration, 2);
+        const nextChild = yield* orchestrator.getThreadRecords(next.current!.childThreadId, [
+          "messages",
+        ]);
+        assert.include(
+          nextChild.messages[0]?.text,
+          '[iteration 1] The user answered "Which priority applies when it is omitted?": normal',
+        );
       }),
     ),
   );

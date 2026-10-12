@@ -31,6 +31,7 @@ import * as VcsDriverRegistry from "../vcs/VcsDriverRegistry.ts";
 import * as ProjectionStore from "./ProjectionStore.ts";
 import * as ProjectStore from "./ProjectStore.ts";
 import * as SqlitePersistence from "../persistence/Sqlite.ts";
+import * as EffectOutbox from "./EffectOutbox.ts";
 import * as EffectWorker from "./EffectWorker.ts";
 import * as EventSink from "./EventSink.ts";
 import * as EventStore from "./EventStore.ts";
@@ -299,6 +300,7 @@ it.effect.each(outcomes)(
             ProjectionStore.layer.pipe(Layer.provide(database)),
             ProjectStore.layer.pipe(Layer.provide(database)),
             EventStore.layer.pipe(Layer.provide(database)),
+            EffectOutbox.layer.pipe(Layer.provide(database)),
           );
         yield* Effect.scoped(
           Effect.gen(function* () {
@@ -500,17 +502,13 @@ it.effect.each(outcomes)(
               const loop = yield* GoalLoopWorker.make.pipe(Effect.provide(loopDependencies));
               yield* worker.drain();
               yield* loop.sweep();
+              // A restart is not a Stop: the cut iteration closes and the next one
+              // starts without the user resuming anything.
               const recovered = (yield* orchestrator.getThreadRecords(threadId, [])).thread.goal!;
               assert.isNull(recovered.current);
-              assert.strictEqual(recovered.status, "paused");
+              assert.strictEqual(recovered.status, "active");
+              assert.strictEqual(recovered.history.at(-1)?.outcome, "interrupted");
               assert.lengthOf(started, 1);
-              yield* orchestrator.dispatch({
-                type: "thread.goal.control",
-                commandId: CommandId.make("resume-after-restart"),
-                threadId,
-                goalId,
-                action: "resume",
-              });
               yield* loop.sweep();
               const second = (yield* orchestrator.getThreadRecords(threadId, [])).thread.goal!;
               assert.strictEqual(second.iteration, (copied?.iteration ?? 0) + 2);
