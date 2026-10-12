@@ -14,11 +14,50 @@ const layer = Processes.layer.pipe(Layer.provideMerge(NodeServices.layer));
 const setup = Effect.gen(function* () {
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
-  const process = yield* Processes.ProcessRunner;
+  const runner = yield* Processes.ProcessRunner;
   const root = yield* fs.makeTempDirectoryScoped({ prefix: "tickets-sync-test-" });
+  // Reproduce CI: neither fixtures nor the service can borrow a host git identity.
+  yield* Effect.acquireRelease(
+    Effect.sync(() => {
+      const count = Number(process.env.GIT_CONFIG_COUNT ?? "0");
+      const keys = [
+        "HOME",
+        "EMAIL",
+        "GIT_CONFIG_GLOBAL",
+        "GIT_CONFIG_NOSYSTEM",
+        "GIT_CONFIG_COUNT",
+        `GIT_CONFIG_KEY_${count}`,
+        `GIT_CONFIG_VALUE_${count}`,
+        ...Object.keys(process.env).filter((key) => /^GIT_(AUTHOR|COMMITTER)_/.test(key)),
+      ];
+      const previous = keys.map((key) => [key, process.env[key]] as const);
+      for (const key of keys) delete process.env[key];
+      process.env.HOME = root;
+      process.env.GIT_CONFIG_GLOBAL = "/dev/null";
+      process.env.GIT_CONFIG_NOSYSTEM = "1";
+      // macOS git can infer identity from the OS account; the runner cannot.
+      process.env.GIT_CONFIG_COUNT = String(count + 1);
+      process.env[`GIT_CONFIG_KEY_${count}`] = "user.useConfigOnly";
+      process.env[`GIT_CONFIG_VALUE_${count}`] = "true";
+      return previous;
+    }),
+    (previous) =>
+      Effect.sync(() => {
+        for (const [key, value] of previous) {
+          if (value === undefined) delete process.env[key];
+          else process.env[key] = value;
+        }
+      }),
+  );
+  const identity = yield* runner.run({
+    command: "git",
+    cwd: root,
+    args: ["config", "--show-origin", "--get", "user.name"],
+  });
+  assert.equal(identity.code, 1, identity.stdout);
   const remote = path.join(root, "remote.git");
   const git = (cwd: string, args: readonly string[]) =>
-    process.run({ command: "git", cwd, args }).pipe(
+    runner.run({ command: "git", cwd, args }).pipe(
       Effect.tap((output) => Effect.sync(() => assert.equal(output.code, 0, output.stderr))),
       Effect.map((output) => output.stdout),
     );
@@ -116,6 +155,14 @@ it.effect("pull with unrelated remote changes rebases local queued events cleanl
       (yield* git(path.join(aHome, "tickets-repo"), ["status", "--porcelain"])).trim(),
       "",
     );
+    assert.equal(
+      (yield* git(path.join(aHome, "tickets-repo"), [
+        "log",
+        "-1",
+        "--format=%an <%ae>|%cn <%ce>",
+      ])).trim(),
+      "T3 Tickets <tickets@localhost>|T3 Tickets <tickets@localhost>",
+    );
     assert.ok(yield* fs.exists(path.join(aHome, "tickets-repo/registry/projects.json")));
   }).pipe(Effect.provide(layer)),
 );
@@ -154,7 +201,10 @@ it.effect("same-path rebase conflict is surfaced and local history is preserved"
       "Local conflict",
     ]);
     const localHead = (yield* git(bRepo, ["rev-parse", "HEAD"])).trim();
-    yield* b.refresh.pipe(Effect.flip);
+    const error = yield* b.refresh.pipe(Effect.flip);
+    assert.equal(typeof error.cause, "string");
+    assert.isAtMost((error.cause as string).length, 400);
+    assert.include(error.cause as string, "conflict");
     assert.ok((yield* b.status).lastError?.includes("conflict"));
     assert.equal(
       yield* git(bRepo, ["show", `${localHead}:${file}`]),
@@ -235,7 +285,14 @@ it.effect("sent archive prunes exact events at HEAD and retains events missing f
     assert.deepStrictEqual(yield* fs.readDirectory(archive), [`${missing.eventId}.json`]);
   }).pipe(Effect.provide(layer)),
 );
-it.effect("pull network failure is retryable rather than a conflict", () =>
+it.effect.each([
+  { failure: "network", stderr: "Could not resolve host", rebaseStarted: false },
+  {
+    failure: "identity",
+    stderr: "Committer identity unknown\nfatal: unable to auto-detect email address",
+    rebaseStarted: true,
+  },
+])("pull $failure failure is retryable rather than a conflict", ({ stderr, rebaseStarted }) =>
   Effect.gen(function* () {
     const { root, aHome, remote, fs, path } = yield* setup;
     const runner = yield* Processes.ProcessRunner;
@@ -248,19 +305,27 @@ it.effect("pull network failure is retryable rather than a conflict", () =>
             ? Effect.succeed({
                 code: 1,
                 stdout: "",
-                stderr: "Could not resolve host",
+                stderr: `${"x".repeat(450)}\n${stderr}`,
                 timedOut: false,
                 stdoutTruncated: false,
                 stderrTruncated: false,
                 stdoutInvalidUtf8: false,
                 stderrInvalidUtf8: false,
-              })
+              }).pipe(
+                Effect.tap(() =>
+                  rebaseStarted
+                    ? fs.makeDirectory(path.join(aHome, "tickets-repo/.git/rebase-merge"))
+                    : Effect.void,
+                ),
+              )
             : runner.run(input),
       }),
     );
     const error = yield* interrupted.refresh.pipe(Effect.flip);
     assert.include(error.message, "pull failed, will retry");
     assert.notInclude(error.message, "conflict");
+    assert.equal(error.cause, `${"x".repeat(450)}\n${stderr}`.slice(-400));
+    assert.equal((yield* interrupted.status).lastError, error.message);
     assert.ok(yield* fs.exists(path.join(remote, "HEAD")));
   }).pipe(Effect.provide(layer)),
 );
