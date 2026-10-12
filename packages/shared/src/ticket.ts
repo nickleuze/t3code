@@ -2,6 +2,7 @@ import * as DateTime from "effect/DateTime";
 import type { ThreadId, Ticket, TicketStatus } from "@t3tools/contracts";
 
 export interface TicketStatusInput {
+  readonly record?: boolean | undefined;
   readonly status: TicketStatus;
   readonly statusSetAt: string;
   readonly githubIssue: {
@@ -31,6 +32,7 @@ export function deriveTicketStatus(
   ticket: TicketStatusInput,
   threadShellById: (threadId: ThreadId) => TicketLinkedThreadShell | undefined,
 ): TicketStatus {
+  if (ticket.record) return ticket.status;
   if (ticket.status === "done" || ticket.status === "dropped") return ticket.status;
   let status = ticket.status;
   const statusSetAt = Date.parse(ticket.statusSetAt);
@@ -53,8 +55,27 @@ export function deriveTicketStatus(
   return status;
 }
 
-export function ticketStartPrompt(ticket: Pick<Ticket, "id" | "title" | "body">): string {
-  return [ticket.title, ticket.body, `This work came from T3 ticket ${ticket.id}.`]
-    .filter((part) => part.length > 0)
+export function ticketStartPrompt(
+  ticket: Pick<Ticket, "id" | "title" | "body" | "workState">,
+  branches: readonly string[] = [],
+): string {
+  const state = ticket.workState;
+  return [
+    `T3 ticket ${ticket.id}: ${ticket.title}`,
+    ticket.body,
+    state?.decisions.length
+      ? `Current decisions:\n${state.decisions.map((d) => `- ${d.text}`).join("\n")}`
+      : "",
+    state?.questions.length
+      ? `Open questions:\n${state.questions.map((q) => `- ${q.text}`).join("\n")}`
+      : "",
+    state?.lastHandoff
+      ? `Last handoff:\n${state.lastHandoff.text}\nNext: ${state.lastHandoff.next ?? "See handoff above"}`
+      : "",
+    branches.length ? `Linked branches:\n${[...new Set(branches)].join("\n")}` : "",
+    state?.prs.length ? `Linked PRs/branches:\n${state.prs.join("\n")}` : "",
+    "Read t3_ticket_get for the full timeline before working. Write entries at milestones; end handoffs with Next:. Mention this ticket in PR descriptions.",
+  ]
+    .filter(Boolean)
     .join("\n\n");
 }

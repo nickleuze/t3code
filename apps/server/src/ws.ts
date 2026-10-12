@@ -101,6 +101,8 @@ import {
   type PullRequestRef,
   WS_METHODS,
   WsRpcGroup,
+  CoreWsRpcGroup,
+  TicketRecordRpcGroup,
 } from "@t3tools/contracts";
 import { resolveServerBackgroundActivitySettings } from "@t3tools/shared/backgroundActivitySettings";
 import {
@@ -542,6 +544,22 @@ const PROVIDER_STATUS_DEBOUNCE_MS = 200;
 
 // Middleware added later wraps middleware added earlier, so instrumentation wraps authorization.
 const ServerWsRpcGroup = WsRpcGroup.middleware(RpcInstrumentation);
+const ServerCoreWsRpcGroup = CoreWsRpcGroup.middleware(RpcInstrumentation);
+const ServerTicketRecordRpcGroup = TicketRecordRpcGroup.middleware(RpcInstrumentation);
+const layerTicketRecordRpc = ServerTicketRecordRpcGroup.toLayer(
+  Effect.gen(function* () {
+    const tickets = yield* Tickets.TicketService;
+    return {
+      [WS_METHODS.ticketsTimeline]: (input) => tickets.timeline(input),
+      [WS_METHODS.ticketsEntry]: (input) => tickets.entry(input),
+      [WS_METHODS.ticketsSyncStatus]: () => tickets.syncStatus,
+      [WS_METHODS.ticketsSyncConfigure]: (input) => tickets.syncConfigure(input.remoteUrl),
+      [WS_METHODS.ticketsSyncRefresh]: () => tickets.syncRefresh(),
+      [WS_METHODS.ticketsProjectsList]: () => tickets.projectsList,
+      [WS_METHODS.ticketsProjectsMap]: (input) => tickets.projectsMap(input),
+    };
+  }),
+);
 // When a resuming client's cursor is more than this many events behind the
 // current head, skip the per-event catch-up replay and send a fresh shell
 // snapshot instead. Replaying each intervening event costs a shell refetch;
@@ -1189,7 +1207,7 @@ const layerWsRpc = (
   previewAutomationBroker: PreviewAutomationBroker.PreviewAutomationBroker["Service"],
   serverBrowser: ServerBrowser.ServerBrowser["Service"],
 ) =>
-  ServerWsRpcGroup.toLayer(
+  ServerCoreWsRpcGroup.toLayer(
     Effect.gen(function* () {
       const currentSessionId = currentSession.sessionId;
       const sql = yield* SqlClient.SqlClient;
@@ -1816,7 +1834,7 @@ const layerWsRpc = (
         return result;
       });
 
-      const handlers = ServerWsRpcGroup.of({
+      const handlers = ServerCoreWsRpcGroup.of({
         [ORCHESTRATION_V2_WS_METHODS.dispatchCommand]: (command) =>
           Effect.annotateCurrentSpan({
             "orchestration_v2.command_id": command.commandId,
@@ -2043,7 +2061,7 @@ const layerWsRpc = (
             ),
           ),
         [WS_METHODS.ticketsList]: (input) => tickets.list(input),
-        [WS_METHODS.ticketsSubscribe]: () => ticketGithub.subscribeList(),
+        [WS_METHODS.ticketsSubscribe]: () => tickets.subscribeList(),
         [WS_METHODS.ticketsUpsert]: (input) => tickets.upsert(input),
         [WS_METHODS.ticketsDelete]: (input) => tickets.delete(input),
         [WS_METHODS.ticketsRestore]: (input) => tickets.restore(input),
@@ -3204,6 +3222,7 @@ export const layer = Layer.unwrap(
               previewAutomationBroker,
               serverBrowser,
             ).pipe(
+              Layer.merge(layerTicketRecordRpc),
               Layer.provideMerge(RpcSerialization.layerJson),
               // Request fibers run in the handlers' context, so this reporter sees
               // their defects, not the rest of the server's.

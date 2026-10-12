@@ -104,6 +104,31 @@ export function createTicketEnvironmentAtoms<R, E>(
     }).pipe(Atom.withLabel(`environment-data:server:tickets:thread-index:${environmentId}`)),
   );
   return {
+    timeline: createEnvironmentRpcQueryAtomFamily(runtime, {
+      label: "environment-data:server:tickets:timeline",
+      tag: WS_METHODS.ticketsTimeline,
+      execute: (input) => withTickets(request(WS_METHODS.ticketsTimeline, input)),
+    }),
+    syncStatus: createEnvironmentRpcQueryAtomFamily(runtime, {
+      label: "environment-data:server:tickets:sync-status",
+      tag: WS_METHODS.ticketsSyncStatus,
+      execute: (input) => withTickets(request(WS_METHODS.ticketsSyncStatus, input)),
+    }),
+    syncRefresh: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:server:tickets:sync-refresh",
+      tag: WS_METHODS.ticketsSyncRefresh,
+      execute: (input) => withTickets(requestGuarded(WS_METHODS.ticketsSyncRefresh, input)),
+    }),
+    addEntry: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:server:tickets:entry",
+      tag: WS_METHODS.ticketsEntry,
+      execute: (input) => withTickets(requestGuarded(WS_METHODS.ticketsEntry, input)),
+    }),
+    projectsMap: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:server:tickets:projects-map",
+      tag: WS_METHODS.ticketsProjectsMap,
+      execute: (input) => withTickets(requestGuarded(WS_METHODS.ticketsProjectsMap, input)),
+    }),
     ticketsLive,
     listTickets: createEnvironmentRpcQueryAtomFamily(runtime, {
       label: "environment-data:server:tickets:list",

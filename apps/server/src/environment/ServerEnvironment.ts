@@ -228,7 +228,7 @@ export const make = Effect.gen(function* () {
       threadSettlement: true,
       t3Goals: true,
       tickets: true,
-      ticketGithub: true,
+      ticketGithub: false,
       threadAutoSettlement: true,
       storageCleanup: true,
       storageCleanupRun: true,

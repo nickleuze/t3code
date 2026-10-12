@@ -4,7 +4,7 @@ import {
   type OrchestrationV2ThreadShell,
   type Ticket,
   type TicketError,
-  type ThreadId,
+  ThreadId,
 } from "@t3tools/contracts";
 import { deriveTicketStatus } from "@t3tools/shared/ticket";
 import * as Effect from "effect/Effect";
@@ -93,6 +93,63 @@ const summary = Effect.fn("mcp.ticketSummary")(function* (ticket: Ticket) {
 });
 
 export const layer = McpToolAccess.toLayer(TicketToolkit, {
+  t3_ticket_get: McpToolAccess.reads((input) =>
+    Effect.gen(function* () {
+      const tickets = yield* Tickets.TicketService;
+      const state = yield* tickets.get(input.ticket).pipe(Effect.mapError(ticketFailure));
+      const { events } = yield* tickets
+        .timeline({ id: input.ticket })
+        .pipe(Effect.mapError(ticketFailure));
+      return {
+        ticket: state.ticket,
+        stageBy: state.stageBy,
+        timeline: events.slice(-30),
+        timelineOmitted: Math.max(0, events.length - 30),
+      };
+    }),
+  ),
+  t3_ticket_entry: McpToolAccess.writes((input) =>
+    Effect.gen(function* () {
+      const { scope, caller } = yield* readCaller();
+      const tickets = yield* Tickets.TicketService;
+      const { ticket: id, ...fields } = input;
+      const { ticket } = yield* tickets
+        .entry(
+          { id, ...fields },
+          tickets.author({
+            actor: "agent",
+            ...(caller ? { thread: caller.id, model: caller.modelSelection.model } : {}),
+          }),
+          scope.requestNamespace,
+        )
+        .pipe(Effect.mapError(ticketFailure));
+      return yield* summary(ticket);
+    }),
+  ),
+  t3_ticket_link: McpToolAccess.writesThreads(
+    (input) => (input.kind === "thread" && input.ref ? [ThreadId.make(input.ref)] : []),
+    (input) =>
+      Effect.gen(function* () {
+        const { scope, caller } = yield* readCaller();
+        const tickets = yield* Tickets.TicketService;
+        const ref = input.ref ?? (input.kind === "thread" ? scope.thread?.threadId : undefined);
+        if (!ref)
+          return yield* new OrchestratorMcpFailure({
+            code: "target_required",
+            message: "Pass ref for this link.",
+          });
+        const { ticket } = yield* tickets
+          .reference(
+            { id: input.ticket, kind: input.kind, ref, role: input.role },
+            tickets.author({
+              actor: "agent",
+              ...(caller ? { thread: caller.id, model: caller.modelSelection.model } : {}),
+            }),
+          )
+          .pipe(Effect.mapError(ticketFailure));
+        return yield* summary(ticket);
+      }),
+  ),
   t3_ticket_create: McpToolAccess.writes((input) =>
     Effect.gen(function* () {
       const { scope, caller } = yield* readCaller();
@@ -105,14 +162,21 @@ export const layer = McpToolAccess.toLayer(TicketToolkit, {
               `mcp:${encodeURIComponent(scope.requestNamespace)}:ticket-create:${encodeURIComponent(input.clientRequestId)}`,
             );
       const { ticket } = yield* tickets
-        .upsert({
-          ...input,
-          commandId,
-          projectId: input.projectId === undefined ? (caller?.projectId ?? null) : input.projectId,
-          createdBy: "agent",
-          creationSource: "mcp",
-          originThreadId: caller?.id ?? null,
-        })
+        .upsert(
+          {
+            ...input,
+            commandId,
+            projectId:
+              input.projectId === undefined ? (caller?.projectId ?? null) : input.projectId,
+            createdBy: "agent",
+            creationSource: "mcp",
+            originThreadId: caller?.id ?? null,
+          },
+          tickets.author({
+            actor: "agent",
+            ...(caller ? { thread: caller.id, model: caller.modelSelection.model } : {}),
+          }),
+        )
         .pipe(Effect.mapError(ticketFailure));
       return yield* summary(ticket);
     }),
@@ -142,10 +206,16 @@ export const layer = McpToolAccess.toLayer(TicketToolkit, {
   ),
   t3_ticket_update: McpToolAccess.writes((input) =>
     Effect.gen(function* () {
-      yield* readCaller();
+      const { caller } = yield* readCaller();
       const tickets = yield* Tickets.TicketService;
       const { ticket } = yield* tickets
-        .upsert({ ...input, requireExisting: true })
+        .upsert(
+          { ...input, requireExisting: true },
+          tickets.author({
+            actor: "agent",
+            ...(caller ? { thread: caller.id, model: caller.modelSelection.model } : {}),
+          }),
+        )
         .pipe(Effect.mapError(ticketFailure));
       return yield* summary(ticket);
     }),
@@ -154,7 +224,7 @@ export const layer = McpToolAccess.toLayer(TicketToolkit, {
     (input) => [input.threadId],
     (input) =>
       Effect.gen(function* () {
-        const { scope, threads } = yield* readCaller();
+        const { scope, threads, caller } = yield* readCaller();
         const tickets = yield* Tickets.TicketService;
         const threadId = input.threadId ?? scope.thread?.threadId;
         if (threadId === undefined)
@@ -171,8 +241,20 @@ export const layer = McpToolAccess.toLayer(TicketToolkit, {
           });
         const { ticket } = yield* (
           input.unlink === true
-            ? tickets.unlink({ id: input.id, threadId })
-            : tickets.link({ id: input.id, threadId, role: input.role ?? "work" })
+            ? tickets.unlink(
+                { id: input.id, threadId },
+                tickets.author({
+                  actor: "agent",
+                  ...(caller ? { thread: caller.id, model: caller.modelSelection.model } : {}),
+                }),
+              )
+            : tickets.link(
+                { id: input.id, threadId, role: input.role ?? "work" },
+                tickets.author({
+                  actor: "agent",
+                  ...(caller ? { thread: caller.id, model: caller.modelSelection.model } : {}),
+                }),
+              )
         ).pipe(Effect.mapError(ticketFailure));
         return yield* summary(ticket);
       }),

@@ -1,0 +1,202 @@
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
+import { assert, it } from "@effect/vitest";
+import { ThreadId } from "@t3tools/contracts";
+import * as Effect from "effect/Effect";
+import * as Layer from "effect/Layer";
+import * as Deferred from "effect/Deferred";
+import { TicketError, type TicketEvent } from "@t3tools/contracts";
+import * as Sync from "./TicketSyncService.ts";
+import * as TestClock from "effect/testing/TestClock";
+import * as SqlClient from "effect/sql/SqlClient";
+import * as Projects from "../orchestration-v2/ProjectStore.ts";
+import * as Sqlite from "../persistence/Sqlite.ts";
+import * as Tickets from "./TicketService.ts";
+const layer = Tickets.layer.pipe(
+  Layer.provide(Layer.mergeAll(Projects.layer, NodeCrypto.layer)),
+  Layer.provideMerge(Sqlite.layerMemory),
+);
+
+it.effect("import is idempotent, collision safe and rebuildable", () =>
+  Effect.gen(function* () {
+    const tickets = yield* Tickets.TicketService;
+    const { ticket } = yield* tickets.upsert({ title: "Rebuild" });
+    yield* tickets.entry({ id: ticket.id, kind: "decision", text: "Keep it small" });
+    const before = yield* tickets.get(ticket.id);
+    const events = (yield* tickets.timeline({ id: ticket.id })).events;
+    yield* tickets.importEvents(events);
+    yield* tickets.importEvents(events.toReversed());
+    yield* tickets.rebuild;
+    assert.deepStrictEqual(yield* tickets.get(ticket.id), before);
+    const collision = { ...events[0]!, at: "2026-01-01T00:00:00.000Z" };
+    yield* tickets.importEvents([collision]).pipe(Effect.flip);
+    assert.deepStrictEqual(yield* tickets.get(ticket.id), before);
+  }).pipe(Effect.provide(layer)),
+);
+
+it.effect("entry retries dedupe within caller namespace, including service rebuild", () =>
+  Effect.gen(function* () {
+    const tickets = yield* Tickets.TicketService;
+    const { ticket } = yield* tickets.upsert({ title: "Dedupe" });
+    const input = {
+      id: ticket.id,
+      kind: "handoff" as const,
+      text: "Built",
+      next: "Review",
+      clientRequestId: "same",
+    };
+    const by = tickets.author({ actor: "agent", thread: ThreadId.make("B"), model: "fake" });
+    yield* tickets.entry(input, by, "B");
+    yield* TestClock.adjust("1 second");
+    yield* tickets.entry(input, by, "B");
+    yield* tickets.rebuild;
+    yield* tickets.entry(input, by, "B");
+    assert.equal(
+      (yield* tickets.timeline({ id: ticket.id })).events.filter((e) => e.type === "entry").length,
+      1,
+    );
+    yield* tickets.entry(input, by, "other");
+    assert.equal(
+      (yield* tickets.timeline({ id: ticket.id })).events.filter((e) => e.type === "entry").length,
+      2,
+    );
+  }).pipe(Effect.provide(layer)),
+);
+
+it.effect(
+  "first-send start is explicit, retry safe and never moves terminal stages backwards",
+  () =>
+    Effect.gen(function* () {
+      const tickets = yield* Tickets.TicketService;
+      const { ticket } = yield* tickets.upsert({ title: "Draft" });
+      const input = {
+        id: ticket.id,
+        threadId: ThreadId.make("draft"),
+        role: "work" as const,
+        startWork: true,
+      };
+      const started = yield* tickets.link(input);
+      assert.equal(started.ticket.status, "in_progress");
+      yield* tickets.link(input);
+      const events = (yield* tickets.timeline({ id: ticket.id })).events;
+      assert.equal(events.filter((e) => e.type === "auto").length, 1);
+      assert.equal(events.filter((e) => e.type === "stage").length, 1);
+      yield* tickets.upsert({ id: ticket.id, status: "in_review" });
+      const again = yield* tickets.link({ ...input, threadId: ThreadId.make("resume") });
+      assert.equal(again.ticket.status, "in_review");
+    }).pipe(Effect.provide(layer)),
+);
+
+it.effect("v1 migration reruns without duplicates and leaves original rows and links intact", () =>
+  Effect.gen(function* () {
+    const sql = yield* SqlClient.SqlClient;
+    yield* Tickets.bootstrapSchema;
+    yield* sql`INSERT INTO fork_tickets (ticket_id, project_id, title, body, status, status_set_at, sort_key, created_by, creation_source, created_at, updated_at) VALUES ('legacy', NULL, 'Existing', 'Keep', 'in_review', '2026-10-11T00:00:01.000Z', 2, 'user', 'web', '2026-10-11T00:00:00.000Z', '2026-10-11T00:00:01.000Z')`;
+    yield* sql`INSERT INTO fork_ticket_links (ticket_id, thread_id, role, linked_at) VALUES ('legacy', 'original-thread', 'work', '2026-10-11T00:00:01.000Z')`;
+    const original = yield* sql`SELECT * FROM fork_tickets`;
+    const originalLinks = yield* sql`SELECT * FROM fork_ticket_links`;
+    const tickets = yield* Tickets.make;
+    const first = yield* tickets.list();
+    yield* tickets.migrate;
+    yield* tickets.migrate;
+    yield* tickets.rebuild;
+    assert.deepStrictEqual(yield* tickets.list(), first);
+    assert.deepStrictEqual(yield* sql`SELECT * FROM fork_tickets`, original);
+    assert.deepStrictEqual(yield* sql`SELECT * FROM fork_ticket_links`, originalLinks);
+    assert.equal((yield* sql`SELECT * FROM fork_ticket_events`).length, 4);
+    assert.equal(first.tickets[0]!.status, "in_review");
+    assert.equal(first.tickets[0]!.links.length, 1);
+  }).pipe(
+    Effect.provide(
+      Layer.mergeAll(Projects.layer, NodeCrypto.layer).pipe(Layer.provideMerge(Sqlite.layerMemory)),
+    ),
+  ),
+);
+
+it.effect("automatic sync debounces writes and retries a queued push with clocked backoff", () =>
+  Effect.gen(function* () {
+    const started = yield* Deferred.make<void>();
+    const failed = yield* Deferred.make<void>();
+    const retried = yield* Deferred.make<void>();
+    let events: TicketEvent[] = [];
+    let pending = 0;
+    let pushes = 0;
+    let reject = true;
+    let lastError: string | null = null;
+    const sync = Sync.TicketSyncService.of({
+      machine: "clock",
+      label: "Clock test",
+      status: Effect.sync(() => ({
+        configured: true,
+        remote: "local-bare",
+        lastPullAt: null,
+        lastPushAt: null,
+        pendingEvents: pending,
+        lastError,
+        machine: "clock",
+        label: "Clock test",
+      })),
+      append: (input) =>
+        Effect.sync(() => {
+          events.push(...input);
+          pending += input.length;
+        }),
+      localEvents: Effect.succeed([]),
+      registry: Effect.succeed({}),
+      machines: Effect.succeed({ clock: "Clock test" }),
+      configure: () => Effect.die("unused"),
+      registerProject: () => Effect.void,
+      refresh: Effect.gen(function* () {
+        if (!pending) {
+          yield* Deferred.succeed(started, undefined);
+          return events;
+        }
+        pushes++;
+        if (reject) {
+          lastError = "Push failed";
+          yield* Deferred.succeed(failed, undefined);
+          return yield* new TicketError({ message: lastError });
+        }
+        pending = 0;
+        lastError = null;
+        yield* Deferred.succeed(retried, undefined);
+        return events;
+      }),
+    });
+    const tickets = yield* Tickets.make.pipe(Effect.provideService(Sync.TicketSyncService, sync));
+    yield* Deferred.await(started);
+    yield* tickets.upsert({ title: "Queued" });
+    assert.equal(pushes, 0);
+    yield* TestClock.adjust("5 seconds");
+    yield* Deferred.await(failed);
+    assert.equal(pushes, 1);
+    assert.ok(pending > 0);
+    yield* TestClock.adjust("9 seconds");
+    assert.equal(pushes, 1);
+    reject = false;
+    yield* TestClock.adjust("1 second");
+    yield* Deferred.await(retried);
+    assert.equal(pushes, 2);
+    assert.equal(pending, 0);
+    assert.equal(lastError, null);
+  }).pipe(
+    Effect.provide(
+      Layer.mergeAll(Projects.layer, NodeCrypto.layer).pipe(Layer.provideMerge(Sqlite.layerMemory)),
+    ),
+  ),
+);
+
+it.effect("an ordinary pre-link leaves stage alone and does not suppress first-send start", () =>
+  Effect.gen(function* () {
+    const tickets = yield* Tickets.TicketService;
+    const { ticket } = yield* tickets.upsert({ title: "Pre-linked draft" });
+    const link = { id: ticket.id, threadId: ThreadId.make("pre-linked"), role: "work" as const };
+    assert.equal((yield* tickets.link(link)).ticket.status, "inbox");
+    assert.equal((yield* tickets.link({ ...link, startWork: true })).ticket.status, "in_progress");
+    yield* tickets.link({ ...link, startWork: true });
+    assert.equal(
+      (yield* tickets.timeline({ id: ticket.id })).events.filter((event) => event.type === "auto")
+        .length,
+      1,
+    );
+  }).pipe(Effect.provide(layer)),
+);

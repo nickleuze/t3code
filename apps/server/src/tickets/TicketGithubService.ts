@@ -198,6 +198,10 @@ const make = Effect.gen(function* () {
     lock.withPermit(
       Effect.gen(function* () {
         const ticket = yield* load(input.id);
+        if (ticket.record)
+          return yield* new TicketError({
+            message: "GitHub issue mirroring is retired for ticket work records.",
+          });
         if (ticket.githubIssue !== null) return { ticket };
         const repository = yield* repositoryFor(ticket.projectId);
         const response = yield* api.rest({

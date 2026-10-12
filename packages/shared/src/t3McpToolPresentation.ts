@@ -14,6 +14,8 @@ export type T3McpToolSummaryAction =
   | "goal-complete"
   | "goal-propose"
   | "ticket-create"
+  | "ticket-get"
+  | "ticket-entry"
   | "ticket-list"
   | "ticket-update"
   | "ticket-link"
@@ -129,6 +131,9 @@ const T3_MCP_TOOLS: Readonly<Record<string, T3McpToolDefinition>> = {
   t3_goal_update: tool(["Record", "Recording", "Recorded", "goal progress"], "goal-update"),
   t3_goal_complete: tool(["Report", "Reporting", "Reported", "the goal outcome"], "goal-complete"),
   t3_goal_propose: tool(["Propose", "Proposing", "Proposed", "a T3 goal"], "goal-propose"),
+  t3_ticket_get: tool(["Read", "Reading", "Read", "a T3 ticket"], "ticket-get"),
+  t3_ticket_entry: tool(["Record", "Recording", "Recorded", "a ticket entry"], "ticket-entry"),
+  t3_ticket_link: tool(["Link", "Linking", "Linked", "ticket work"], "ticket-link"),
   t3_ticket_create: tool(["File", "Filing", "Filed", "a T3 ticket"], "ticket-create"),
   t3_ticket_list: tool(["List", "Listing", "Listed", "T3 tickets"], "ticket-list"),
   t3_ticket_update: tool(["Update", "Updating", "Updated", "a T3 ticket"], "ticket-update"),

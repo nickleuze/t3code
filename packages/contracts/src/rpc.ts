@@ -1,4 +1,13 @@
 import {
+  TicketTimelineInput,
+  TicketTimelineResult,
+  TicketEntryInput,
+  TicketSyncStatus,
+  TicketSyncConfigureInput,
+  TicketProjectMapInput,
+  TicketProjectsResult,
+} from "./ticket.ts";
+import {
   OrchestrationV2SearchThreadError,
   OrchestrationV2SearchThreadInput,
   OrchestrationV2SearchThreadResult,
@@ -522,6 +531,13 @@ export const WS_METHODS = {
   serverRefreshUsageRates: "server.refreshUsageRates",
 
   // Tickets
+  ticketsTimeline: "tickets.timeline",
+  ticketsEntry: "tickets.entry",
+  ticketsSyncStatus: "tickets.sync.status",
+  ticketsSyncConfigure: "tickets.sync.configure",
+  ticketsSyncRefresh: "tickets.sync.refresh",
+  ticketsProjectsList: "tickets.projects.list",
+  ticketsProjectsMap: "tickets.projects.map",
   ticketsList: "tickets.list",
   ticketsSubscribe: "tickets.subscribe",
   ticketsUpsert: "tickets.upsert",
@@ -1765,6 +1781,42 @@ const WsSubscribeServerLifecycleRpc = Rpc.make(WS_METHODS.subscribeServerLifecyc
   stream: true,
 });
 
+const WsTicketsTimelineRpc = Rpc.make(WS_METHODS.ticketsTimeline, {
+  payload: TicketTimelineInput,
+  success: TicketTimelineResult,
+  error: Schema.Union([TicketError, EnvironmentAuthorizationError]),
+});
+const WsTicketsEntryRpc = Rpc.make(WS_METHODS.ticketsEntry, {
+  payload: TicketEntryInput,
+  success: TicketMutationResult,
+  error: Schema.Union([TicketError, EnvironmentAuthorizationError]),
+});
+const WsTicketsSyncStatusRpc = Rpc.make(WS_METHODS.ticketsSyncStatus, {
+  payload: Schema.Struct({}),
+  success: TicketSyncStatus,
+  error: Schema.Union([TicketError, EnvironmentAuthorizationError]),
+});
+const WsTicketsSyncConfigureRpc = Rpc.make(WS_METHODS.ticketsSyncConfigure, {
+  payload: TicketSyncConfigureInput,
+  success: TicketSyncStatus,
+  error: Schema.Union([TicketError, EnvironmentAuthorizationError]),
+});
+const WsTicketsSyncRefreshRpc = Rpc.make(WS_METHODS.ticketsSyncRefresh, {
+  payload: Schema.Struct({}),
+  success: TicketSyncStatus,
+  error: Schema.Union([TicketError, EnvironmentAuthorizationError]),
+});
+const WsTicketsProjectsListRpc = Rpc.make(WS_METHODS.ticketsProjectsList, {
+  payload: Schema.Struct({}),
+  success: TicketProjectsResult,
+  error: Schema.Union([TicketError, EnvironmentAuthorizationError]),
+});
+const WsTicketsProjectsMapRpc = Rpc.make(WS_METHODS.ticketsProjectsMap, {
+  payload: TicketProjectMapInput,
+  success: TicketProjectsResult,
+  error: Schema.Union([TicketError, EnvironmentAuthorizationError]),
+});
+
 const WsTicketsListRpc = Rpc.make(WS_METHODS.ticketsList, {
   payload: TicketListInput,
   success: TicketListResult,
@@ -1933,7 +1985,17 @@ export class RpcScopeAuthorization extends RpcMiddleware.Service<RpcScopeAuthori
   { error: EnvironmentAuthorizationError },
 ) {}
 
-export const WsRpcGroup = RpcGroup.make(
+export const TicketRecordRpcGroup = RpcGroup.make(
+  WsTicketsTimelineRpc,
+  WsTicketsEntryRpc,
+  WsTicketsSyncStatusRpc,
+  WsTicketsSyncConfigureRpc,
+  WsTicketsSyncRefreshRpc,
+  WsTicketsProjectsListRpc,
+  WsTicketsProjectsMapRpc,
+).middleware(RpcScopeAuthorization);
+
+export const CoreWsRpcGroup = RpcGroup.make(
   WsServerProbeRpc,
   WsServerGetConfigRpc,
   WsServerRefreshProvidersRpc,
@@ -2135,3 +2197,5 @@ export const WsRpcGroup = RpcGroup.make(
   WsOrchestrationV2SubscribeShellRpc,
   WsOrchestrationV2SubscribeThreadRpc,
 ).middleware(RpcScopeAuthorization);
+
+export const WsRpcGroup = CoreWsRpcGroup.merge(TicketRecordRpcGroup);

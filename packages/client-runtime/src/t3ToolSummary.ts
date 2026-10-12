@@ -215,6 +215,12 @@ export function summarizeT3ToolCalls(
     case "ticket-create":
       label = phrase("Filed", "file", quantity(countEntities(entityIds("id")), "ticket"));
       break;
+    case "ticket-get":
+      label = phrase("Read", "read", `ticket state ${times}`);
+      break;
+    case "ticket-entry":
+      label = phrase("Recorded", "record", quantity(selected.length, "ticket entry"));
+      break;
     case "ticket-list":
       label = phrase("Listed", "list", `tickets ${times}`);
       break;

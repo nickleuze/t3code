@@ -1,36 +1,48 @@
 import {
-  Ticket,
   TicketError,
   TicketId,
-  TicketGithubIssue,
-  TicketLink,
-  type TicketDeleteInput,
-  type TicketDeleteResult,
+  ThreadId,
+  ProjectId,
+  TicketEvent,
+  TicketMutationResult,
+  type Ticket,
+  type TicketAuthor,
+  type TicketUpsertInput,
   type TicketListInput,
   type TicketListResult,
-  type TicketUpsertInput,
+  type TicketDeleteInput,
+  type TicketDeleteResult,
   type TicketRestoreInput,
   type TicketLinkInput,
   type TicketUnlinkInput,
-  TicketMutationResult,
+  type TicketEntryInput,
+  type TicketTimelineResult,
+  type TicketProjectsResult,
+  type TicketSyncStatus,
+  type TicketProjectMapInput,
+  type TicketGithubIssue,
 } from "@t3tools/contracts";
 import * as Context from "effect/Context";
-import * as Crypto from "effect/Crypto";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as PubSub from "effect/PubSub";
 import * as Schema from "effect/Schema";
-import * as Struct from "effect/Struct";
+import * as Semaphore from "effect/Semaphore";
 import * as Stream from "effect/Stream";
 import * as SqlClient from "effect/sql/SqlClient";
-import * as SqlSchema from "effect/sql/SqlSchema";
-
+import * as Path from "effect/Path";
 import * as ProjectStore from "../orchestration-v2/ProjectStore.ts";
+import * as TicketSync from "./TicketSyncService.ts";
+import {
+  projectTicket,
+  ticketIds,
+  deterministicEventId,
+  migratedTicketId,
+  type TicketRecordState,
+} from "./TicketRecord.ts";
 
-// Fork-owned schema stays out of the integer-keyed upstream migration ledger.
-// Sqlite.layerConfig completes upstream migrations before supplying this client.
 export const bootstrapSchema = Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient;
   yield* sql.withTransaction(
@@ -42,7 +54,7 @@ export const bootstrapSchema = Effect.gen(function* () {
       const versions = yield* sql<{ version: number }>`
         SELECT version FROM fork_schema_versions WHERE component = 'tickets'
       `;
-      if (versions[0] !== undefined && versions[0].version !== 1) {
+      if (versions[0] !== undefined && ![1, 3].includes(versions[0].version)) {
         return yield* new TicketError({ message: "Unsupported fork tickets schema version." });
       }
       yield* sql`CREATE TABLE IF NOT EXISTS fork_tickets (
@@ -77,16 +89,82 @@ export const bootstrapSchema = Effect.gen(function* () {
     )`;
       yield* sql`CREATE INDEX IF NOT EXISTS idx_fork_tickets_project
       ON fork_tickets(project_id, updated_at)`;
+      yield* sql`CREATE TABLE IF NOT EXISTS fork_ticket_events (
+        event_id TEXT PRIMARY KEY NOT NULL, ticket_id TEXT NOT NULL, event_json TEXT NOT NULL
+      )`;
+      yield* sql`CREATE INDEX IF NOT EXISTS idx_fork_ticket_events_ticket ON fork_ticket_events(ticket_id, event_id)`;
+      yield* sql`CREATE TABLE IF NOT EXISTS fork_ticket_records (
+        ticket_id TEXT PRIMARY KEY NOT NULL, state_json TEXT NOT NULL
+      )`;
+      yield* sql`CREATE TABLE IF NOT EXISTS fork_ticket_project_map (
+        project_key TEXT PRIMARY KEY NOT NULL, project_id TEXT
+      )`;
+      yield* sql`CREATE TABLE IF NOT EXISTS fork_ticket_record_commands (
+        command_id TEXT PRIMARY KEY NOT NULL, result_json TEXT NOT NULL
+      )`;
+      yield* sql`CREATE TABLE IF NOT EXISTS fork_ticket_legacy_ids (
+        legacy_id TEXT PRIMARY KEY NOT NULL, ticket_id TEXT NOT NULL
+      )`;
       yield* sql`INSERT INTO fork_schema_versions (component, version)
-      VALUES ('tickets', 1) ON CONFLICT (component) DO NOTHING`;
+      VALUES ('tickets', 3) ON CONFLICT (component) DO UPDATE SET version = 3`;
     }),
   );
 });
 
+type ReferenceInput = {
+  id: TicketId;
+  kind: "thread" | "goal" | "task" | "pr";
+  ref: string;
+  role?: "work" | "origin" | "planning" | "review" | undefined;
+  unlink?: boolean;
+};
 export class TicketService extends Context.Service<
   TicketService,
   {
-    // Internal persistence operations for the GitHub service; never exposed as generic RPC writes.
+    readonly syncRefresh: () => Effect.Effect<TicketSyncStatus, TicketError>;
+    readonly syncStatus: Effect.Effect<TicketSyncStatus, TicketError>;
+    readonly syncConfigure: (remote: string) => Effect.Effect<TicketSyncStatus, TicketError>;
+    readonly list: (input?: TicketListInput) => Effect.Effect<TicketListResult, TicketError>;
+    readonly subscribeList: () => Stream.Stream<TicketListResult, TicketError>;
+    readonly upsert: (
+      input: TicketUpsertInput,
+      by?: TicketAuthor,
+    ) => Effect.Effect<TicketMutationResult, TicketError>;
+    readonly delete: (input: TicketDeleteInput) => Effect.Effect<TicketDeleteResult, TicketError>;
+    readonly restore: (
+      input: TicketRestoreInput,
+    ) => Effect.Effect<TicketMutationResult, TicketError>;
+    readonly link: (
+      input: TicketLinkInput,
+      by?: TicketAuthor,
+    ) => Effect.Effect<TicketMutationResult, TicketError>;
+    readonly unlink: (
+      input: TicketUnlinkInput,
+      by?: TicketAuthor,
+    ) => Effect.Effect<TicketMutationResult, TicketError>;
+    readonly reference: (
+      input: ReferenceInput,
+      by?: TicketAuthor,
+    ) => Effect.Effect<TicketMutationResult, TicketError>;
+    readonly timeline: (input: {
+      id: TicketId;
+    }) => Effect.Effect<TicketTimelineResult, TicketError>;
+    readonly get: (id: TicketId) => Effect.Effect<TicketRecordState, TicketError>;
+    readonly entry: (
+      input: TicketEntryInput,
+      by?: TicketAuthor,
+      namespace?: string,
+    ) => Effect.Effect<TicketMutationResult, TicketError>;
+    readonly importEvents: (events: readonly TicketEvent[]) => Effect.Effect<void, TicketError>;
+    readonly rebuild: Effect.Effect<void, TicketError>;
+    readonly migrate: Effect.Effect<void, TicketError>;
+    readonly refresh: Effect.Effect<void, TicketError>;
+    readonly projectsList: Effect.Effect<TicketProjectsResult, TicketError>;
+    readonly projectsMap: (
+      input: typeof TicketProjectMapInput.Type,
+    ) => Effect.Effect<TicketProjectsResult, TicketError>;
+    readonly author: (by?: Omit<TicketAuthor, "machine">) => TicketAuthor;
+    // Compatibility with v1 transports; GitHub integration is retired for records.
     readonly importGithubIssue: (
       input: TicketUpsertInput,
       issue: TicketGithubIssue,
@@ -94,28 +172,16 @@ export class TicketService extends Context.Service<
     readonly setGithubIssues: (
       updates: ReadonlyArray<{ id: TicketId; issue: TicketGithubIssue | null; refresh?: boolean }>,
     ) => Effect.Effect<number, TicketError>;
-    readonly list: (input?: TicketListInput) => Effect.Effect<TicketListResult, TicketError>;
-    readonly subscribeList: () => Stream.Stream<TicketListResult, TicketError>;
-    readonly upsert: (input: TicketUpsertInput) => Effect.Effect<TicketMutationResult, TicketError>;
-    readonly delete: (input: TicketDeleteInput) => Effect.Effect<TicketDeleteResult, TicketError>;
-    readonly restore: (
-      input: TicketRestoreInput,
-    ) => Effect.Effect<TicketMutationResult, TicketError>;
-    readonly link: (input: TicketLinkInput) => Effect.Effect<TicketMutationResult, TicketError>;
-    readonly unlink: (input: TicketUnlinkInput) => Effect.Effect<TicketMutationResult, TicketError>;
   }
 >()("t3/tickets/TicketService") {}
-
-const TicketDbRow = Schema.Struct({
-  ...Struct.omit(Ticket.fields, ["links"]),
-  githubIssue: Schema.NullOr(Schema.fromJsonString(TicketGithubIssue)),
-});
-
 const isTicketError = Schema.is(TicketError);
-const decodeMutationJson = Schema.decodeUnknownEffect(Schema.fromJsonString(TicketMutationResult));
-const encodeMutationJson = Schema.encodeEffect(Schema.fromJsonString(TicketMutationResult));
-const encodeGithubIssueJson = Schema.encodeEffect(Schema.fromJsonString(TicketGithubIssue));
-
+const decodeEvent = Schema.decodeUnknownEffect(Schema.fromJsonString(TicketEvent));
+const decodeProjection = Schema.decodeUnknownEffect(Schema.fromJsonString(Schema.Unknown));
+const encodeProjection = Schema.encodeEffect(Schema.fromJsonString(Schema.Unknown));
+const encodeEvent = Schema.encodeEffect(Schema.fromJsonString(TicketEvent));
+const validateEvent = Schema.decodeUnknownEffect(TicketEvent);
+const decodeMutation = Schema.decodeUnknownEffect(Schema.fromJsonString(TicketMutationResult));
+const encodeMutation = Schema.encodeEffect(Schema.fromJsonString(TicketMutationResult));
 const mapError = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
   effect.pipe(
     Effect.mapError((cause) =>
@@ -127,284 +193,607 @@ const mapError = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
 
 export const make = Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient;
-  const crypto = yield* Crypto.Crypto;
+  const pathOption = yield* Effect.serviceOption(Path.Path);
+  const basename = Option.isSome(pathOption)
+    ? pathOption.value.basename
+    : (value: string) => value.replace(/\\/g, "/").split("/").findLast(Boolean) ?? "";
   const projects = yield* ProjectStore.ProjectStoreV2;
+  const syncOption = yield* Effect.serviceOption(TicketSync.TicketSyncService);
+  const sync = Option.getOrUndefined(syncOption);
   yield* bootstrapSchema.pipe(mapError);
   const changes = yield* PubSub.sliding<void>(1);
+  const lock = yield* Semaphore.make(1);
+  const ulid = ticketIds();
+  const author = (by?: Omit<TicketAuthor, "machine">): TicketAuthor => ({
+    actor: "user",
+    ...by,
+    machine: sync?.machine ?? "test",
+  });
   const now = DateTime.now.pipe(Effect.map(DateTime.formatIso));
-
-  const selectRows = SqlSchema.findAll({
-    Request: Schema.Struct({ id: Schema.optional(TicketId), includeDeleted: Schema.Boolean }),
-    Result: TicketDbRow,
-    execute: (input) => sql`
-      SELECT ticket_id AS "id", project_id AS "projectId", title, body, status,
-        status_set_at AS "statusSetAt", sort_key AS "sortKey", created_by AS "createdBy",
-        creation_source AS "creationSource", origin_thread_id AS "originThreadId",
-        github_issue_json AS "githubIssue", created_at AS "createdAt",
-        updated_at AS "updatedAt", deleted_at AS "deletedAt"
-      FROM fork_tickets
-      WHERE ${sql.and([
-        ...(input.id === undefined ? [] : [sql`ticket_id = ${input.id}`]),
-        ...(input.includeDeleted ? [] : [sql`deleted_at IS NULL`]),
-      ])}
-      ORDER BY sort_key ASC, created_at ASC, ticket_id ASC
-    `,
-  });
-  const selectLinks = SqlSchema.findAll({
-    Request: Schema.Array(TicketId),
-    Result: Schema.Struct({ ticketId: TicketId, ...TicketLink.fields }),
-    execute: (ids) => sql`
-      SELECT ticket_id AS "ticketId", thread_id AS "threadId", role, linked_at AS "linkedAt"
-      FROM fork_ticket_links WHERE ${sql.in("ticket_id", ids)}
-      ORDER BY linked_at ASC, thread_id ASC
-    `,
-  });
-  const read = Effect.fn("TicketService.read")(function* (id?: TicketId, includeDeleted = false) {
-    const rows = yield* selectRows({ ...(id === undefined ? {} : { id }), includeDeleted });
-    if (rows.length === 0) return [];
-    const links = yield* selectLinks(rows.map((row) => row.id));
-    const byTicket = new Map<TicketId, TicketLink[]>();
-    for (const { ticketId, ...link } of links) {
-      const group = byTicket.get(ticketId) ?? [];
-      group.push(link);
-      byTicket.set(ticketId, group);
-    }
-    return rows.map((row): Ticket => ({ ...row, links: byTicket.get(row.id) ?? [] }));
-  });
-  const load = Effect.fn("TicketService.load")(function* (id: TicketId, includeDeleted = false) {
-    const ticket = (yield* read(id, includeDeleted))[0];
-    if (ticket === undefined)
-      return yield* new TicketError({ message: "Ticket not found.", ticketId: id });
-    return ticket;
-  });
+  const base = (id: TicketId, by?: TicketAuthor) =>
+    Effect.gen(function* () {
+      const at = yield* now;
+      const signed = by ?? author();
+      return { eventId: `${ulid(Date.parse(at))}-${signed.machine}`, ticketId: id, at, by: signed };
+    });
+  const resolveId = (id: TicketId) =>
+    Effect.gen(function* () {
+      const rows = yield* sql<{
+        ticket_id: string;
+      }>`SELECT ticket_id FROM fork_ticket_legacy_ids WHERE legacy_id = ${id}`;
+      return rows[0] === undefined ? id : TicketId.make(rows[0].ticket_id);
+    });
+  const eventsFor = (id: TicketId) =>
+    Effect.gen(function* () {
+      const rows = yield* sql<{
+        event_json: string;
+      }>`SELECT event_json FROM fork_ticket_events WHERE ticket_id = ${id} ORDER BY event_id`;
+      return yield* Effect.forEach(rows, (row) => decodeEvent(row.event_json));
+    });
+  const importEffect = (events: readonly TicketEvent[]) =>
+    Effect.gen(function* () {
+      const affected = new Set<TicketId>();
+      for (const event of events) {
+        const validated = yield* validateEvent(event);
+        const json = yield* encodeEvent(validated);
+        const previous = yield* sql<{
+          event_json: string;
+        }>`SELECT event_json FROM fork_ticket_events WHERE event_id = ${event.eventId}`;
+        if (previous[0]) {
+          if (previous[0].event_json !== json)
+            return yield* new TicketError({
+              message: "Ticket event identity conflict. Existing event was preserved.",
+            });
+          continue;
+        }
+        yield* sql`INSERT INTO fork_ticket_events (event_id, ticket_id, event_json) VALUES (${event.eventId}, ${event.ticketId}, ${json})`;
+        affected.add(event.ticketId);
+      }
+      for (const id of affected) {
+        const state = projectTicket(yield* eventsFor(id));
+        if (state !== null)
+          yield* sql`INSERT INTO fork_ticket_records (ticket_id, state_json) VALUES (${id}, ${yield* encodeProjection(state)}) ON CONFLICT (ticket_id) DO UPDATE SET state_json = excluded.state_json`;
+      }
+    });
+  const importEvents = (events: readonly TicketEvent[]) =>
+    lock.withPermit(sql.withTransaction(importEffect(events))).pipe(
+      Effect.tap(() => PubSub.publish(changes, undefined)),
+      mapError,
+    );
+  const readState = (id: TicketId, includeDeleted = false) =>
+    Effect.gen(function* () {
+      const resolved = yield* resolveId(id);
+      const rows = yield* sql<{
+        state_json: string;
+      }>`SELECT state_json FROM fork_ticket_records WHERE ticket_id = ${resolved}`;
+      const state = rows[0]
+        ? ((yield* decodeProjection(rows[0].state_json)) as TicketRecordState)
+        : undefined;
+      if (!state || (!includeDeleted && state.ticket.deletedAt !== null))
+        return yield* new TicketError({ message: "Ticket not found.", ticketId: id });
+      const key = state.ticket.projectKey;
+      const mapping = key
+        ? yield* sql<{
+            project_id: string | null;
+          }>`SELECT project_id FROM fork_ticket_project_map WHERE project_key = ${key}`
+        : [];
+      const registry = sync ? yield* sync.registry : {};
+      return {
+        ...state,
+        ticket: {
+          ...state.ticket,
+          projectId: mapping[0]?.project_id ? ProjectId.make(mapping[0].project_id) : null,
+          projectName: key ? (registry[key] ?? key) : null,
+        },
+      };
+    });
+  const get = (id: TicketId) => readState(id).pipe(mapError);
+  const list = (input: TicketListInput = {}) =>
+    Effect.gen(function* () {
+      const rows = yield* sql<{ ticket_id: string }>`SELECT ticket_id FROM fork_ticket_records`;
+      const states = yield* Effect.forEach(rows, (row) =>
+        readState(TicketId.make(row.ticket_id), true),
+      );
+      return {
+        tickets: states
+          .map((state) => state.ticket)
+          .filter((ticket) => input.includeDeleted || ticket.deletedAt === null)
+          .sort(
+            (a, b) =>
+              a.sortKey - b.sortKey ||
+              b.createdAt.localeCompare(a.createdAt) ||
+              a.id.localeCompare(b.id),
+          ),
+      };
+    }).pipe(mapError);
+  const commitEvents = (events: readonly TicketEvent[]) =>
+    Effect.gen(function* () {
+      // Write files before projection. If projection fails, startup reimports them.
+      if (sync) yield* sync.append(events);
+      yield* importEffect(events);
+    });
   const mutate = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
-    sql.withTransaction(effect).pipe(
+    lock.withPermit(sql.withTransaction(effect)).pipe(
       Effect.tap(() => PubSub.publish(changes, undefined)),
       Effect.uninterruptible,
       mapError,
     );
-  const list: TicketService["Service"]["list"] = (input = {}) =>
-    sql.withTransaction(read(undefined, input.includeDeleted === true)).pipe(
-      Effect.map((tickets) => ({ tickets })),
-      mapError,
+  const projectKey = (id: ProjectId) =>
+    Effect.gen(function* () {
+      const project = yield* projects.get(id);
+      if (Option.isNone(project)) return yield* new TicketError({ message: "Project not found." });
+      const mapped = yield* sql<{
+        project_key: string;
+      }>`SELECT project_key FROM fork_ticket_project_map WHERE project_id = ${id} ORDER BY project_key`;
+      if (mapped[0]) return mapped[0].project_key;
+      const suggested =
+        basename(project.value.workspaceRoot)
+          .toLowerCase()
+          .replace(/[^a-z0-9-]/g, "-") || "project";
+      const taken =
+        yield* sql`SELECT project_id FROM fork_ticket_project_map WHERE project_key = ${suggested}`;
+      const key = taken.length
+        ? `${suggested}-${deterministicEventId("project", id, "key").slice(10, 18).toLowerCase()}`
+        : suggested;
+      // Assigning a local project is the user's explicit mapping confirmation.
+      yield* sql`INSERT INTO fork_ticket_project_map (project_key, project_id) VALUES (${key}, ${id}) ON CONFLICT (project_key) DO UPDATE SET project_id = excluded.project_id`;
+      if (sync) yield* sync.registerProject(key, project.value.title);
+      return key;
+    });
+  const upsert = (input: TicketUpsertInput, by?: TicketAuthor) =>
+    mutate(
+      Effect.gen(function* () {
+        if (input.commandId) {
+          const rows = yield* sql<{
+            result_json: string;
+          }>`SELECT result_json FROM fork_ticket_record_commands WHERE command_id = ${input.commandId}`;
+          if (rows[0]) return yield* decodeMutation(rows[0].result_json);
+        }
+        const timestamp = yield* now;
+        const id = input.id
+          ? yield* resolveId(input.id)
+          : TicketId.make(ulid(Date.parse(timestamp)));
+        const rows = yield* sql<{
+          ticket_id: string;
+        }>`SELECT ticket_id FROM fork_ticket_records WHERE ticket_id = ${id}`;
+        const existing = rows.length ? (yield* readState(id, true)).ticket : undefined;
+        if ((input.requireExisting && !existing) || existing?.deletedAt != null)
+          return yield* new TicketError({
+            message: "Ticket not found. Restore deleted tickets before editing.",
+            ticketId: id,
+          });
+        if (!existing && !/^[0-9A-HJKMNP-TV-Z]{26}$/.test(id))
+          return yield* new TicketError({ message: "New ticket ids must be ULIDs.", ticketId: id });
+        if (!existing && !input.title)
+          return yield* new TicketError({
+            message: "Title is required to create a ticket.",
+            ticketId: id,
+          });
+        const key =
+          input.projectKey !== undefined
+            ? input.projectKey
+            : input.projectId !== undefined
+              ? input.projectId === null
+                ? null
+                : yield* projectKey(input.projectId)
+              : (existing?.projectKey ?? null);
+        const events: TicketEvent[] = [];
+        if (!existing) {
+          events.push({
+            ...(yield* base(id, by ?? author({ actor: input.createdBy ?? "user" }))),
+            type: "created",
+            title: input.title!,
+            body: input.body ?? "",
+            projectKey: key,
+            source: input.creationSource ?? "web",
+            originThread: input.originThreadId ?? null,
+          });
+          if (input.creationSource === "mcp" && input.originThreadId)
+            events.push({
+              ...(yield* base(id, by)),
+              type: "link",
+              kind: "thread",
+              ref: input.originThreadId,
+              role: "origin",
+              machine: sync?.machine ?? "test",
+            });
+        }
+        const fields = {
+          ...(input.title !== undefined ? { title: input.title } : {}),
+          ...(input.body !== undefined ? { body: input.body } : {}),
+          ...(input.projectId !== undefined || input.projectKey !== undefined
+            ? { projectKey: key }
+            : {}),
+          ...(input.sortKey !== undefined ? { sortKey: input.sortKey } : {}),
+        };
+        if (!existing && input.sortKey === undefined)
+          fields.sortKey =
+            Math.min(
+              1,
+              ...(yield* list()).tickets.filter((t) => t.status === "inbox").map((t) => t.sortKey),
+            ) - 1;
+        if (Object.keys(fields).length)
+          events.push({ ...(yield* base(id, by)), type: "fields", ...fields });
+        if (input.status !== undefined)
+          events.push({
+            ...(yield* base(id, by)),
+            type: "stage",
+            stage: input.status,
+            reason: "manual",
+          });
+        yield* commitEvents(events);
+        const result = { ticket: (yield* readState(id)).ticket };
+        if (input.commandId)
+          yield* sql`INSERT INTO fork_ticket_record_commands (command_id, result_json) VALUES (${input.commandId}, ${yield* encodeMutation(result)})`;
+        return result;
+      }),
     );
-  const subscribeList: TicketService["Service"]["subscribeList"] = () =>
+  const reference = (input: ReferenceInput, by?: TicketAuthor) =>
+    mutate(
+      Effect.gen(function* () {
+        const state = yield* readState(input.id);
+        const id = state.ticket.id;
+        const machine = sync?.machine ?? "test";
+        const existing = state.references.find(
+          (link) => link.kind === input.kind && link.ref === input.ref && link.machine === machine,
+        );
+        const role = input.role ?? "work";
+        if (input.unlink ? !existing : existing?.role === role) return { ticket: state.ticket };
+        yield* commitEvents([
+          {
+            ...(yield* base(id, by)),
+            type: input.unlink ? "unlink" : "link",
+            kind: input.kind,
+            ref: input.ref,
+            role,
+            machine,
+          },
+        ]);
+        return { ticket: (yield* readState(id)).ticket };
+      }),
+    );
+  const link = (input: TicketLinkInput, by?: TicketAuthor) =>
+    input.startWork
+      ? mutate(
+          Effect.gen(function* () {
+            const state = yield* readState(input.id);
+            const id = state.ticket.id;
+            const machine = sync?.machine ?? "test";
+            if (
+              (yield* eventsFor(id)).some(
+                (event) =>
+                  event.type === "auto" &&
+                  event.kind === "thread_started" &&
+                  event.ref === input.threadId &&
+                  event.by.machine === machine,
+              )
+            )
+              return { ticket: state.ticket };
+            const events: TicketEvent[] = [
+              {
+                ...(yield* base(id, by)),
+                type: "link",
+                kind: "thread",
+                ref: input.threadId,
+                role: "work",
+                machine,
+              },
+            ];
+            if (state.ticket.status === "inbox" || state.ticket.status === "ready")
+              events.push({
+                ...(yield* base(id, by)),
+                type: "stage",
+                stage: "in_progress",
+                reason: "start_work",
+              });
+            events.push({
+              ...(yield* base(id, by)),
+              type: "auto",
+              kind: "thread_started",
+              ref: input.threadId,
+            });
+            yield* commitEvents(events);
+            return { ticket: (yield* readState(id)).ticket };
+          }),
+        )
+      : reference({ id: input.id, kind: "thread", ref: input.threadId, role: input.role }, by);
+  const entry = (input: TicketEntryInput, by?: TicketAuthor, namespace = "user") =>
+    mutate(
+      Effect.gen(function* () {
+        const state = yield* readState(input.id);
+        const signed = by ?? author();
+        const requestKey = input.clientRequestId
+          ? deterministicEventId(namespace, input.clientRequestId, signed.machine)
+          : undefined;
+        const eventId = input.clientRequestId
+          ? deterministicEventId(
+              namespace,
+              input.clientRequestId,
+              signed.machine,
+              Date.parse(yield* now),
+            )
+          : undefined;
+        if (requestKey) {
+          const rows = yield* sql<{
+            ticket_id: string;
+          }>`SELECT ticket_id FROM fork_ticket_events WHERE json_extract(event_json, '$.requestKey') = ${requestKey}`;
+          if (rows[0]) {
+            if (rows[0].ticket_id !== state.ticket.id)
+              return yield* new TicketError({
+                message: "Entry retry key was already used for another ticket.",
+              });
+            return { ticket: state.ticket };
+          }
+        }
+        for (const target of [input.supersedes, input.resolves])
+          if (
+            target &&
+            !(yield* eventsFor(state.ticket.id)).some(
+              (e) => e.eventId === target && e.type === "entry",
+            )
+          )
+            return yield* new TicketError({ message: "Entry target must belong to this ticket." });
+        const { id: _id, clientRequestId: _request, ...fields } = input;
+        yield* commitEvents([
+          {
+            ...(yield* base(state.ticket.id, signed)),
+            ...(eventId ? { eventId, requestKey } : {}),
+            type: "entry",
+            ...fields,
+          },
+        ]);
+        return { ticket: (yield* readState(state.ticket.id)).ticket };
+      }),
+    );
+  const timeline = (input: { id: TicketId }) =>
+    Effect.gen(function* () {
+      const state = yield* readState(input.id, true);
+      return {
+        events: yield* eventsFor(state.ticket.id),
+        machines: sync ? yield* sync.machines : { test: "Test" },
+      };
+    }).pipe(mapError);
+  const rebuild = mutate(
+    Effect.gen(function* () {
+      const rows = yield* sql<{
+        ticket_id: string;
+      }>`SELECT DISTINCT ticket_id FROM fork_ticket_events`;
+      yield* sql`DELETE FROM fork_ticket_records`;
+      for (const row of rows) {
+        const state = projectTicket(yield* eventsFor(TicketId.make(row.ticket_id)));
+        if (state)
+          yield* sql`INSERT INTO fork_ticket_records (ticket_id, state_json) VALUES (${row.ticket_id}, ${yield* encodeProjection(state)})`;
+      }
+    }),
+  );
+  const projectsList = Effect.gen(function* () {
+    const registry = sync ? yield* sync.registry : {};
+    const mappings = yield* sql<{
+      project_key: string;
+      project_id: string | null;
+    }>`SELECT * FROM fork_ticket_project_map`;
+    const local = yield* projects.list();
+    return {
+      projects: [...new Set([...Object.keys(registry), ...mappings.map((m) => m.project_key)])]
+        .sort()
+        .map((key) => ({
+          key,
+          displayName: registry[key] ?? key,
+          projectId: mappings.find((m) => m.project_key === key)?.project_id
+            ? ProjectId.make(mappings.find((m) => m.project_key === key)!.project_id!)
+            : null,
+          suggestedProjectId:
+            local.find((p) => basename(p.workspaceRoot).toLowerCase() === key)?.projectId ?? null,
+        })),
+    };
+  }).pipe(mapError);
+  const projectsMap = (input: typeof TicketProjectMapInput.Type) =>
+    mutate(
+      Effect.gen(function* () {
+        if (input.projectId !== null && Option.isNone(yield* projects.get(input.projectId)))
+          return yield* new TicketError({ message: "Project not found." });
+        if (sync) yield* sync.registerProject(input.key, input.displayName ?? input.key);
+        yield* sql`INSERT INTO fork_ticket_project_map (project_key, project_id) VALUES (${input.key}, ${input.projectId}) ON CONFLICT (project_key) DO UPDATE SET project_id = excluded.project_id`;
+        return yield* projectsList;
+      }),
+    );
+  const migrate = mutate(
+    Effect.gen(function* () {
+      const done =
+        yield* sql`SELECT version FROM fork_schema_versions WHERE component = 'tickets-v1-import'`;
+      if (done.length) return;
+      const rows = yield* sql<{
+        ticket_id: string;
+        title: string;
+        body: string;
+        project_id: string | null;
+        status: Ticket["status"];
+        status_set_at: string;
+        sort_key: number;
+        created_by: Ticket["createdBy"];
+        creation_source: Ticket["creationSource"];
+        origin_thread_id: string | null;
+        created_at: string;
+        deleted_at: string | null;
+      }>`SELECT * FROM fork_tickets ORDER BY ticket_id`;
+      for (const row of rows) {
+        const id = migratedTicketId(row.ticket_id, row.created_at);
+        const by = author({ actor: row.created_by });
+        const key = row.project_id
+          ? yield* projectKey(ProjectId.make(row.project_id)).pipe(Effect.orElseSucceed(() => null))
+          : null;
+        const migrationBase = (index: number, at: string) => ({
+          ticketId: id,
+          eventId: `${migratedTicketId(`${row.ticket_id}:${index}`, at)}-${by.machine}`,
+          at,
+          by,
+        });
+        const events: TicketEvent[] = [
+          {
+            ...migrationBase(0, row.created_at),
+            type: "created",
+            title: row.title,
+            body: row.body,
+            projectKey: key,
+            source: row.creation_source,
+            originThread: row.origin_thread_id ? ThreadId.make(row.origin_thread_id) : null,
+          },
+          {
+            ...migrationBase(1, row.created_at),
+            type: "fields",
+            title: row.title,
+            body: row.body,
+            projectKey: key,
+            sortKey: row.sort_key,
+          },
+          {
+            ...migrationBase(2, row.status_set_at),
+            type: "stage",
+            stage: row.status,
+            reason: "manual",
+          },
+        ];
+        const links = yield* sql<{
+          thread_id: string;
+          role: "origin" | "work";
+          linked_at: string;
+        }>`SELECT * FROM fork_ticket_links WHERE ticket_id = ${row.ticket_id} ORDER BY thread_id`;
+        for (const [index, link] of links.entries())
+          events.push({
+            ...migrationBase(3 + index, link.linked_at),
+            type: "link",
+            kind: "thread",
+            ref: link.thread_id,
+            role: link.role,
+            machine: by.machine,
+          });
+        if (row.deleted_at)
+          events.push({ ...migrationBase(3 + links.length, row.deleted_at), type: "deleted" });
+        yield* commitEvents(events);
+        yield* sql`INSERT INTO fork_ticket_legacy_ids (legacy_id, ticket_id) VALUES (${row.ticket_id}, ${id}) ON CONFLICT DO NOTHING`;
+      }
+      yield* sql`INSERT INTO fork_schema_versions (component, version) VALUES ('tickets-v1-import', 1)`;
+    }),
+  );
+  let lastReadAt = 0;
+  const refresh = sync
+    ? sync.refresh.pipe(
+        Effect.flatMap(importEvents),
+        Effect.tap(() =>
+          DateTime.now.pipe(
+            Effect.tap((time) =>
+              Effect.sync(() => {
+                lastReadAt = DateTime.toEpochMillis(time);
+              }),
+            ),
+          ),
+        ),
+      )
+    : Effect.void;
+  let subscribers = 0;
+  const subscribeList = () =>
     Stream.unwrap(
       Effect.gen(function* () {
         const subscription = yield* PubSub.subscribe(changes);
+        yield* Effect.acquireRelease(
+          Effect.sync(() => {
+            subscribers++;
+          }),
+          () =>
+            Effect.sync(() => {
+              subscribers--;
+            }),
+        );
+        yield* refresh.pipe(Effect.ignore, Effect.forkScoped);
         return Stream.concat(
           Stream.fromEffect(list()),
           Stream.fromSubscription(subscription).pipe(Stream.mapEffect(() => list())),
         );
       }),
     );
-  const upsertEffect = (input: TicketUpsertInput) =>
+  yield* migrate;
+  yield* rebuild;
+  if (sync) {
+    yield* sync.localEvents.pipe(Effect.flatMap(importEvents), Effect.ignore);
+    yield* refresh.pipe(Effect.ignore, Effect.forkScoped);
+    // One fork-contained worker owns debounce, retry backoff and pull cadence.
+    yield* Effect.gen(function* () {
+      let retryAt = 0;
+      let failures = 0;
+      while (true) {
+        yield* Effect.sleep("5 seconds");
+        const time = DateTime.toEpochMillis(yield* DateTime.now);
+        const status = yield* sync.status;
+        if (status.lastError === null) {
+          failures = 0;
+          retryAt = 0;
+        }
+        const cadence = subscribers > 0 ? 60_000 : 600_000;
+        if (time < retryAt || (status.pendingEvents === 0 && time < lastReadAt + cadence)) continue;
+        const result = yield* Effect.result(refresh);
+        if (result._tag === "Failure") {
+          failures++;
+          retryAt = time + Math.min(600_000, 5_000 * 2 ** failures);
+        } else {
+          failures = 0;
+          retryAt = 0;
+        }
+      }
+    }).pipe(Effect.forkScoped);
+  }
+  const retired = Effect.fail(
+    new TicketError({ message: "GitHub issue mirroring is retired for ticket work records." }),
+  );
+  const syncUnavailable = Effect.fail(
+    new TicketError({ message: "Ticket sync is unavailable in this environment." }),
+  );
+  const syncRefresh: TicketService["Service"]["syncRefresh"] = () =>
     Effect.gen(function* () {
-      if (input.commandId !== undefined) {
-        const receipts = yield* sql<{ result_json: string }>`
-            SELECT result_json FROM fork_ticket_commands WHERE command_id = ${input.commandId}
-          `;
-        if (receipts[0] !== undefined) {
-          return yield* decodeMutationJson(receipts[0].result_json);
-        }
-      }
-      const timestamp = yield* now;
-      const id =
-        input.id ?? TicketId.make(`ticket:${input.commandId ?? (yield* crypto.randomUUIDv4)}`);
-      const existing = (yield* read(id, true))[0];
-      if (
-        (input.requireExisting === true && existing === undefined) ||
-        existing?.deletedAt != null
-      ) {
-        return yield* new TicketError({
-          message: "Ticket not found. Restore deleted tickets before editing.",
-          ticketId: id,
-        });
-      }
-      const title = input.title ?? existing?.title;
-      if (title === undefined) {
-        return yield* new TicketError({
-          message: "Title is required to create a ticket.",
-          ticketId: id,
-        });
-      }
-      if (
-        input.projectId !== undefined &&
-        input.projectId !== null &&
-        Option.isNone(yield* projects.get(input.projectId))
-      ) {
-        return yield* new TicketError({ message: "Project not found.", ticketId: id });
-      }
-      let sortKey = input.sortKey ?? existing?.sortKey;
-      if (sortKey === undefined) {
-        const rows = yield* sql<{ minSortKey: number | null }>`
-            SELECT MIN(sort_key) AS "minSortKey" FROM fork_tickets
-            WHERE status = 'inbox' AND deleted_at IS NULL
-          `;
-        const minSortKey = rows[0]?.minSortKey;
-        sortKey = minSortKey == null ? 0 : minSortKey - 1;
-      }
-      const ticket: Ticket = {
-        id,
-        projectId: input.projectId === undefined ? (existing?.projectId ?? null) : input.projectId,
-        title,
-        body: input.body ?? existing?.body ?? "",
-        status: input.status ?? existing?.status ?? "inbox",
-        statusSetAt: input.status === undefined ? (existing?.statusSetAt ?? timestamp) : timestamp,
-        sortKey,
-        createdBy: existing?.createdBy ?? input.createdBy ?? "user",
-        creationSource: existing?.creationSource ?? input.creationSource ?? "web",
-        originThreadId:
-          existing === undefined ? (input.originThreadId ?? null) : existing.originThreadId,
-        githubIssue: existing?.githubIssue ?? null,
-        links:
-          existing?.links ??
-          (input.creationSource === "mcp" && input.originThreadId != null
-            ? [{ threadId: input.originThreadId, role: "origin", linkedAt: timestamp }]
-            : []),
-        createdAt: existing?.createdAt ?? timestamp,
-        updatedAt: timestamp,
-        deletedAt: null,
-      };
-      const row = {
-        ticket_id: ticket.id,
-        project_id: ticket.projectId,
-        title: ticket.title,
-        body: ticket.body,
-        status: ticket.status,
-        status_set_at: ticket.statusSetAt,
-        sort_key: ticket.sortKey,
-        created_by: ticket.createdBy,
-        creation_source: ticket.creationSource,
-        origin_thread_id: ticket.originThreadId,
-        github_issue_json:
-          ticket.githubIssue === null ? null : yield* encodeGithubIssueJson(ticket.githubIssue),
-        created_at: ticket.createdAt,
-        updated_at: ticket.updatedAt,
-        deleted_at: ticket.deletedAt,
-      };
-      yield* sql`INSERT INTO fork_tickets ${sql.insert(row)}
-      ON CONFLICT (ticket_id) DO UPDATE SET ${sql.update(row)}`;
-      // MCP creation and its origin link share the receipt transaction. A retry
-      // must not restore an unlinked origin or downgrade a later work link.
-      if (existing === undefined) {
-        for (const link of ticket.links) {
-          yield* sql`INSERT INTO fork_ticket_links (ticket_id, thread_id, role, linked_at)
-          VALUES (${id}, ${link.threadId}, ${link.role}, ${link.linkedAt})`;
-        }
-      }
-      const result = { ticket };
-      if (input.commandId !== undefined) {
-        yield* sql`INSERT INTO fork_ticket_commands (command_id, ticket_id, result_json)
-        VALUES (${input.commandId}, ${id}, ${yield* encodeMutationJson(result)})`;
-      }
-      return result;
+      yield* refresh;
+      return yield* sync ? sync.status : syncUnavailable;
     });
-  const upsert: TicketService["Service"]["upsert"] = (input) => mutate(upsertEffect(input));
-  const writeGithubIssue = Effect.fn("TicketService.writeGithubIssue")(function* (
-    id: TicketId,
-    issue: TicketGithubIssue | null,
-  ) {
-    yield* load(id, true);
-    yield* sql`UPDATE fork_tickets SET github_issue_json = ${issue === null ? null : yield* encodeGithubIssueJson(issue)}, updated_at = ${yield* now}
-      WHERE ticket_id = ${id}`;
-  });
-  const setGithubIssues: TicketService["Service"]["setGithubIssues"] = (updates) =>
-    mutate(
-      Effect.gen(function* () {
-        let count = 0;
-        for (const { id, issue, refresh } of updates) {
-          if (refresh) {
-            const current = (yield* read(id))[0];
-            if (
-              !current ||
-              current.githubIssue === null ||
-              issue === null ||
-              current.githubIssue.repository !== issue.repository ||
-              current.githubIssue.number !== issue.number
-            )
-              continue;
-          }
-          yield* writeGithubIssue(id, issue);
-          count++;
-        }
-        return count;
-      }),
-    );
-  const importGithubIssue: TicketService["Service"]["importGithubIssue"] = (input, issue) =>
-    mutate(
-      Effect.gen(function* () {
-        const existing = (yield* read()).find(
-          (ticket) =>
-            ticket.githubIssue?.repository.toLowerCase() === issue.repository.toLowerCase() &&
-            ticket.githubIssue.number === issue.number,
-        );
-        if (existing !== undefined) return { ticket: existing };
-        const { ticket } = yield* upsertEffect(input);
-        yield* writeGithubIssue(ticket.id, issue);
-        return { ticket: yield* load(ticket.id) };
-      }),
-    );
-  const deleteTicket: TicketService["Service"]["delete"] = (input) =>
-    mutate(
-      Effect.gen(function* () {
-        const ticket = yield* load(input.id, true);
-        if (ticket.deletedAt === null) {
-          const timestamp = yield* now;
-          yield* sql`UPDATE fork_tickets SET deleted_at = ${timestamp}, updated_at = ${timestamp}
-        WHERE ticket_id = ${input.id}`;
-        }
-        return { id: input.id };
-      }),
-    );
-  const restore: TicketService["Service"]["restore"] = (input) =>
-    mutate(
-      Effect.gen(function* () {
-        const ticket = yield* load(input.id, true);
-        if (ticket.deletedAt !== null) {
-          yield* sql`UPDATE fork_tickets SET deleted_at = NULL, updated_at = ${yield* now}
-        WHERE ticket_id = ${input.id}`;
-        }
-        return { ticket: yield* load(input.id) };
-      }),
-    );
-  const link: TicketService["Service"]["link"] = (input) =>
-    mutate(
-      Effect.gen(function* () {
-        const ticket = yield* load(input.id);
-        const existing = ticket.links.find((link) => link.threadId === input.threadId);
-        if (existing?.role !== input.role) {
-          const timestamp = yield* now;
-          yield* sql`INSERT INTO fork_ticket_links (ticket_id, thread_id, role, linked_at)
-        VALUES (${input.id}, ${input.threadId}, ${input.role}, ${existing?.linkedAt ?? timestamp})
-        ON CONFLICT (ticket_id, thread_id) DO UPDATE SET role = excluded.role`;
-          yield* sql`UPDATE fork_tickets SET updated_at = ${timestamp} WHERE ticket_id = ${input.id}`;
-        }
-        return { ticket: yield* load(input.id) };
-      }),
-    );
-  const unlink: TicketService["Service"]["unlink"] = (input) =>
-    mutate(
-      Effect.gen(function* () {
-        const ticket = yield* load(input.id);
-        if (ticket.links.some((link) => link.threadId === input.threadId)) {
-          yield* sql`DELETE FROM fork_ticket_links WHERE ticket_id = ${input.id} AND thread_id = ${input.threadId}`;
-          yield* sql`UPDATE fork_tickets SET updated_at = ${yield* now} WHERE ticket_id = ${input.id}`;
-        }
-        return { ticket: yield* load(input.id) };
-      }),
-    );
   return TicketService.of({
+    syncRefresh,
+    syncStatus: sync ? sync.status : syncUnavailable,
+    syncConfigure: (remote) =>
+      sync ? sync.configure(remote).pipe(Effect.tap(() => refresh)) : syncUnavailable,
     list,
-    importGithubIssue,
-    setGithubIssues,
     subscribeList,
     upsert,
-    delete: deleteTicket,
-    restore,
+    get,
+    author,
+    timeline,
+    entry,
+    reference,
     link,
-    unlink,
+    unlink: (input, by) =>
+      reference({ id: input.id, kind: "thread", ref: input.threadId, unlink: true }, by),
+    delete: (input) =>
+      mutate(
+        Effect.gen(function* () {
+          const state = yield* readState(input.id, true);
+          if (!state.ticket.deletedAt)
+            yield* commitEvents([{ ...(yield* base(state.ticket.id)), type: "deleted" }]);
+          return { id: state.ticket.id };
+        }),
+      ),
+    restore: (input) =>
+      mutate(
+        Effect.gen(function* () {
+          const state = yield* readState(input.id, true);
+          if (state.ticket.deletedAt)
+            yield* commitEvents([{ ...(yield* base(state.ticket.id)), type: "restored" }]);
+          return { ticket: (yield* readState(state.ticket.id)).ticket };
+        }),
+      ),
+    importEvents,
+    rebuild,
+    migrate,
+    refresh,
+    projectsList,
+    projectsMap,
+    importGithubIssue: () => retired,
+    setGithubIssues: () => retired,
   });
 });
-
 export const layer = Layer.effect(TicketService, make);
