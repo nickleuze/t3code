@@ -85,6 +85,10 @@ A goal iteration keeps its thread while each turn ends with a note recorded and
 under about 60 % of the model's context window in use, up to its time limit
 (at least 45 minutes, 120 by default). The next iteration then starts a fresh
 top-level thread; without a context-window report, every iteration is fresh.
+A server restart is not a Stop: with "continue threads after a server update"
+on, the cut iteration resumes in its own thread, and otherwise the next
+iteration starts. Questions the user answered in an iteration become goal
+notes, so a cut iteration does not take its answers with it.
 
 Full test paths and additional cases remain in the source. Goal and thread
 changes also touch shared contracts and client runtime, so a server-only pass

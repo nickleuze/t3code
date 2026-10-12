@@ -91,7 +91,7 @@ describe("iteration accounting", () => {
       ),
     ).toEqual({ outcome: "usage_limited", resumeAt: "2026-10-04T17:00:00.000Z" });
     expect(childOutcome({ status: "failed" }, null).outcome).toBe("failed");
-    expect(childOutcome({ status: "cancelled" }, null).outcome).toBe("interrupted");
+    expect(childOutcome({ status: "cancelled" }, null).outcome).toBe("restarted");
     expect(childOutcome(undefined, null).outcome).toBe("interrupted");
   });
 });
