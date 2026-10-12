@@ -157,7 +157,7 @@ const EntryTool = Tool.make("t3_ticket_entry", {
 const LinkTool = Tool.make("t3_ticket_link", {
   ...shared,
   description:
-    "Attach a thread, goal, task or PR to a ticket. Thread ref defaults to the calling thread. Links do not move the stage. Role defaults to work.",
+    "Attach a thread, goal, task or PR to a ticket. Thread ref defaults to the calling thread. Linking alone does not move the stage, but the next run in a work-linked thread moves an Inbox or Ready ticket to In progress. Role defaults to work.",
   parameters: Schema.Struct({
     ticket: TicketId,
     kind: TicketReferenceKind,

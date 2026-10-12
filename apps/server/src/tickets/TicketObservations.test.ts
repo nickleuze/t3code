@@ -11,6 +11,66 @@ import * as Tickets from "./TicketService.ts";
 import * as Observations from "./TicketObservations.ts";
 import * as Projection from "../orchestration-v2/ProjectionStore.ts";
 
+it.effect.each([
+  { role: "work", status: "inbox", model: "fixture", expected: "in_progress" },
+  { role: "work", status: "ready", model: undefined, expected: "in_progress" },
+  { role: "planning", status: "inbox", model: "fixture", expected: "inbox" },
+] as const)("a $role run from $status records agent attribution once", (test) =>
+  Effect.gen(function* () {
+    const context = yield* Layer.build(
+      Tickets.layer.pipe(
+        Layer.provide(Projects.layer),
+        Layer.provide(NodeCrypto.layer),
+        Layer.provide(Sqlite.layerMemory),
+      ),
+    );
+    const tickets = yield* Tickets.TicketService.pipe(Effect.provideContext(context));
+    const { ticket } = yield* tickets.upsert({ title: "Run attribution", status: test.status });
+    const threadId = ThreadId.make("work-run");
+    yield* tickets.link({ id: ticket.id, threadId, role: test.role });
+    assert.equal((yield* tickets.get(ticket.id)).ticket.status, test.status);
+    const worker = yield* Observations.make.pipe(
+      Effect.provideContext(context),
+      Effect.provide(Layer.mock(Sink.EventSinkV2)({})),
+    );
+    const run = {
+      sequence: 1,
+      commandId: CommandId.make("run"),
+      event: {
+        type: "run.created",
+        payload: {
+          threadId,
+          ...(test.model ? { modelSelection: { model: test.model } } : {}),
+        },
+      },
+    } as unknown as OrchestrationV2StoredEvent;
+    yield* worker.observe(run);
+    yield* worker.drain;
+    yield* worker.observe({ ...run, sequence: 2 });
+    yield* worker.drain;
+    assert.equal((yield* tickets.get(ticket.id)).ticket.status, test.expected);
+    const events = (yield* tickets.timeline({ id: ticket.id })).events;
+    const by = tickets.author({
+      actor: "agent",
+      thread: threadId,
+      ...(test.model ? { model: test.model } : {}),
+    });
+    assert.deepStrictEqual(
+      events
+        .filter((event) => event.type === "stage" && event.reason === "start_work")
+        .map((event) => event.by),
+      test.role === "work" ? [by] : [],
+    );
+    assert.deepStrictEqual(
+      events
+        .filter((event) => event.type === "auto")
+        .filter((event) => event.kind === "thread_started")
+        .map((event) => ({ by: event.by, ref: event.ref })),
+      [{ by, ref: threadId }],
+    );
+  }),
+);
+
 it.effect(
   "observations start after the current sequence, ignore reconciliation and consume PR link/merge snapshots",
   () =>
