@@ -408,7 +408,9 @@ export const make = Effect.gen(function* () {
       const suggested =
         basename(project.value.workspaceRoot)
           .toLowerCase()
-          .replace(/[^a-z0-9-]/g, "-") || "project";
+          .replace(/[^a-z0-9-]/g, "-")
+          .replace(/-+/g, "-")
+          .replace(/^-|-$/g, "") || "project";
       const taken =
         yield* sql`SELECT project_id FROM fork_ticket_project_map WHERE project_key = ${suggested}`;
       const key = taken.length
