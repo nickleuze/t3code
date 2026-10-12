@@ -5,6 +5,7 @@ import * as Option from "effect/Option";
 import * as ThreadLaunch from "../../../orchestration-v2/ThreadLaunchService.ts";
 import * as ThreadMessageIntake from "../../../orchestration-v2/ThreadMessageIntake.ts";
 import * as Claims from "../../../orchestration-v2/AttachmentClaims.ts";
+import * as Defaults from "../../../project/ProjectLaunchDefaults.ts";
 import * as Project from "../../../project/ProjectService.ts";
 import * as ManagedProjectFolders from "../../../project/ManagedProjectFolders.ts";
 import * as Repositories from "../../../sourceControl/SourceControlRepositoryService.ts";
@@ -127,7 +128,13 @@ export const layer = McpToolAccess.toLayer(ProjectToolkit, {
         const modelSelection =
           input.modelSelection ??
           caller?.modelSelection ??
-          (yield* readProject)?.defaultModelSelection ??
+          (yield* Effect.gen(function* () {
+            const project = yield* readProject;
+            const defaults = yield* Defaults.ProjectLaunchDefaults;
+            return project
+              ? (yield* defaults.resolve(project).pipe(Effect.mapError(unavailable))).modelSelection
+              : undefined;
+          })) ??
           undefined;
         if (modelSelection === undefined)
           return yield* new OrchestratorMcpFailure({

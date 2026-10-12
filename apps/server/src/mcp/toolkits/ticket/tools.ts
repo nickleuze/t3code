@@ -11,6 +11,10 @@ import {
   TicketReferenceKind,
   TicketLinkRole,
   TicketStatus,
+  TicketStartMode,
+  TicketStartResult,
+  ModelSelection,
+  RuntimeMode,
   TrimmedNonEmptyString,
 } from "@t3tools/contracts";
 import * as Crypto from "effect/Crypto";
@@ -19,6 +23,7 @@ import { Tool, Toolkit } from "effect/ai";
 
 import * as ProjectStore from "../../../orchestration-v2/ProjectStore.ts";
 import * as ThreadManagement from "../../../orchestration-v2/ThreadManagementService.ts";
+import * as Launches from "../../../tickets/TicketLaunchService.ts";
 import * as Tickets from "../../../tickets/TicketService.ts";
 import * as McpInvocationContext from "../../McpInvocationContext.ts";
 
@@ -169,7 +174,26 @@ const LinkTool = Tool.make("t3_ticket_link", {
 })
   .annotate(Tool.Readonly, false)
   .annotate(Tool.Destructive, false);
+const StartTool = Tool.make("t3_ticket_start", {
+  ...shared,
+  dependencies: [...shared.dependencies, Crypto.Crypto, Launches.TicketLaunchService],
+  description:
+    "Start or hand off work on a ticket. Prefer this over t3_thread_launch plus t3_ticket_link. Defaults to plan first using project defaults on this machine. Pass projectId only to map or assign a missing project. Active work returns its existing thread unless allowParallel. Reuse clientRequestId after a lost response to retry the same thread within your caller namespace. Modes cannot exceed the caller's permissions.",
+  parameters: Schema.Struct({
+    ticket: TicketId,
+    mode: Schema.optional(TicketStartMode),
+    projectId: Schema.optional(ProjectId),
+    modelSelection: Schema.optional(ModelSelection),
+    runtimeMode: Schema.optional(RuntimeMode),
+    allowParallel: Schema.optional(Schema.Boolean),
+    clientRequestId: Schema.optional(TrimmedNonEmptyString),
+  }),
+  success: Schema.Struct({ ...TicketStartResult.fields, threadUrl: Schema.String }),
+})
+  .annotate(Tool.Readonly, false)
+  .annotate(Tool.Destructive, false);
 export const TicketToolkit = Toolkit.make(
+  StartTool,
   CreateTool,
   ListTool,
   UpdateTool,

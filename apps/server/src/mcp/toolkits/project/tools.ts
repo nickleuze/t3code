@@ -23,6 +23,7 @@ import * as ThreadLaunchService from "../../../orchestration-v2/ThreadLaunchServ
 import * as Crypto from "effect/Crypto";
 import * as Schema from "effect/Schema";
 import { Tool, Toolkit } from "effect/ai";
+import * as Defaults from "../../../project/ProjectLaunchDefaults.ts";
 import * as ProjectService from "../../../project/ProjectService.ts";
 import * as ManagedProjectFolders from "../../../project/ManagedProjectFolders.ts";
 import * as ThreadManagementService from "../../../orchestration-v2/ThreadManagementService.ts";
@@ -139,6 +140,7 @@ const ThreadLaunchTool = Tool.make("t3_thread_launch", {
   }),
   dependencies: [
     ...shared.dependencies,
+    Defaults.ProjectLaunchDefaults,
     ThreadLaunchService.ThreadLaunchService,
     ManagedProjectFolders.ManagedProjectFolders,
     GitVcsDriver.GitVcsDriver,

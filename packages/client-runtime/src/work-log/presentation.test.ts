@@ -301,6 +301,7 @@ describe("resolveWorkEntryToolPresentation", () => {
     ["t3_project_list", "Listing projects", "Listed projects"],
     ["t3_project_clone", "Cloning a repository", "Cloned a repository"],
     ["t3_project_create", "Registering a project", "Registered a project"],
+    ["t3_ticket_start", "Launching ticket work", "Launched ticket work"],
     ["t3_thread_launch", "Launching a project thread", "Launched a project thread"],
     ["t3_queue_edit", "Editing a queued message", "Edited a queued message"],
     ["t3_pending_request_respond", "Answering pending questions", "Answered pending questions"],

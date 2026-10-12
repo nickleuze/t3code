@@ -4,7 +4,6 @@ import {
   type TicketId,
   type ThreadId,
   WS_METHODS,
-  ORCHESTRATION_V2_WS_METHODS,
 } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 import * as Stream from "effect/Stream";
@@ -138,11 +137,10 @@ export function createTicketEnvironmentAtoms<R, E>(
       tag: WS_METHODS.ticketsList,
       execute: (input) => withTickets(request(WS_METHODS.ticketsList, input)),
     }),
-    launchTicketThread: createEnvironmentRpcCommand(runtime, {
-      label: "environment-data:server:tickets:launch",
-      tag: ORCHESTRATION_V2_WS_METHODS.launchThread,
-      execute: (input) =>
-        withTickets(requestGuarded(ORCHESTRATION_V2_WS_METHODS.launchThread, input)),
+    startTicket: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:server:tickets:start",
+      tag: WS_METHODS.ticketsStart,
+      execute: (input) => withTickets(requestGuarded(WS_METHODS.ticketsStart, input)),
     }),
     ticketIdsByThreadAtom,
     upsertTicket: createEnvironmentRpcCommand(runtime, {

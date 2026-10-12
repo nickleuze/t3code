@@ -17,6 +17,7 @@ import { McpSchema, McpServer } from "effect/ai";
 import * as Projects from "../../../orchestration-v2/ProjectStore.ts";
 import * as Threads from "../../../orchestration-v2/ThreadManagementService.ts";
 import * as Sqlite from "../../../persistence/Sqlite.ts";
+import * as Launches from "../../../tickets/TicketLaunchService.ts";
 import * as Tickets from "../../../tickets/TicketService.ts";
 import * as McpHttpServer from "../../McpHttpServer.ts";
 import * as McpInvocationContext from "../../McpInvocationContext.ts";
@@ -73,7 +74,24 @@ const makeHarness = Effect.fn("makeTicketToolkitHarness")(function* (
     [CALLER, caller],
     [WORK, work],
   ]);
+  const starts: import("@t3tools/contracts").TicketStartInput[] = [];
   const dependencies = Layer.mergeAll(
+    Layer.mock(Launches.TicketLaunchService)({
+      start: (input) =>
+        Effect.sync(() => {
+          starts.push(input);
+          return {
+            status: "launched" as const,
+            threadId: input.threadId,
+            projectId: PROJECT,
+            modelSelection: caller.modelSelection,
+            interactionMode:
+              input.mode === undefined || input.mode === "plan"
+                ? ("plan" as const)
+                : ("default" as const),
+          };
+        }),
+    }),
     Layer.mock(Projects.ProjectStoreV2)({
       get: (id) => Effect.succeedSome(project(id)),
       list: (input) => Effect.succeed((input?.projectIds ?? [PROJECT, OTHER_PROJECT]).map(project)),
@@ -122,7 +140,7 @@ const makeHarness = Effect.fn("makeTicketToolkitHarness")(function* (
     );
   const seed = (input: TicketUpsertInput) =>
     tickets.upsert({ projectId: PROJECT, ...input }).pipe(Effect.map(({ ticket }) => ticket));
-  return { call, tickets, shells, seed };
+  return { call, tickets, shells, seed, starts };
 });
 
 it.effect("work records list a null legacy issue field", () =>
@@ -486,4 +504,50 @@ it.effect(
       );
       expect(denied).toMatchObject({ code: "capability_denied" });
     }),
+);
+
+it.effect("ticket start defaults to plan and caller-scoped retry ids", () =>
+  Effect.gen(function* () {
+    const h = yield* makeHarness();
+    const ticket = yield* h.seed({ title: "Start" });
+    const result = yield* h.call("t3_ticket_start", {
+      ticket: ticket.id,
+      clientRequestId: "stable",
+    });
+    yield* h.call("t3_ticket_start", { ticket: ticket.id, clientRequestId: "stable" });
+    expect(result.interactionMode).toBe("plan");
+    expect(result.threadUrl).toBe(`t3-thread://v1/${result.threadId}`);
+    expect(h.starts[0]?.commandId).toBe(h.starts[1]?.commandId);
+    expect(h.starts[0]?.threadId).toBe(h.starts[1]?.threadId);
+    yield* h.call(
+      "t3_ticket_start",
+      { ticket: ticket.id, clientRequestId: "stable" },
+      { ...outside, requestNamespace: "other-client" },
+    );
+    expect(h.starts[2]?.threadId).not.toBe(h.starts[0]?.threadId);
+  }),
+);
+it.effect("ticket start refuses mode escalation and read-only callers before launching", () =>
+  Effect.gen(function* () {
+    const caller = {
+      ...callerShell,
+      runtimeMode: "approval-required" as const,
+      interactionMode: "plan" as const,
+    };
+    const h = yield* makeHarness(caller);
+    const ticket = yield* h.seed({ title: "Limits" });
+    expect(yield* h.call("t3_ticket_start", { ticket: ticket.id, mode: "default" })).toMatchObject({
+      code: "interaction_mode_escalation_denied",
+    });
+    expect(yield* h.call("t3_ticket_start", { ticket: ticket.id, mode: "goal" })).toMatchObject({
+      code: "interaction_mode_escalation_denied",
+    });
+    expect(
+      yield* h.call("t3_ticket_start", { ticket: ticket.id, runtimeMode: "full-access" }),
+    ).toMatchObject({ code: "runtime_mode_escalation_denied" });
+    expect(yield* h.call("t3_ticket_start", { ticket: ticket.id }, readOnly)).toMatchObject({
+      code: "capability_denied",
+    });
+    expect(h.starts).toEqual([]);
+  }),
 );

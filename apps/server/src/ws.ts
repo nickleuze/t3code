@@ -124,6 +124,7 @@ import * as ProviderSessionManager from "./orchestration-v2/ProviderSessionManag
 import * as ThreadLaunchService from "./orchestration-v2/ThreadLaunchService.ts";
 import * as ThreadMessageIntake from "./orchestration-v2/ThreadMessageIntake.ts";
 import * as IdAllocator from "@t3tools/provider-core/server/IdAllocator";
+import * as TicketLaunchService from "./tickets/TicketLaunchService.ts";
 import * as Tickets from "./tickets/TicketService.ts";
 import * as ScheduledTasks from "./scheduledTasks/ScheduledTaskService.ts";
 import * as SecretRequests from "./secrets/SecretRequests.ts";
@@ -548,7 +549,9 @@ const ServerTicketRecordRpcGroup = TicketRecordRpcGroup.middleware(RpcInstrument
 const layerTicketRecordRpc = ServerTicketRecordRpcGroup.toLayer(
   Effect.gen(function* () {
     const tickets = yield* Tickets.TicketService;
+    const ticketLaunches = yield* TicketLaunchService.TicketLaunchService;
     return {
+      [WS_METHODS.ticketsStart]: (input) => ticketLaunches.start(input),
       [WS_METHODS.ticketsAction]: (input) => tickets.action(input),
       [WS_METHODS.ticketsSetupCheck]: () => tickets.setupCheck,
       [WS_METHODS.ticketsMachineLabel]: (input) => tickets.machineLabel(input.label),

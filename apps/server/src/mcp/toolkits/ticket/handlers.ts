@@ -10,6 +10,7 @@ import { deriveTicketStatus } from "@t3tools/shared/ticket";
 import * as Effect from "effect/Effect";
 
 import * as ProjectStore from "../../../orchestration-v2/ProjectStore.ts";
+import * as Launches from "../../../tickets/TicketLaunchService.ts";
 import * as Tickets from "../../../tickets/TicketService.ts";
 import * as McpToolAccess from "../../McpToolAccess.ts";
 import { newCommandId, readCaller, unavailable } from "../../threadAccess.ts";
@@ -93,6 +94,50 @@ const summary = Effect.fn("mcp.ticketSummary")(function* (ticket: Ticket) {
 });
 
 export const layer = McpToolAccess.toLayer(TicketToolkit, {
+  t3_ticket_start: McpToolAccess.startsThreads(
+    (input) => ({
+      runtimeMode: input.runtimeMode,
+      interactionMode: input.mode === undefined || input.mode === "plan" ? "plan" : "default",
+    }),
+    (input, limits) =>
+      Effect.gen(function* () {
+        const { scope, caller } = yield* readCaller();
+        const tickets = yield* Tickets.TicketService;
+        const launches = yield* Launches.TicketLaunchService;
+        const commandId =
+          input.clientRequestId === undefined
+            ? yield* newCommandId()
+            : CommandId.make(
+                `mcp:${encodeURIComponent(scope.requestNamespace)}:ticket-start:${encodeURIComponent(input.clientRequestId)}`,
+              );
+        const { ticket, clientRequestId: _requestId, ...fields } = input;
+        const result = yield* launches
+          .start(
+            {
+              ...fields,
+              ticketId: ticket,
+              commandId,
+              threadId: ThreadId.make(commandId),
+              creationSource: "mcp",
+            },
+            {
+              limits,
+              by: tickets.author({
+                actor: "agent",
+                ...(caller ? { thread: caller.id, model: caller.modelSelection.model } : {}),
+              }),
+            },
+          )
+          .pipe(
+            Effect.mapError((error) =>
+              error._tag === "OrchestratorMcpFailure"
+                ? error
+                : new OrchestratorMcpFailure({ code: "invalid_request", message: error.message }),
+            ),
+          );
+        return { ...result, threadUrl: `t3-thread://v1/${result.threadId}` };
+      }),
+  ),
   t3_ticket_get: McpToolAccess.reads((input) =>
     Effect.gen(function* () {
       const tickets = yield* Tickets.TicketService;

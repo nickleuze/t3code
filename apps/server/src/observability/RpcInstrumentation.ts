@@ -92,6 +92,7 @@ const RPC_AGGREGATES = {
   [WS_METHODS.ticketsSyncRefresh]: "tickets",
   [WS_METHODS.ticketsProjectsList]: "tickets",
   [WS_METHODS.ticketsProjectsMap]: "tickets",
+  [WS_METHODS.ticketsStart]: "tickets",
   [WS_METHODS.ticketsList]: "tickets",
   [WS_METHODS.ticketsSubscribe]: "tickets",
   [WS_METHODS.ticketsUpsert]: "tickets",

@@ -1,6 +1,8 @@
 import * as Orchestrator from "../../../orchestration-v2/Orchestrator.ts";
 import * as ProjectionStore from "../../../orchestration-v2/ProjectionStore.ts";
 import * as ProjectStore from "../../../orchestration-v2/ProjectStore.ts";
+import * as Defaults from "../../../project/ProjectLaunchDefaults.ts";
+import * as Launches from "../../../tickets/TicketLaunchService.ts";
 import * as TicketService from "../../../tickets/TicketService.ts";
 import * as DeviceService from "../../../device/DeviceService.ts";
 import * as ServerConfig from "../../../config.ts";
@@ -37,6 +39,8 @@ import * as PreviewAutomationBroker from "../../PreviewAutomationBroker.ts";
 import * as PreviewBrowser from "../../../preview/PreviewBrowser.ts";
 
 const layerStubServices = Layer.mergeAll(
+  Layer.mock(Defaults.ProjectLaunchDefaults)({}),
+  Layer.mock(Launches.TicketLaunchService)({}),
   Layer.mock(Orchestrator.OrchestratorV2)({}),
   Layer.mock(ProjectionStore.ProjectionStoreV2)({}),
   Layer.mock(ProjectStore.ProjectStoreV2)({}),
