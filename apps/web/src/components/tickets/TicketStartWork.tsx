@@ -1,31 +1,23 @@
-import {
-  CommandId,
-  ProjectId,
-  ThreadId,
-  type EnvironmentId,
-  type TicketStartInput,
-  type TicketStartMode,
-} from "@t3tools/contracts";
+import type { EnvironmentId, TicketStartMode, ThreadId } from "@t3tools/contracts";
 import type { EnvironmentTicket } from "@t3tools/client-runtime/state/ticket-board";
-import { squashAtomCommandFailure } from "@t3tools/client-runtime/state/runtime";
 import { useNavigate } from "@tanstack/react-router";
 import { ChevronDownIcon, LoaderCircleIcon } from "lucide-react";
-import { useRef, useState } from "react";
-import { randomUUID } from "../../lib/utils";
+import { useState } from "react";
 import { useProjects, useThreadShells } from "../../state/entities";
-import { ticketEnvironment, useTicketWriteAllowed } from "../../state/tickets";
-import { useAtomCommand } from "../../state/use-atom-command";
+import { useTicketWriteAllowed } from "../../state/tickets";
 import { useMediaQuery } from "../../hooks/useMediaQuery";
 import { Button } from "../ui/button";
 import { Menu, MenuTrigger, MenuPopup, MenuItem } from "../ui/menu";
 import { Popover, PopoverTrigger, PopoverPopup } from "../ui/popover";
-import { toastManager } from "../ui/toast";
 import { resumeTicketLinks } from "./ticketRecord.logic";
 import { useTicketConnections } from "./useTicketConnections";
 
+import { useTicketLaunch } from "./useTicketLaunch";
+import type { TicketLaunchRequest } from "./ticketStart.logic";
+
 export function TicketStartWork({ entry }: { entry: EnvironmentTicket }) {
   const { environmentId, ticket } = entry;
-  const { machine } = useTicketConnections(entry);
+  const { machine, machines } = useTicketConnections(entry);
   const navigate = useNavigate();
   const canWrite = useTicketWriteAllowed(environmentId);
   const narrow = useMediaQuery("(max-width: 480px)");
@@ -41,103 +33,34 @@ export function TicketStartWork({ entry }: { entry: EnvironmentTicket }) {
         .map((s) => s.id),
     ),
   );
-  const projects = useProjects().filter((p) => p.environmentId === environmentId);
-  const project = projects.find((p) => p.id === ticket.projectId);
-  const [pickerMode, setPickerMode] = useState<TicketStartMode | null>(null);
-  const [busy, setBusy] = useState(false);
-  const submitting = useRef(false);
-  const pending = useRef<{ environmentId: EnvironmentId; input: TicketStartInput } | null>(null);
-  const startTicket = useAtomCommand(ticketEnvironment.startTicket, { reportFailure: false });
+  const allProjects = useProjects();
+  const [picker, setPicker] = useState<TicketLaunchRequest | null>(null);
+  const { busy, launch } = useTicketLaunch(setPicker);
+  const projects = allProjects.filter(
+    (p) => p.environmentId === (picker?.environmentId ?? environmentId),
+  );
   const open = (targetEnvironmentId: EnvironmentId, threadId: ThreadId) =>
     void navigate({
       to: "/$environmentId/$threadId",
       params: { environmentId: targetEnvironmentId, threadId },
     });
-  // Target is explicit so the other-machine entry point can use the same call.
-  const launch = async (
-    targetEnvironmentId: EnvironmentId,
-    mode: TicketStartMode,
-    projectId?: ProjectId,
-  ) => {
-    if (!canWrite || submitting.current) return;
-    const request = pending.current ?? {
+  const start = (mode: TicketStartMode, targetEnvironmentId = environmentId, label?: string) => {
+    if (busy) return;
+    setPicker(null);
+    void launch({
       environmentId: targetEnvironmentId,
-      input: {
-        ticketId: ticket.id,
-        threadId: ThreadId.make(randomUUID()),
-        commandId: CommandId.make(randomUUID()),
-        mode,
-        ...(projectId ? { projectId } : {}),
-        creationSource: "web" as const,
-      },
-    };
-    pending.current = request;
-    submitting.current = true;
-    setBusy(true);
-    setPickerMode(null);
-    try {
-      const result = await startTicket(request);
-      if (result._tag === "Success") {
-        pending.current = null;
-        const toastId = toastManager.add({
-          type: "success",
-          title:
-            result.value.status === "already_active"
-              ? `Already active: ${ticket.title}`
-              : `Launched ${ticket.title}`,
-          actionProps: {
-            children: "Open",
-            onClick: () => {
-              toastManager.close(toastId);
-              open(request.environmentId, result.value.threadId);
-            },
-          },
-        });
-      } else {
-        const error = squashAtomCommandFailure(result);
-        if (
-          error &&
-          typeof error === "object" &&
-          "_tag" in error &&
-          error._tag === "TicketLaunchNeedsProject"
-        ) {
-          pending.current = null;
-          setPickerMode(mode);
-          return;
-        }
-        const toastId = toastManager.add({
-          type: "error",
-          title: "Launch was not confirmed",
-          description: "Retry safely uses the same thread and command.",
-          actionProps: {
-            children: "Retry",
-            onClick: () => {
-              toastManager.close(toastId);
-              void launch(
-                request.environmentId,
-                request.input.mode ?? "plan",
-                request.input.projectId,
-              );
-            },
-          },
-        });
-      }
-    } finally {
-      submitting.current = false;
-      setBusy(false);
-    }
-  };
-  const start = (mode: TicketStartMode) => {
-    if (busy || !canWrite) return;
-    if (pending.current || project) void launch(environmentId, mode);
-    else setPickerMode(mode);
+      ...(label ? { label } : {}),
+      ticketId: ticket.id,
+      title: ticket.title,
+      mode,
+    });
   };
   return (
     <div className="flex items-center gap-1">
       <Popover
-        open={pickerMode !== null}
+        open={picker !== null}
         onOpenChange={(value) => {
-          if (!value) setPickerMode(null);
+          if (!value) setPicker(null);
         }}
       >
         <PopoverTrigger
@@ -165,7 +88,22 @@ export function TicketStartWork({ entry }: { entry: EnvironmentTicket }) {
                   key={p.id}
                   size={narrow ? "touch" : "default"}
                   variant="outline"
-                  onClick={() => void launch(environmentId, pickerMode ?? "plan", p.id)}
+                  onClick={() => {
+                    if (!picker) return;
+                    const request = picker;
+                    setPicker(null);
+                    void launch({
+                      environmentId: request.environmentId,
+                      label:
+                        [...machines.values()].find(
+                          (target) => target.environmentId === request.environmentId,
+                        )?.label ?? "this machine",
+                      ticketId: ticket.id,
+                      title: ticket.title,
+                      mode: request.input.mode ?? "plan",
+                      projectId: p.id,
+                    });
+                  }}
                 >
                   {p.title}
                 </Button>
@@ -183,7 +121,7 @@ export function TicketStartWork({ entry }: { entry: EnvironmentTicket }) {
               size={narrow ? "icon-touch" : "icon-xs"}
               variant="outline"
               aria-label="Launch options"
-              disabled={busy || !canWrite}
+              disabled={busy}
             />
           }
         >
@@ -203,14 +141,56 @@ export function TicketStartWork({ entry }: { entry: EnvironmentTicket }) {
                 link.threadId}
             </MenuItem>
           ))}
-          <MenuItem density={narrow ? "phone" : "default"} onClick={() => start("default")}>
+          <MenuItem
+            disabled={!canWrite}
+            density={narrow ? "phone" : "default"}
+            onClick={() => start("default")}
+          >
             Launch without planning
           </MenuItem>
-          <MenuItem density={narrow ? "phone" : "default"} onClick={() => start("goal")}>
+          <MenuItem
+            disabled={!canWrite}
+            density={narrow ? "phone" : "default"}
+            onClick={() => start("goal")}
+          >
             Launch as goal
           </MenuItem>
+          {[...machines.values()]
+            .filter((target) => target.environmentId !== environmentId)
+            .map((target) => (
+              <RemoteLaunchItem
+                key={target.environmentId}
+                target={target}
+                busy={busy}
+                narrow={narrow}
+                onLaunch={() => start("plan", target.environmentId, target.label)}
+              />
+            ))}
         </MenuPopup>
       </Menu>
     </div>
+  );
+}
+
+function RemoteLaunchItem({
+  target,
+  busy,
+  narrow,
+  onLaunch,
+}: {
+  target: { environmentId: EnvironmentId; label: string };
+  busy: boolean;
+  narrow: boolean;
+  onLaunch: () => void;
+}) {
+  const canWrite = useTicketWriteAllowed(target.environmentId);
+  return (
+    <MenuItem
+      disabled={busy || !canWrite}
+      density={narrow ? "phone" : "default"}
+      onClick={onLaunch}
+    >
+      Launch on {target.label}
+    </MenuItem>
   );
 }
