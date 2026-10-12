@@ -18,6 +18,7 @@ import * as Threads from "../orchestration-v2/ThreadManagementService.ts";
 import * as Launches from "../orchestration-v2/ThreadLaunchService.ts";
 import * as Projects from "../project/ProjectService.ts";
 import * as Defaults from "../project/ProjectLaunchDefaults.ts";
+import * as GitWorkflow from "../git/GitWorkflowService.ts";
 import * as Tickets from "./TicketService.ts";
 import * as Start from "./TicketLaunchService.ts";
 import { idleThreadProjection, liveThreadShell } from "../mcp/McpToolAccess.testkit.ts";
@@ -30,13 +31,20 @@ const makeHarness = Effect.gen(function* () {
   const project = {
     id: PROJECT,
     title: "Fixture",
+    workspaceRoot: "/tmp/ticket-fixture",
     defaultModelSelection: template.modelSelection,
     defaultThreadEnvMode: null,
   } as Project;
   let ticketService: Tickets.TicketService["Service"];
   let failure: "reject" | "ambiguous" | undefined;
   let envMode = "worktree";
+  let repository = true;
+  let headCommit = true;
   const dependencies = Layer.mergeAll(
+    Layer.mock(GitWorkflow.GitWorkflowService)({
+      isRepository: () => Effect.succeed(repository),
+      hasCommit: () => Effect.succeed(headCommit),
+    }),
     Layer.mock(Receipts.CommandReceiptStoreV2)({
       getByCommandId: (commandId) =>
         Effect.succeedSome({
@@ -148,6 +156,10 @@ const makeHarness = Effect.gen(function* () {
     },
     setEnvMode: (value: string) => {
       envMode = value;
+    },
+    setGit: (isRepository: boolean, hasCommit = true) => {
+      repository = isRepository;
+      headCommit = hasCommit;
     },
   };
 });
@@ -329,5 +341,18 @@ it.effect("an active goal is active work even while the parent thread is idle", 
     });
     expect((yield* h.launches.start(h.input(ticket.id, "third"))).status).toBe("already_active");
     expect(h.calls.length).toBe(1);
+  }).pipe(Effect.scoped),
+);
+
+it.effect.each([
+  { name: "a non-repository", repository: false, headCommit: false },
+  { name: "a repository without HEAD", repository: true, headCommit: false },
+])("worktree defaults launch $name at the project root", ({ repository, headCommit }) =>
+  Effect.gen(function* () {
+    const h = yield* makeHarness;
+    h.setGit(repository, headCommit);
+    const { ticket } = yield* h.create();
+    yield* h.launches.start(h.input(ticket.id));
+    expect(h.calls[0]?.workspaceStrategy).toEqual({ type: "root" });
   }).pipe(Effect.scoped),
 );

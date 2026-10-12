@@ -349,7 +349,11 @@ export const make = Effect.gen(function* () {
         ? ((yield* decodeProjection(rows[0].state_json)) as TicketRecordState)
         : undefined;
       if (!state || (!includeDeleted && state.ticket.deletedAt !== null))
-        return yield* new TicketError({ message: "Ticket not found.", ticketId: id });
+        return yield* new TicketError({
+          message: "Ticket not found.",
+          ticketId: id,
+          reason: "not_found",
+        });
       const key = state.ticket.projectKey;
       const mapping = key
         ? yield* sql<{

@@ -136,6 +136,7 @@ export type TicketDeleteResult = typeof TicketDeleteResult.Type;
 
 export class TicketError extends Schema.TaggedError<TicketError>()("TicketError", {
   message: Schema.String,
+  reason: Schema.optional(Schema.Literal("not_found")),
   ticketId: Schema.optional(TicketId),
   cause: Schema.optional(Schema.Defect()),
 }) {}

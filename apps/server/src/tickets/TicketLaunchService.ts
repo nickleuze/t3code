@@ -19,6 +19,7 @@ import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Projects from "../project/ProjectService.ts";
 import * as Defaults from "../project/ProjectLaunchDefaults.ts";
+import * as GitWorkflow from "../git/GitWorkflowService.ts";
 import * as Threads from "../orchestration-v2/ThreadManagementService.ts";
 import * as Launches from "../orchestration-v2/ThreadLaunchService.ts";
 import {
@@ -58,6 +59,7 @@ const make = Effect.gen(function* () {
   const tickets = yield* Tickets.TicketService;
   const projects = yield* Projects.ProjectService;
   const defaults = yield* Defaults.ProjectLaunchDefaults;
+  const git = yield* GitWorkflow.GitWorkflowService;
   const threads = yield* Threads.ThreadManagementService;
   const launches = yield* Launches.ThreadLaunchService;
   const crypto = yield* Crypto.Crypto;
@@ -72,7 +74,7 @@ const make = Effect.gen(function* () {
         let { ticket } = yield* tickets.get(input.ticketId).pipe(
           Effect.catchTags({
             TicketError: (error) =>
-              error.cause === undefined && error.message === "Ticket not found."
+              error.reason === "not_found"
                 ? Effect.fail<StartError>(new TicketNotFound({ ticketId: input.ticketId }))
                 : Effect.fail<StartError>(error),
           }),
@@ -212,9 +214,17 @@ const make = Effect.gen(function* () {
         )
           .join("")
           .slice(0, 12);
+        // A worktree needs a repository with a commit. Tickets also launch non-coding work.
+        const useWorktree =
+          !firstRun?.workspacePreparation && resolved.envMode !== "local"
+            ? yield* Effect.gen(function* () {
+                if (!(yield* git.isRepository(project.workspaceRoot))) return false;
+                return yield* git.hasCommit({ cwd: project.workspaceRoot, refName: "HEAD" });
+              }).pipe(Effect.mapError(fail("resolve-project")))
+            : false;
         const workspaceStrategy: Launches.ThreadLaunchWorkspaceStrategy =
           firstRun?.workspacePreparation ??
-          (resolved.envMode === "local"
+          (!useWorktree
             ? { type: "root" }
             : {
                 type: "worktree",
