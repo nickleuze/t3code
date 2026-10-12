@@ -40,6 +40,10 @@ const UPDATE_STAGE_LABELS: Record<ServerUpdateStage, string> = {
 };
 const pendingUpdateEnvironmentIds = new Set<EnvironmentId>();
 
+export function hasPendingServerUpdates(): boolean {
+  return pendingUpdateEnvironmentIds.size > 0;
+}
+
 export function serverUpdateStageLabel(stage: ServerUpdateStage): string {
   return UPDATE_STAGE_LABELS[stage];
 }
@@ -65,7 +69,7 @@ type UpdateButtonProps = Pick<ComponentProps<typeof Button>, "variant" | "size" 
   readonly appearance?: "button" | "icon";
 };
 
-function useServerUpdate() {
+export function useServerUpdate() {
   const updateServer = useAtomCommand(serverEnvironment.updateServer, { reportFailure: false });
   return async (target: ServerUpdateTarget, failureTitle = "Server update failed") => {
     const { environmentId, serverLabel, selfUpdate, targetVersion } = target;
@@ -73,7 +77,10 @@ function useServerUpdate() {
       !canUpdateServer(appAtomRegistry.get(environmentSession.sessionStateAtom(environmentId))) ||
       pendingUpdateEnvironmentIds.has(environmentId)
     )
-      return;
+      return {
+        status: "failed" as const,
+        message: "Update access is missing or an update is already running.",
+      };
     pendingUpdateEnvironmentIds.add(environmentId);
     try {
       const result = await updateServer({
@@ -86,7 +93,8 @@ function useServerUpdate() {
         },
       });
       if (result._tag === "Failure") {
-        if (isAtomCommandInterrupted(result)) return;
+        if (isAtomCommandInterrupted(result))
+          return { status: "failed" as const, message: "Server update was interrupted." };
         throw squashAtomCommandFailure(result);
       }
       toastManager.add({
@@ -97,12 +105,14 @@ function useServerUpdate() {
             ? `Desktop app relaunched on ${result.value.targetVersion}.`
             : `Reconnected on t3@${result.value.targetVersion}.`,
       });
+      return { status: "succeeded" as const, targetVersion: result.value.targetVersion };
     } catch (error) {
       toastManager.add({
         type: "error",
         title: failureTitle,
         description: updateFailureMessage(error),
       });
+      return { status: "failed" as const, message: updateFailureMessage(error) };
     } finally {
       pendingUpdateEnvironmentIds.delete(environmentId);
     }

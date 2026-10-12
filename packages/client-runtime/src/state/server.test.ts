@@ -1,5 +1,6 @@
 import {
   EnvironmentId,
+  ServerSelfUpdateError,
   type ServerConfig,
   type ServerConfigStreamEvent,
   type ServerLifecycleWelcomePayload,
@@ -33,6 +34,7 @@ import type { WsRpcProtocolClient } from "../rpc/protocol.ts";
 import type { RpcSession } from "../rpc/session.ts";
 import {
   applyServerWelcomeEvent,
+  desktopUpToDateResult,
   makeEnvironmentServerWelcomeState,
   makeEnvironmentServerConfigState,
   isLegacyUpdateHandoffLoss,
@@ -75,6 +77,26 @@ const TARGET = new PrimaryConnectionTarget({
   label: "Test environment",
   httpBaseUrl: "https://environment.example.test",
   wsBaseUrl: "wss://environment.example.test",
+});
+
+describe("desktop no-op compatibility", () => {
+  it("accepts only the typed up-to-date result for the connected version", () => {
+    const error = new ServerSelfUpdateError({
+      reason: "The T3 Code desktop app on this machine is already up to date on 0.0.45-nick.10.",
+    });
+    expect(desktopUpToDateResult(error, "0.0.45-nick.10")).toEqual({
+      targetVersion: "0.0.45-nick.10",
+      method: "desktop-app",
+    });
+    expect(desktopUpToDateResult(error, "0.0.45-nick.11")).toBeNull();
+    expect(desktopUpToDateResult(new Error(error.reason), "0.0.45-nick.10")).toBeNull();
+    expect(
+      desktopUpToDateResult(
+        new ServerSelfUpdateError({ reason: "feed unreachable" }),
+        "0.0.45-nick.10",
+      ),
+    ).toBeNull();
+  });
 });
 
 function session(client: WsRpcProtocolClient): RpcSession {

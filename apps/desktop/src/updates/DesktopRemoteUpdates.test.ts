@@ -4,8 +4,12 @@ import type {
   DesktopTelemetryCommitDesktopUpdate,
   DesktopTelemetryCancelDesktopUpdate,
   DesktopUpdateStatusReport,
+  ServerLifecycleStreamReadyEvent,
 } from "@t3tools/contracts";
 import * as Deferred from "effect/Deferred";
+import * as Option from "effect/Option";
+import * as Data from "effect/Data";
+import * as Cause from "effect/Cause";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
@@ -14,6 +18,19 @@ import * as Queue from "effect/Queue";
 import * as Ref from "effect/Ref";
 import * as Stream from "effect/Stream";
 import * as TestClock from "effect/testing/TestClock";
+import * as SubscriptionRef from "effect/SubscriptionRef";
+import { RpcClientError } from "effect/rpc";
+import * as Socket from "effect/socket/Socket";
+import {
+  isLegacyUpdateHandoffLoss,
+  runDesktopCommitWithReconnectObserver,
+  waitForDesktopUpdateTarget,
+} from "@t3tools/client-runtime/state/server";
+import {
+  runUpdateAll,
+  type UpdateAllState,
+  type MachineUpdateResult,
+} from "@t3tools/client-runtime/state/updateAllMachines";
 
 import * as ElectronUpdater from "../electron/ElectronUpdater.ts";
 import * as DesktopState from "../app/DesktopState.ts";
@@ -45,6 +62,7 @@ function runRemoteUpdatesTest(
     readonly requests: Queue.Queue<DesktopTelemetryRequestDesktopUpdate>;
     readonly commits: Queue.Queue<DesktopTelemetryCommitDesktopUpdate>;
     readonly cancellations: Queue.Queue<DesktopTelemetryCancelDesktopUpdate>;
+    readonly reportQueue: Queue.Queue<DesktopUpdateStatusReport>;
   }) => Effect.Effect<void, never, DesktopUpdates.DesktopUpdates | DesktopState.DesktopState>,
 ) {
   return Effect.scoped(
@@ -53,6 +71,7 @@ function runRemoteUpdatesTest(
       const commits = yield* Queue.unbounded<DesktopTelemetryCommitDesktopUpdate>();
       const cancellations = yield* Queue.unbounded<DesktopTelemetryCancelDesktopUpdate>();
       const reports: DesktopUpdateStatusReport[] = [];
+      const reportQueue = yield* Queue.unbounded<DesktopUpdateStatusReport>();
       const publisher = DesktopTelemetryPublisher.DesktopTelemetryPublisher.of({
         latest: Effect.succeedNone,
         changes: Stream.empty,
@@ -62,6 +81,7 @@ function runRemoteUpdatesTest(
         publishUpdateReport: (report) =>
           Effect.sync(() => {
             reports.push(report);
+            Queue.offerUnsafe(reportQueue, report);
           }),
         updateRequests: Stream.fromQueue(requests),
         updateCommits: Stream.fromQueue(commits),
@@ -74,7 +94,7 @@ function runRemoteUpdatesTest(
         Effect.provideService(DesktopTelemetryPublisher.DesktopTelemetryPublisher, publisher),
       );
       yield* settle;
-      yield* body({ reports, requests, commits, cancellations });
+      yield* body({ reports, requests, commits, cancellations, reportQueue });
     }),
   ).pipe(Effect.provide(Layer.merge(TestClock.layer(), harness.layer)));
 }
@@ -838,4 +858,191 @@ describe("DesktopRemoteUpdates", () => {
       }),
     );
   });
+});
+
+class FakeRemoteUpdateError extends Data.TaggedError("FakeRemoteUpdateError")<{
+  readonly message: string;
+}> {}
+
+describe("update-all with the real remote updater harness", () => {
+  it.effect.each(["reconnect", "old-version", "install-failure", "timeout"] as const)(
+    "blocks local install until a remote terminal result: %s",
+    (scenario) => {
+      let handoff = Effect.void;
+      const harness = makeHarness({
+        quitAndInstall:
+          scenario === "install-failure"
+            ? Effect.fail(
+                new ElectronUpdater.ElectronUpdaterQuitAndInstallError({
+                  channel: "latest",
+                  isSilent: true,
+                  isForceRunAfter: true,
+                  cause: new Error("spawn failed"),
+                }),
+              )
+            : Effect.suspend(() => handoff),
+      });
+      return runRemoteUpdatesTest(
+        harness,
+        ({ reports, reportQueue, requests, commits, cancellations }) =>
+          Effect.gen(function* () {
+            const connections = yield* SubscriptionRef.make({ phase: "connected" });
+            const lost = yield* Deferred.make<void>();
+            const startRemote = yield* Queue.unbounded<void>();
+            const readyEvents = yield* Queue.unbounded<ServerLifecycleStreamReadyEvent>();
+            handoff = SubscriptionRef.set(connections, { phase: "backoff" }).pipe(
+              Effect.andThen(Deferred.succeed(lost, undefined)),
+              Effect.asVoid,
+            );
+            const disconnect = new RpcClientError.RpcClientError({
+              reason: new Socket.SocketCloseError({ code: 1006 }),
+            });
+            const terminal = () =>
+              Stream.fromQueue(reportQueue).pipe(
+                Stream.filter(
+                  (report) => report.requestId === "update-all" && report.outcome !== undefined,
+                ),
+                Stream.runHead,
+                Effect.flatMap(
+                  Option.match({
+                    onNone: () =>
+                      Effect.fail(new FakeRemoteUpdateError({ message: "report stream closed" })),
+                    onSome: Effect.succeed,
+                  }),
+                ),
+              );
+            let resolveRemote!: (result: MachineUpdateResult) => void;
+            const remoteResult = new Promise<MachineUpdateResult>((resolve) => {
+              resolveRemote = resolve;
+            });
+            // Keep the Effect side on the test runtime. The sequencer's adapter is
+            // a promise, matching the web command boundary, and never owns a second runtime.
+            yield* Effect.gen(function* () {
+              yield* Queue.take(startRemote);
+              yield* Queue.offer(requests, request("update-all"));
+              const prepared = yield* terminal();
+              if (prepared.outcome !== "ready-to-install" || !prepared.state.downloadedVersion)
+                return yield* new FakeRemoteUpdateError({
+                  message: prepared.reason ?? "Remote preparation failed.",
+                });
+              const targetVersion = prepared.state.downloadedVersion;
+              const commit = Queue.offer(commits, {
+                version: 1,
+                type: "commitDesktopUpdate",
+                requestId: "update-all",
+              }).pipe(
+                Effect.andThen(
+                  Effect.raceFirst(
+                    Deferred.await(lost).pipe(Effect.andThen(Effect.fail(disconnect))),
+                    terminal().pipe(
+                      Effect.flatMap((report) =>
+                        Effect.fail(
+                          new FakeRemoteUpdateError({
+                            message: report.reason ?? "Remote install failed.",
+                          }),
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+              );
+              const committed = yield* runDesktopCommitWithReconnectObserver(
+                SubscriptionRef.changes(connections),
+                commit,
+              ).pipe(Effect.exit);
+              if (committed._tag === "Failure" && !isLegacyUpdateHandoffLoss(committed.cause))
+                return yield* Effect.failCause(committed.cause);
+              yield* waitForDesktopUpdateTarget(
+                targetVersion,
+                Queue.take(readyEvents),
+                Effect.fail(disconnect),
+                1,
+              );
+              return { status: "succeeded" as const, targetVersion };
+            }).pipe(
+              Effect.onInterrupt(() =>
+                Queue.offer(cancellations, {
+                  version: 1,
+                  type: "cancelDesktopUpdate",
+                  requestId: "update-all",
+                }).pipe(Effect.asVoid),
+              ),
+              Effect.timeout("1 minute"),
+              Effect.matchCauseEffect({
+                onFailure: (cause) =>
+                  Effect.sync(() =>
+                    resolveRemote({ status: "failed", message: String(Cause.squash(cause)) }),
+                  ),
+                onSuccess: (result) => Effect.sync(() => resolveRemote(result)),
+              }),
+              Effect.forkChild,
+            );
+            let localInstalls = 0;
+            let state!: UpdateAllState;
+            const run = runUpdateAll({
+              targets: [{ environmentId: "fake-mini" }],
+              prepareLocal: async () => {},
+              installLocal: async () => {
+                localInstalls += 1;
+              },
+              onState: (next) => {
+                state = next;
+              },
+              updateRemote: () => {
+                Queue.offerUnsafe(startRemote, undefined);
+                return remoteResult;
+              },
+            });
+            yield* settle;
+            assert.equal(localInstalls, 0);
+            if (scenario === "timeout") {
+              yield* TestClock.adjust("1 minute");
+              yield* settle;
+              yield* Effect.promise(() => run);
+              assert.equal(state.remotes["fake-mini"]?.status, "failed");
+              assert.equal(localInstalls, 0);
+              // A late download cannot restart either machine after cancellation.
+              harness.emit("update-downloaded", { version: "1.2.4" });
+              yield* settle;
+              assert.equal(harness.quitAndInstalls(), 0);
+              assert.equal(localInstalls, 0);
+              assert.equal(
+                reports.filter(
+                  (report) =>
+                    report.requestId === "update-all" && report.outcome === "ready-to-install",
+                ).length,
+                0,
+              );
+              return;
+            }
+            harness.emit("update-available", { version: "1.2.4" });
+            yield* settle;
+            harness.emit("update-downloaded", { version: "1.2.4" });
+            yield* settle;
+            assert.equal(harness.quitAndInstalls(), 1);
+            assert.equal(localInstalls, 0);
+            if (scenario !== "install-failure") {
+              yield* SubscriptionRef.set(connections, { phase: "connected" });
+              const ready = {
+                version: 1,
+                sequence: 1,
+                type: "ready",
+                payload: {
+                  at: "2026-10-12T12:00:00.000Z",
+                  environment: { serverVersion: scenario === "old-version" ? "1.2.3" : "1.2.4" },
+                },
+              } as ServerLifecycleStreamReadyEvent;
+              yield* Queue.offer(readyEvents, ready);
+            }
+            yield* settle;
+            yield* Effect.promise(() => run);
+            assert.equal(localInstalls, scenario === "reconnect" ? 1 : 0);
+            assert.equal(
+              state.remotes["fake-mini"]?.status,
+              scenario === "reconnect" ? "succeeded" : "failed",
+            );
+          }),
+      );
+    },
+  );
 });
