@@ -1,3 +1,6 @@
+import { threadEnvironment } from "../../state/threads";
+import { resumeTicketLinks } from "./ticketRecord.logic";
+import { useTicketConnections } from "./useTicketConnections";
 import { useTicketWriteAllowed } from "../../state/tickets";
 import { randomUUID } from "../../lib/utils";
 import { scopeProjectRef } from "@t3tools/client-runtime/environment";
@@ -19,7 +22,7 @@ import { useNewThreadHandler } from "../../hooks/useHandleNewThread";
 import { useEnvironmentSettings } from "../../hooks/useSettings";
 import { useComposerDraftStore } from "../../composerDraftStore";
 import { setPendingTicketDraft } from "../../pendingTicketDrafts";
-import { useProjects, useServerConfigs } from "../../state/entities";
+import { useProjects, useServerConfigs, useThreadShells } from "../../state/entities";
 import { ticketEnvironment } from "../../state/tickets";
 import { useAtomCommand } from "../../state/use-atom-command";
 import { useOrchestrationCommand } from "../../state/use-orchestration-command";
@@ -52,13 +55,34 @@ import { TicketPicker } from "./TicketPicker";
 type StartMode = "draft" | "launch" | "plan" | "goal";
 export function TicketStartWork({ entry }: { entry: EnvironmentTicket }) {
   const { environmentId, ticket } = entry;
+  const { machine } = useTicketConnections(entry);
+  const navigate = useNavigate();
   const canWrite = useTicketWriteAllowed(environmentId);
+  const shells = useThreadShells();
+  const resumable = resumeTicketLinks(
+    ticket.links,
+    machine,
+    new Set(
+      shells
+        .filter(
+          (s) => s.environmentId === environmentId && s.deletedAt === null && s.archivedAt === null,
+        )
+        .map((s) => s.id),
+    ),
+  );
+  const branches = ticket.links
+    .filter((link) => link.role !== "origin")
+    .flatMap(
+      (link) =>
+        shells.find((shell) => shell.environmentId === environmentId && shell.id === link.threadId)
+          ?.source.branch ?? [],
+    );
   const projects = useProjects().filter((p) => p.environmentId === environmentId);
   const project = projects.find((p) => p.id === ticket.projectId);
   const [mode, setMode] = useState<StartMode | null>(null);
   const [busy, setBusy] = useState(false);
   const newThread = useNewThreadHandler();
-  const startDraft = async (target: Ticket, goal: boolean) => {
+  const startDraft = async (target: Ticket) => {
     if (!target.projectId) return;
     setBusy(true);
     try {
@@ -68,10 +92,7 @@ export function TicketStartWork({ entry }: { entry: EnvironmentTicket }) {
       if (!opened) return;
       useComposerDraftStore
         .getState()
-        .setPrompt(
-          opened.draftId,
-          `${goal ? "Make this a T3 goal: " : ""}${ticketStartPrompt(target)}`,
-        );
+        .setPrompt(opened.draftId, ticketStartPrompt(target, branches));
       useComposerDraftStore.getState().setDraftThreadContext(opened.draftId, {
         environmentSelection: "manual",
         loadBalancedEnvironmentId: null,
@@ -94,8 +115,8 @@ export function TicketStartWork({ entry }: { entry: EnvironmentTicket }) {
   const narrow = useMediaQuery("(max-width: 480px)");
   const start = (next: StartMode) => {
     if (busy || !canWrite) return;
-    if (project && (next === "draft" || next === "goal")) {
-      void startDraft(ticket, next === "goal");
+    if (project && next === "draft") {
+      void startDraft(ticket);
       return;
     }
     setMode(next);
@@ -107,9 +128,17 @@ export function TicketStartWork({ entry }: { entry: EnvironmentTicket }) {
           size={narrow ? "touch" : "xs"}
           variant="outline"
           disabled={busy || !canWrite}
-          onClick={() => start("draft")}
+          onClick={() => {
+            const link = resumable[0];
+            if (link)
+              void navigate({
+                to: "/$environmentId/$threadId",
+                params: { environmentId, threadId: link.threadId },
+              });
+            else start("draft");
+          }}
         >
-          Start work
+          {resumable.length ? "Resume" : "Start work"}
         </Button>
         <Menu>
           <MenuTrigger
@@ -125,6 +154,24 @@ export function TicketStartWork({ entry }: { entry: EnvironmentTicket }) {
             <ChevronDownIcon />
           </MenuTrigger>
           <MenuPopup>
+            {resumable.map((link) => (
+              <MenuItem
+                key={link.threadId}
+                density={narrow ? "phone" : "default"}
+                onClick={() =>
+                  void navigate({
+                    to: "/$environmentId/$threadId",
+                    params: { environmentId, threadId: link.threadId },
+                  })
+                }
+              >
+                Resume{" "}
+                {link.title ??
+                  shells.find((s) => s.id === link.threadId && s.environmentId === environmentId)
+                    ?.title ??
+                  link.threadId}
+              </MenuItem>
+            ))}
             <MenuItem density={narrow ? "phone" : "default"} onClick={() => start("draft")}>
               Draft
             </MenuItem>
@@ -147,7 +194,7 @@ export function TicketStartWork({ entry }: { entry: EnvironmentTicket }) {
           onClose={() => setMode(null)}
           onDraft={async (target) => {
             setMode(null);
-            await startDraft(target, mode === "goal");
+            await startDraft(target);
           }}
         />
       ) : null}
@@ -168,6 +215,14 @@ function TicketStartDialog({
   const narrow = useMediaQuery("(max-width: 480px)");
   const { environmentId, ticket } = entry;
   const canWrite = useTicketWriteAllowed(environmentId);
+  const shells = useThreadShells();
+  const branches = ticket.links
+    .filter((link) => link.role !== "origin")
+    .flatMap(
+      (link) =>
+        shells.find((shell) => shell.environmentId === environmentId && shell.id === link.threadId)
+          ?.source.branch ?? [],
+    );
   const projects = useProjects().filter((p) => p.environmentId === environmentId);
   const [projectId, setProjectId] = useState<string>(
     projects.find((p) => p.id === ticket.projectId)?.id ?? projects[0]?.id ?? "none",
@@ -205,6 +260,7 @@ function TicketStartDialog({
   const [launchInput, setLaunchInput] = useState<
     (OrchestrationV2ThreadLaunchInput & { threadId: ThreadId }) | null
   >(null);
+  const [goalObjective, setGoalObjective] = useState<string | null>(null);
   const defaultRuntimeMode = resolveProjectSettings(settings, project?.id ?? null, project).settings
     .defaultRuntimeMode;
   const supportedModes = entries.find((e) => e.instanceId === selection?.instanceId)?.snapshot
@@ -216,11 +272,13 @@ function TicketStartDialog({
     ? defaultRuntimeMode
     : (compatibleModes[0] ?? defaultRuntimeMode);
   const upsert = useAtomCommand(ticketEnvironment.upsertTicket);
+  const map = useAtomCommand(ticketEnvironment.projectsMap);
   const launch = useOrchestrationCommand(ticketEnvironment.launchTicketThread);
   const link = useAtomCommand(ticketEnvironment.linkTicket);
   const unlink = useAtomCommand(ticketEnvironment.unlinkTicket);
   const navigate = useNavigate();
-  const isDraft = mode === "draft" || mode === "goal";
+  const setGoal = useAtomCommand(threadEnvironment.setGoal);
+  const isDraft = mode === "draft";
   const submit = async () => {
     if (!canWrite || !project || submitting.current || (!isDraft && !selection)) return;
     submitting.current = true;
@@ -228,7 +286,21 @@ function TicketStartDialog({
     setError(null);
     try {
       let target = ticket;
-      if (ticket.projectId !== project.id) {
+      if (ticket.projectKey && ticket.projectId !== project.id) {
+        const mapped = await map({
+          environmentId,
+          input: {
+            key: ticket.projectKey,
+            projectId: ProjectId.make(project.id),
+            displayName: ticket.projectName ?? ticket.projectKey,
+          },
+        });
+        if (mapped._tag !== "Success") {
+          setError("Could not map the project.");
+          return;
+        }
+        target = { ...ticket, projectId: ProjectId.make(project.id) };
+      } else if (ticket.projectId !== project.id) {
         const patched = await upsert({
           environmentId,
           input: { id: ticket.id, requireExisting: true, projectId: ProjectId.make(project.id) },
@@ -256,10 +328,14 @@ function TicketStartDialog({
           workspace === "worktree"
             ? { type: "worktree" as const, baseRef: baseRef.trim() || "HEAD" }
             : { type: "root" as const },
-        initialMessage: { text: ticketStartPrompt(target), attachments: [] },
+        ...(mode === "goal"
+          ? {}
+          : { initialMessage: { text: ticketStartPrompt(target, branches), attachments: [] } }),
         creationSource: "web" as const,
       };
       setLaunchInput(input);
+      const objective = goalObjective ?? ticketStartPrompt(target, branches);
+      if (mode === "goal") setGoalObjective(objective);
       const attempt = await launchLinkedTicketThread({
         environmentId,
         ticketId: ticket.id,
@@ -279,6 +355,21 @@ function TicketStartDialog({
         return;
       }
       const threadId = input.threadId;
+      if (mode === "goal") {
+        const goal = await setGoal({
+          environmentId,
+          input: {
+            type: "thread.goal.set",
+            threadId,
+            commandId: CommandId.make(`ticket-goal:${input.commandId}`),
+            objective,
+          },
+        });
+        if (goal._tag !== "Success") {
+          setError("Goal start was not confirmed. Retry uses the same goal and thread.");
+          return;
+        }
+      }
       onClose();
       await navigate({ to: "/$environmentId/$threadId", params: { environmentId, threadId } });
     } finally {
@@ -296,7 +387,13 @@ function TicketStartDialog({
       <DialogPopup variant="mobile-fullscreen">
         <DialogHeader>
           <DialogTitle>
-            {isDraft ? "Choose a project" : mode === "plan" ? "Plan first" : "Launch now"}
+            {isDraft
+              ? "Choose a project"
+              : mode === "plan"
+                ? "Plan first"
+                : mode === "goal"
+                  ? "As goal"
+                  : "Launch now"}
           </DialogTitle>
           <DialogDescription>{ticket.title}</DialogDescription>
         </DialogHeader>
