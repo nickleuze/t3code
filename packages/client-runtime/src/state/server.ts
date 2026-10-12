@@ -6,6 +6,7 @@ import {
   type ServerLifecycleStreamReadyEvent,
   type ServerSelfUpdateProgressEvent,
   type ServerSelfUpdateResult,
+  ServerSelfUpdateError,
   WS_METHODS,
 } from "@t3tools/contracts";
 import * as Cause from "effect/Cause";
@@ -131,6 +132,21 @@ export class ServerUpdateTerminalError extends Schema.TaggedError<ServerUpdateTe
 // Covers the 120-second trial deadline and a final restart of the previous
 // version when the trial rolls back.
 const SERVER_UPDATE_RESUME_TIMEOUT = Duration.minutes(4);
+
+/** Older desktop hosts report a no-op as an RPC error. Recognize only the
+ * exact typed outcome for the connected version, then verify it via lifecycle
+ * ready like any tokenless result. No updater protocol change is needed.
+ */
+export function desktopUpToDateResult(
+  error: unknown,
+  currentVersion: string,
+): ServerSelfUpdateResult | null {
+  return Schema.is(ServerSelfUpdateError)(error) &&
+    error.reason ===
+      `The T3 Code desktop app on this machine is already up to date on ${currentVersion}.`
+    ? { targetVersion: currentVersion, method: "desktop-app" }
+    : null;
+}
 
 export function matchesServerUpdateReadyEvent(
   result: ServerSelfUpdateResult,
@@ -825,7 +841,18 @@ export function createServerEnvironmentAtoms<R, E>(
               targetVersion,
             });
             return updateResult;
-          }),
+          }).pipe(
+            Effect.catch((error) => {
+              const currentConfig = atomRegistry.get(configValueAtom(target.environmentId));
+              const noOp =
+                currentConfig?.environment.capabilities.serverSelfUpdate === "desktop-managed"
+                  ? desktopUpToDateResult(error, fromVersion)
+                  : null;
+              if (!noOp) return Effect.fail(error);
+              targetVersion = noOp.targetVersion;
+              return Effect.succeed(noOp);
+            }),
+          ),
         );
 
         // The update restart is intentional and the server stays unreachable
@@ -889,6 +916,9 @@ export function createServerEnvironmentAtoms<R, E>(
         atomRegistry.set(stateAtom, IDLE_SERVER_UPDATE_STATE);
         return result;
       }).pipe(
+        // Bound the entire attempt, including a stalled prepare RPC. Interrupt
+        // its effect before returning failure so no late commit can outlive it.
+        Effect.timeout("30 minutes"),
         Effect.onExit((exit) =>
           Effect.sync(() => {
             if (Exit.isSuccess(exit)) {

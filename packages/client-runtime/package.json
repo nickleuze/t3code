@@ -235,6 +235,10 @@
       "types": "./src/state/server.ts",
       "default": "./src/state/server.ts"
     },
+    "./state/updateAllMachines": {
+      "types": "./src/state/updateAllMachines.ts",
+      "default": "./src/state/updateAllMachines.ts"
+    },
     "./state/outdatedServerUpdate": {
       "types": "./src/state/outdatedServerUpdate.ts",
       "default": "./src/state/outdatedServerUpdate.ts"

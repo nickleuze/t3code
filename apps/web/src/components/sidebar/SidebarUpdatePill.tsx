@@ -5,21 +5,18 @@ import { flushSync } from "react-dom";
 import { isElectron } from "../../env";
 import { useMediaQuery } from "../../hooks/useMediaQuery";
 import { cn } from "../../lib/utils";
-import { ensureLocalApi } from "../../localApi";
+import { useUpdateAllMachines } from "../../hooks/useUpdateAllMachines";
+import { Button } from "../ui/button";
 import { useDesktopUpdateState } from "../../state/desktopUpdate";
 import { stackedThreadToast, toastManager } from "../ui/toast";
 import {
   canCheckForUpdate,
   getArm64IntelBuildWarningDescription,
-  getDesktopUpdateActionError,
   getDesktopUpdateButtonTooltip,
-  getDesktopUpdateInstallConfirmationMessage,
   isDesktopUpdateButtonDisabled,
   resolveDesktopUpdateButtonAction,
   shouldShowArm64IntelBuildWarning,
-  shouldToastDesktopUpdateActionResult,
 } from "../desktopUpdate.logic";
-import { showDesktopUpdateDownloadedToast } from "../desktopUpdate.toast";
 import { Alert, AlertDescription, AlertTitle } from "../ui/alert";
 import { Popover, PopoverCreateHandle, PopoverPopup, PopoverTrigger } from "../ui/popover";
 import { SidebarMenuItem } from "../ui/sidebar";
@@ -112,8 +109,72 @@ export function SidebarUpdatePill() {
   return isElectron ? <SidebarUpdateControl /> : null;
 }
 
+export function SidebarMachineUpdateDetails({
+  machines,
+  state,
+  tooltip,
+}: {
+  readonly machines: ReturnType<typeof useUpdateAllMachines>;
+  readonly state: DesktopUpdateState | null;
+  readonly tooltip: string;
+}) {
+  return (
+    <div className="flex max-w-80 flex-col gap-2 text-xs">
+      <p className="font-medium">{tooltip}</p>
+      {machines.hasLocalUpdate && state ? (
+        <p>
+          This Mac: {state.currentVersion} → {state.downloadedVersion ?? state.availableVersion} (
+          {machines.run?.local ?? state.status})
+        </p>
+      ) : null}
+      {machines.targets.map((target) => {
+        const result = machines.run?.remotes[target.environmentId];
+        return (
+          <div key={target.environmentId}>
+            <p>
+              {target.serverLabel}: {target.fromVersion} →{" "}
+              {result?.status === "succeeded" ? result.targetVersion : target.targetVersion} (
+              {result?.status ?? "available"})
+            </p>
+            {result?.status === "failed" ? (
+              <div role="alert">
+                <p>{result.message}</p>
+                <Button
+                  size="xs"
+                  variant="outline"
+                  disabled={machines.pending}
+                  onClick={() => void machines.start(target.environmentId)}
+                >
+                  Retry {target.serverLabel}
+                </Button>
+              </div>
+            ) : null}
+          </div>
+        );
+      })}
+      {machines.run?.localError ? <p role="alert">{machines.run.localError}</p> : null}
+      {machines.hasLocalUpdate &&
+      machines.run &&
+      (machines.run.local === "failed" ||
+        Object.values(machines.run.remotes).some((remote) => remote.status === "failed")) ? (
+        <Button
+          size="xs"
+          variant="outline"
+          disabled={machines.pending}
+          onClick={() => void machines.start(undefined, true)}
+        >
+          Install on this Mac only
+        </Button>
+      ) : null}
+      <p>Remote update feeds decide their installed versions.</p>
+    </div>
+  );
+}
+
 function SidebarUpdateControl() {
   const state = useDesktopUpdateState();
+  const machines = useUpdateAllMachines(state);
+  const hasMachineDetails = machines.targets.length > 0 || machines.run !== null;
   const [isActionPending, setIsActionPending] = useState(false);
   const [checkAnimationKey, setCheckAnimationKey] = useState(0);
   const [isCheckAnimationLatched, setIsCheckAnimationLatched] = useState(false);
@@ -143,23 +204,29 @@ function SidebarUpdateControl() {
     isDownloading,
     showCheckIcon,
   });
-  const tooltip = showUpdateDetails
-    ? state
-      ? getDesktopUpdateButtonTooltip(state)
-      : "Update available"
+  const tooltip = machines.pending
+    ? "Updating machines…"
+    : machines.run &&
+        Object.values(machines.run.remotes).some((remote) => remote.status === "failed")
+      ? "Machine update failed"
+      : (machines.label ??
+        (showUpdateDetails
+          ? state
+            ? getDesktopUpdateButtonTooltip(state)
+            : "Update available"
+          : showCheckIcon
+            ? "Checking for updates…"
+            : "Check for updates"));
+  const disabled = hasMachineDetails
+    ? machines.pending
     : showCheckIcon
-      ? "Checking for updates…"
-      : "Check for updates";
-  const disabled = showCheckIcon
-    ? true
-    : showUpdateDetails
-      ? isDesktopUpdateButtonDisabled(state)
-      : !canCheckForUpdate(state);
-  const isInteractionDisabled = disabled || isActionPending;
-  const showReleaseNotesPopover = shouldUseSidebarUpdateReleaseNotesPopover(
-    showUpdateDetails,
-    state,
-  );
+      ? true
+      : showUpdateDetails
+        ? isDesktopUpdateButtonDisabled(state)
+        : !canCheckForUpdate(state);
+  const isInteractionDisabled = disabled || isActionPending || machines.pending;
+  const showReleaseNotesPopover =
+    hasMachineDetails || shouldUseSidebarUpdateReleaseNotesPopover(showUpdateDetails, state);
 
   useEffect(() => {
     if (!showReleaseNotesPopover) {
@@ -175,87 +242,14 @@ function SidebarUpdateControl() {
 
   const handleAction = useCallback(async () => {
     const bridge = window.desktopBridge;
-    if (!bridge || !state) return;
+    if (!bridge || (!state && !hasMachineDetails)) return;
     if (isInteractionDisabled) return;
 
     setIsActionPending(true);
 
-    if (action === "download") {
-      void bridge
-        .downloadUpdate()
-        .then((result) => {
-          if (result.completed) {
-            showDesktopUpdateDownloadedToast(bridge, result.state);
-          }
-          if (!shouldToastDesktopUpdateActionResult(result)) return;
-          const actionError = getDesktopUpdateActionError(result);
-          if (!actionError) return;
-          toastManager.add(
-            stackedThreadToast({
-              type: "error",
-              title: "Could not download update",
-              description: actionError,
-            }),
-          );
-        })
-        .catch((error) => {
-          toastManager.add(
-            stackedThreadToast({
-              type: "error",
-              title: "Could not start update download",
-              description: error instanceof Error ? error.message : "An unexpected error occurred.",
-            }),
-          );
-        })
-        .finally(() => setIsActionPending(false));
-      return;
-    }
-
-    if (action === "install") {
-      let confirmed = false;
-      try {
-        confirmed = await ensureLocalApi().dialogs.confirm(
-          getDesktopUpdateInstallConfirmationMessage(state),
-        );
-      } catch (error) {
-        setIsActionPending(false);
-        toastManager.add(
-          stackedThreadToast({
-            type: "error",
-            title: "Could not confirm update",
-            description: error instanceof Error ? error.message : "Update confirmation failed.",
-          }),
-        );
-        return;
-      }
-      if (!confirmed) {
-        setIsActionPending(false);
-        return;
-      }
-      void bridge
-        .installUpdate()
-        .then((result) => {
-          if (!shouldToastDesktopUpdateActionResult(result)) return;
-          const actionError = getDesktopUpdateActionError(result);
-          if (!actionError) return;
-          toastManager.add(
-            stackedThreadToast({
-              type: "error",
-              title: "Could not install update",
-              description: actionError,
-            }),
-          );
-        })
-        .catch((error) => {
-          toastManager.add(
-            stackedThreadToast({
-              type: "error",
-              title: "Could not install update",
-              description: error instanceof Error ? error.message : "An unexpected error occurred.",
-            }),
-          );
-        })
-        .finally(() => setIsActionPending(false));
+    if (action !== "none" || isDownloading || hasMachineDetails) {
+      setIsActionPending(false);
+      await machines.start();
       return;
     }
 
@@ -286,7 +280,15 @@ function SidebarUpdateControl() {
         );
       })
       .finally(() => setIsActionPending(false));
-  }, [action, isInteractionDisabled, prefersReducedMotion, state]);
+  }, [
+    action,
+    isDownloading,
+    hasMachineDetails,
+    isInteractionDisabled,
+    machines,
+    prefersReducedMotion,
+    state,
+  ]);
 
   const handleCheckAnimationIteration = useCallback(() => {
     setIsCheckAnimationLatched(
@@ -305,7 +307,7 @@ function SidebarUpdateControl() {
       className={cn(
         "inline-flex size-8 items-center justify-center rounded-full outline-hidden ring-ring transition-colors focus-visible:ring-2 focus-visible:ring-inset",
         isInteractionDisabled ? "cursor-not-allowed" : "cursor-pointer",
-        showUpdateIconState
+        showUpdateIconState || hasMachineDetails
           ? cn(
               "bg-sidebar-control-surface text-sidebar-foreground",
               !isInteractionDisabled && "hover:bg-sidebar-row-hover",
@@ -342,7 +344,7 @@ function SidebarUpdateControl() {
         downloadPercent={state?.downloadPercent ?? null}
         isCheckAnimating={showCheckIcon && !prefersReducedMotion}
         onCheckAnimationIteration={handleCheckAnimationIteration}
-        status={iconStatus}
+        status={hasMachineDetails ? (machines.pending ? "downloading" : "available") : iconStatus}
       />
     </button>
   );
@@ -389,10 +391,10 @@ function SidebarUpdateControl() {
             </TooltipPopup>
           ) : null}
         </Tooltip>
-        {showReleaseNotesPopover && state ? (
+        {showReleaseNotesPopover ? (
           <PopoverPopup
             align="center"
-            aria-label="Nightly update release notes"
+            aria-label={hasMachineDetails ? "Machine updates" : "Nightly update release notes"}
             initialFocus={false}
             onKeyDownCapture={(event) => {
               if (
@@ -406,11 +408,16 @@ function SidebarUpdateControl() {
             side="top"
             tooltipStyle
           >
-            <SidebarUpdateReleaseNotes
-              shell={window.desktopBridge}
-              state={state}
-              tooltip={tooltip}
-            />
+            {hasMachineDetails ? (
+              <SidebarMachineUpdateDetails machines={machines} state={state} tooltip={tooltip} />
+            ) : null}
+            {state && shouldUseSidebarUpdateReleaseNotesPopover(showUpdateDetails, state) ? (
+              <SidebarUpdateReleaseNotes
+                shell={window.desktopBridge}
+                state={state}
+                tooltip={tooltip}
+              />
+            ) : null}
           </PopoverPopup>
         ) : null}
       </Popover>

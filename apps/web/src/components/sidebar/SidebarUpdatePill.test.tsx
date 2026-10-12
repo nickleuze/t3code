@@ -1,10 +1,13 @@
-import type { DesktopUpdateState } from "@t3tools/contracts";
+import { EnvironmentId, type DesktopUpdateState } from "@t3tools/contracts";
+import type { ComponentProps } from "react";
+import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vite-plus/test";
 
 import {
   handleSidebarUpdateReleaseNotesPopoverOpenChange,
   openSidebarUpdateReleaseNotesPopoverOnForwardTab,
   shouldUseSidebarUpdateReleaseNotesPopover,
+  SidebarMachineUpdateDetails,
 } from "./SidebarUpdatePill";
 
 const nightlyState: DesktopUpdateState = {
@@ -82,5 +85,79 @@ describe("sidebar update release notes popover", () => {
     );
 
     expect(open).not.toHaveBeenCalled();
+  });
+});
+
+describe("sidebar machine update details", () => {
+  const machines: ComponentProps<typeof SidebarMachineUpdateDetails>["machines"] = {
+    targets: [
+      {
+        environmentId: EnvironmentId.make("mini"),
+        serverLabel: "nick-mini",
+        selfUpdate: "desktop-managed",
+        desktopAppUpdate: true,
+        fromVersion: "0.0.45-nick.10",
+        targetVersion: "0.0.45-nick.11",
+        runningThreadCount: 0,
+      },
+    ],
+    run: { remotes: { mini: { status: "failed", message: "Remote timed out" } }, local: "ready" },
+    pending: false,
+    hasLocalUpdate: true,
+    label: "Update all (2)",
+    start: async () => {},
+  };
+  it("shows which machine failed, why, retry, and local-only recovery", () => {
+    const markup = renderToStaticMarkup(
+      <SidebarMachineUpdateDetails
+        machines={machines}
+        state={nightlyState}
+        tooltip="Machine update failed"
+      />,
+    );
+    expect(markup).toContain("nick-mini");
+    expect(markup).toContain("Remote timed out");
+    expect(markup).toContain('role="alert"');
+    expect(markup).toContain("Retry nick-mini");
+    expect(markup).toContain("Install on this Mac only");
+  });
+  it("keeps recovery disabled while a machine is still running", () => {
+    const markup = renderToStaticMarkup(
+      <SidebarMachineUpdateDetails
+        machines={{ ...machines, pending: true }}
+        state={nightlyState}
+        tooltip="Updating machines…"
+      />,
+    );
+    expect(markup.match(/disabled=""/g)).toHaveLength(2);
+  });
+  it("does not offer a local install on a remote-only client state", () => {
+    const markup = renderToStaticMarkup(
+      <SidebarMachineUpdateDetails
+        machines={{ ...machines, hasLocalUpdate: false }}
+        state={nightlyState}
+        tooltip="Machine update failed"
+      />,
+    );
+    expect(markup).not.toContain("This Mac:");
+    expect(markup).not.toContain("Install on this Mac only");
+    expect(markup).toContain("Retry nick-mini");
+  });
+  it("lists the actual version selected by the remote's feed", () => {
+    const markup = renderToStaticMarkup(
+      <SidebarMachineUpdateDetails
+        machines={{
+          ...machines,
+          run: {
+            local: "none",
+            remotes: { mini: { status: "succeeded", targetVersion: "0.0.45-nick.12" } },
+          },
+        }}
+        state={nightlyState}
+        tooltip="Updated"
+      />,
+    );
+    expect(markup).toContain("0.0.45-nick.12");
+    expect(markup).not.toContain("Retry nick-mini");
   });
 });

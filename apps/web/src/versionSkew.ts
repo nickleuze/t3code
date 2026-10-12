@@ -47,6 +47,17 @@ function versionCore(version: string): string {
   return version.replace(/[-+].*$/, "");
 }
 
+/** Compare the builds users can update between, including the personal fork train. */
+export function compareUpdateVersions(left: string, right: string): number {
+  const train = parseSemver(right)?.prerelease[0];
+  const sameBuildTrain =
+    (train === "nightly" || train === "nick") && parseSemver(left)?.prerelease[0] === train;
+  return compareSemverVersions(
+    sameBuildTrain ? left : versionCore(left),
+    sameBuildTrain ? right : versionCore(right),
+  );
+}
+
 /**
  * The skew a user can act on: the connected server runs an older T3 Code than
  * this client, so the server is the side that needs updating.
@@ -59,8 +70,9 @@ function versionCore(version: string): string {
  */
 export function resolveVersionMismatch(
   serverVersion: string | null | undefined,
+  clientVersion = APP_VERSION,
 ): VersionMismatch | null {
-  const normalizedClientVersion = normalizeVersion(APP_VERSION);
+  const normalizedClientVersion = normalizeVersion(clientVersion);
   const normalizedServerVersion = normalizeVersion(serverVersion);
   if (!normalizedClientVersion || !normalizedServerVersion) {
     return null;
@@ -68,18 +80,9 @@ export function resolveVersionMismatch(
 
   const clientCore = versionCore(normalizedClientVersion);
   const serverCore = versionCore(normalizedServerVersion);
-  // Fork: personal builds (`-nick.<run>`) share one core version, so they
-  // compare like nightlies.
-  const clientTrain = parseSemver(normalizedClientVersion)?.prerelease[0];
-  const compareNightlyBuilds =
-    (clientTrain === "nightly" || clientTrain === "nick") &&
-    parseSemver(normalizedServerVersion)?.prerelease[0] === clientTrain;
   const serverIsBehind =
     parseSemver(clientCore) && parseSemver(serverCore)
-      ? compareSemverVersions(
-          compareNightlyBuilds ? normalizedServerVersion : serverCore,
-          compareNightlyBuilds ? normalizedClientVersion : clientCore,
-        ) < 0
+      ? compareUpdateVersions(normalizedServerVersion, normalizedClientVersion) < 0
       : normalizedServerVersion !== normalizedClientVersion;
   if (!serverIsBehind) {
     return null;
