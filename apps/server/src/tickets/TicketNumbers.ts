@@ -10,7 +10,7 @@
  * @module TicketNumbers
  */
 
-export const READABLE_SUFFIX_LENGTH = 6;
+const READABLE_SUFFIX_LENGTH = 6;
 const ULID_LENGTH = 26;
 const CROCKFORD = /^[0-9A-HJKMNP-TV-Z]+$/;
 

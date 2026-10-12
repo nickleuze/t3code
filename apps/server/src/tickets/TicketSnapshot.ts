@@ -41,7 +41,7 @@ const yaml = (value: string) =>
 const indent = (text: string) => text.trim().split(/\r?\n/).join("\n  ");
 
 /** The snapshot path of a Ticket, relative to `snapshot/`. */
-export function snapshotPath(ticket: Ticket): string {
+function snapshotPath(ticket: Ticket): string {
   if (!ticket.projectKey) return `_inbox/${ticket.id}.md`;
   const readable = ticket.readableId ?? `${ticket.projectKey}-${ticket.id.slice(-6)}`;
   return `${segment(ticket.projectKey)}/${segment(readable.slice(ticket.projectKey.length + 1))}.md`;

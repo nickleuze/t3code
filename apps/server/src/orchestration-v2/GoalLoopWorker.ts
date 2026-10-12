@@ -210,7 +210,7 @@ export function childOutcome(
 }
 
 /** The questions the user answered in a child, as `"question": answer` lines. */
-export function childUserAnswers(
+function childUserAnswers(
   turnItems: ReadonlyArray<OrchestrationV2TurnItem>,
 ): ReadonlyArray<string> {
   return turnItems.flatMap((item) => {

@@ -70,7 +70,7 @@ const mentions = (haystack: string, needle: string) =>
   new RegExp(`(^|[^a-z0-9-])${escape(needle.trim().toLowerCase())}($|[^a-z0-9-])`).test(haystack);
 
 /** Files an Idea that names exactly one candidate's key or name; abstains otherwise. */
-export function deterministicTriage(input: TriageInput): TriageVerdict | null {
+function deterministicTriage(input: TriageInput): TriageVerdict | null {
   const text = `${input.idea.title}\n${input.idea.body}`.toLowerCase();
   const hits = input.candidates.filter(
     (candidate) => mentions(text, candidate.key) || mentions(text, candidate.name),
