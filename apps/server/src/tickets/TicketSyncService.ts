@@ -325,11 +325,12 @@ export const make = Effect.gen(function* () {
             });
           }
           const registryPath = path.join(repo, "registry/projects.json");
-          const remoteRegistry = (yield* fs.exists(registryPath))
+          const registryExists = yield* fs.exists(registryPath);
+          const remoteRegistry = registryExists
             ? yield* decodeRegistry(yield* fs.readFileString(registryPath))
             : {};
           const mergedRegistry = { ...localRegistry, ...remoteRegistry };
-          if (Object.keys(localRegistry).some((key) => !(key in remoteRegistry)))
+          if (!registryExists || Object.keys(localRegistry).some((key) => !(key in remoteRegistry)))
             yield* write({ filePath: registryPath, contents: yield* encodeJson(mergedRegistry) });
           yield* fs.makeDirectory(path.join(repo, "tickets"), { recursive: true });
           yield* write({
