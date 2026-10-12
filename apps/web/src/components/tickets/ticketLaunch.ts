@@ -57,7 +57,12 @@ export async function launchLinkedTicketThread({
 }) {
   const linked = await link({
     environmentId,
-    input: { id: ticketId, threadId: input.threadId, role: "work" },
+    input: {
+      id: ticketId,
+      threadId: input.threadId,
+      role: input.interactionMode === "plan" ? "planning" : "work",
+      title: input.title,
+    },
   });
   if (linked._tag !== "Success") return { step: "link" as const, result: linked };
   const result = await launch({ environmentId, input });

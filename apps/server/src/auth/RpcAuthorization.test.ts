@@ -60,10 +60,6 @@ describe("RPC authorization scopes", () => {
       WS_METHODS.ticketsRestore,
       WS_METHODS.ticketsLink,
       WS_METHODS.ticketsUnlink,
-      WS_METHODS.ticketsPublishIssue,
-      WS_METHODS.ticketsImportIssue,
-      WS_METHODS.ticketsUnlinkIssue,
-      WS_METHODS.ticketsRefreshIssues,
     ]) {
       expect(requiredScopeForRpcMethod(method)).toBe(AuthOrchestrationOperateScope);
     }

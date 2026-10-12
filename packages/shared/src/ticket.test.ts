@@ -209,8 +209,31 @@ it("builds a start prompt with markdown body and ticket provenance", () => {
       title: "Build tickets",
       body: "Keep **markdown**.",
     }),
-  ).toBe("Build tickets\n\nKeep **markdown**.\n\nThis work came from T3 ticket ticket:one.");
+  ).toContain("T3 ticket ticket:one: Build tickets\n\nKeep **markdown**.");
   expect(ticketStartPrompt({ id: TicketId.make("one"), title: "Title", body: "" })).toBe(
-    "Title\n\nThis work came from T3 ticket one.",
+    "T3 ticket one: Title\n\nRead t3_ticket_get for the full timeline before working. Write entries at milestones; end handoffs with Next:. Mention this ticket in PR descriptions.",
   );
+});
+
+it("includes current state and available branch hints in the start prompt", () => {
+  const prompt = ticketStartPrompt(
+    {
+      id: TicketId.make("ticket"),
+      title: "Resume",
+      body: "Scope",
+      workState: {
+        decisions: [{ eventId: "d", text: "Keep the native service" }],
+        questions: [{ eventId: "q", text: "Which host?" }],
+        lastHandoff: { text: "Built slice", next: "Review" },
+        prs: ["https://example.test/pr/1"],
+        blocked: false,
+      },
+    },
+    ["nick/feat/work", "nick/feat/work"],
+  );
+  expect(prompt).toContain("Current decisions:\n- Keep the native service");
+  expect(prompt).toContain("Open questions:\n- Which host?");
+  expect(prompt).toContain("Next: Review");
+  expect(prompt).toContain("Linked branches:\nnick/feat/work");
+  expect(prompt).toContain("https://example.test/pr/1");
 });

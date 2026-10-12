@@ -125,28 +125,12 @@ const makeHarness = Effect.fn("makeTicketToolkitHarness")(function* (
   return { call, tickets, shells, seed };
 });
 
-it.effect("list rows include linked issue URL and state", () =>
+it.effect("work records list a null legacy issue field", () =>
   Effect.gen(function* () {
     const harness = yield* makeHarness();
-    const ticket = yield* harness.seed({ title: "GitHub link" });
-    yield* harness.tickets.setGithubIssues([
-      {
-        id: ticket.id,
-        issue: {
-          repository: "github.com/acme/project",
-          number: 42,
-          url: "https://github.com/acme/project/issues/42",
-          state: "open",
-          closedAt: null,
-          syncedAt: ticket.createdAt,
-        },
-      },
-    ]);
+    yield* harness.seed({ title: "Work record" });
     const result = yield* harness.call("t3_ticket_list", {});
-    expect(result.tickets[0].githubIssue).toEqual({
-      url: "https://github.com/acme/project/issues/42",
-      state: "open",
-    });
+    expect(result.tickets[0].githubIssue).toBeNull();
   }),
 );
 
@@ -224,7 +208,7 @@ describe("ticket toolkit handlers", () => {
     }),
   );
 
-  it.effect("filters projects, query and derived status and returns bounded work summaries", () =>
+  it.effect("filters projects, query and explicit stage and returns bounded work summaries", () =>
     Effect.gen(function* () {
       const harness = yield* makeHarness();
       const ticket = yield* harness.seed({
@@ -244,6 +228,7 @@ describe("ticket toolkit handlers", () => {
       const deleted = yield* harness.seed({ title: "Deleted" });
       yield* harness.tickets.delete({ id: deleted.id });
 
+      yield* harness.tickets.upsert({ id: ticket.id, status: "in_progress" });
       const result = yield* harness.call("t3_ticket_list", {
         query: "VALIDATION",
         status: "in_progress",
@@ -304,9 +289,10 @@ describe("ticket toolkit handlers", () => {
           },
         ],
       });
-      expect(
-        (yield* harness.call("t3_ticket_list", { status: "in_review" })).tickets,
-      ).toMatchObject([{ id: ticket.id }]);
+      expect((yield* harness.call("t3_ticket_list", { status: "in_review" })).tickets).toEqual([]);
+      expect((yield* harness.call("t3_ticket_get", { ticket: ticket.id })).ticket.status).toBe(
+        "in_progress",
+      );
       yield* TestClock.adjust("20 seconds");
       expect(
         yield* harness.call("t3_ticket_update", { id: ticket.id, status: "ready" }),
@@ -466,3 +452,38 @@ describe("ticket toolkit handlers", () => {
       }),
   );
 });
+
+it.effect(
+  "MCP entry dedupe survives a lost response and signs the caller model/thread/machine",
+  () =>
+    Effect.gen(function* () {
+      const harness = yield* makeHarness();
+      const ticket = yield* harness.seed({ title: "Milestones" });
+      const input = {
+        ticket: ticket.id,
+        kind: "handoff",
+        text: "Built",
+        next: "Review",
+        clientRequestId: "retry",
+      };
+      yield* harness.call("t3_ticket_entry", input);
+      yield* TestClock.adjust("1 second");
+      yield* harness.call("t3_ticket_entry", input);
+      const state = yield* harness.call("t3_ticket_get", { ticket: ticket.id });
+      const entries = state.timeline.filter((event: { type: string }) => event.type === "entry");
+      expect(entries).toHaveLength(1);
+      expect(entries[0].by).toEqual({
+        actor: "agent",
+        thread: CALLER,
+        model: callerShell.modelSelection.model,
+        machine: "test",
+      });
+      expect(state.ticket.workState.lastHandoff).toMatchObject({ text: "Built", next: "Review" });
+      const denied = yield* harness.call(
+        "t3_ticket_entry",
+        { ...input, clientRequestId: "denied" },
+        readOnly,
+      );
+      expect(denied).toMatchObject({ code: "capability_denied" });
+    }),
+);

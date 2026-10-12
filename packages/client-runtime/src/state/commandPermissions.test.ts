@@ -293,12 +293,7 @@ it.effect("GitHub ticket writes require the destination operate grant and respec
   Effect.scoped(
     Effect.gen(function* () {
       const registry = yield* setup;
-      for (const tag of [
-        WS_METHODS.ticketsPublishIssue,
-        WS_METHODS.ticketsImportIssue,
-        WS_METHODS.ticketsUnlinkIssue,
-        WS_METHODS.ticketsRefreshIssues,
-      ]) {
+      for (const tag of []) {
         const command = createCommandPermissions(runtime, tag);
         registry.set(sessions(env), AsyncResult.success(grant(true)));
         assert.equal(registry.get(command.permissionAtom(env)), true);

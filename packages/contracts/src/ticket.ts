@@ -21,11 +21,14 @@ export const TicketStatus = Schema.Literals([
 ]);
 export type TicketStatus = typeof TicketStatus.Type;
 
-export const TicketLinkRole = Schema.Literals(["work", "origin"]);
+export const TicketLinkRole = Schema.Literals(["work", "origin", "planning", "review"]);
 export type TicketLinkRole = typeof TicketLinkRole.Type;
 
 export const TicketLink = Schema.Struct({
   threadId: ThreadId,
+  machine: Schema.optional(Schema.String),
+  title: Schema.optional(Schema.String),
+  machineLabel: Schema.optional(Schema.String),
   role: TicketLinkRole,
   linkedAt: IsoDateTime,
 });
@@ -46,6 +49,21 @@ const TicketCreationSource = Schema.Literals(["web", "mobile", "mcp", "github"])
 
 export const Ticket = Schema.Struct({
   id: TicketId,
+  projectKey: Schema.optional(Schema.NullOr(Schema.String)),
+  projectName: Schema.optional(Schema.NullOr(Schema.String)),
+  record: Schema.optional(Schema.Boolean),
+  workState: Schema.optional(
+    Schema.Struct({
+      decisions: Schema.Array(Schema.Struct({ eventId: Schema.String, text: Schema.String })),
+      questions: Schema.Array(Schema.Struct({ eventId: Schema.String, text: Schema.String })),
+      lastHandoff: Schema.NullOr(
+        Schema.Struct({ text: Schema.String, next: Schema.optional(Schema.String) }),
+      ),
+      prs: Schema.Array(Schema.String),
+      blocked: Schema.Boolean,
+      resultReady: Schema.optional(Schema.Boolean),
+    }),
+  ),
   projectId: Schema.NullOr(ProjectId),
   title: TrimmedNonEmptyString,
   body: Schema.String,
@@ -80,6 +98,7 @@ export const TicketUpsertInput = Schema.Struct({
   requireExisting: Schema.optional(Schema.Boolean),
   commandId: Schema.optional(CommandId),
   // Creates require a title; updates only change provided editable fields.
+  projectKey: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
   projectId: Schema.optional(Schema.NullOr(ProjectId)),
   title: Schema.optional(TrimmedNonEmptyString),
   body: Schema.optional(Schema.String),
@@ -100,6 +119,8 @@ export const TicketLinkInput = Schema.Struct({
   id: TicketId,
   threadId: ThreadId,
   role: TicketLinkRole,
+  startWork: Schema.optional(Schema.Boolean),
+  title: Schema.optional(Schema.String),
 });
 export type TicketLinkInput = typeof TicketLinkInput.Type;
 export const TicketUnlinkInput = Schema.Struct({ id: TicketId, threadId: ThreadId });
@@ -116,20 +137,158 @@ export class TicketError extends Schema.TaggedError<TicketError>()("TicketError"
   cause: Schema.optional(Schema.Defect()),
 }) {}
 
-export const TicketPublishIssueInput = Schema.Struct({ id: TicketId });
-export type TicketPublishIssueInput = typeof TicketPublishIssueInput.Type;
-export const TicketImportIssueInput = Schema.Struct({
-  projectId: ProjectId,
-  issue: Schema.Union([TrimmedNonEmptyString, Schema.Int.check(Schema.isGreaterThan(0))]),
+export const TicketAuthor = Schema.Struct({
+  actor: Schema.Literals(["user", "agent"]),
+  model: Schema.optional(Schema.String),
+  thread: Schema.optional(ThreadId),
+  machine: TrimmedNonEmptyString,
 });
-export type TicketImportIssueInput = typeof TicketImportIssueInput.Type;
-export const TicketUnlinkIssueInput = Schema.Struct({ id: TicketId });
-export type TicketUnlinkIssueInput = typeof TicketUnlinkIssueInput.Type;
-export const TicketRefreshIssuesInput = Schema.Struct({ force: Schema.optional(Schema.Boolean) });
-export type TicketRefreshIssuesInput = typeof TicketRefreshIssuesInput.Type;
-export const TicketRefreshIssuesResult = Schema.Struct({
-  refreshed: Schema.Int,
-  failed: Schema.Int,
-  skipped: Schema.Boolean,
+export type TicketAuthor = typeof TicketAuthor.Type;
+export const TicketEntryKind = Schema.Literals([
+  "decision",
+  "progress",
+  "blocker",
+  "question",
+  "result",
+  "handoff",
+  "note",
+]);
+export const TicketReferenceKind = Schema.Literals(["thread", "goal", "task", "pr"]);
+const EventBase = {
+  eventId: TrimmedNonEmptyString,
+  ticketId: TicketId,
+  at: IsoDateTime,
+  by: TicketAuthor,
+};
+export const TicketEvent = Schema.Union([
+  Schema.Struct({
+    ...EventBase,
+    type: Schema.Literal("created"),
+    title: TrimmedNonEmptyString,
+    body: Schema.String,
+    projectKey: Schema.NullOr(Schema.String),
+    source: TicketCreationSource,
+    originThread: Schema.NullOr(ThreadId),
+  }),
+  Schema.Struct({
+    ...EventBase,
+    type: Schema.Literal("fields"),
+    title: Schema.optional(TrimmedNonEmptyString),
+    body: Schema.optional(Schema.String),
+    projectKey: Schema.optional(Schema.NullOr(Schema.String)),
+    sortKey: Schema.optional(Schema.Number.check(Schema.isFinite())),
+  }),
+  Schema.Struct({
+    ...EventBase,
+    type: Schema.Literal("stage"),
+    stage: TicketStatus,
+    reason: Schema.Literals([
+      "manual",
+      "start_work",
+      "pr_linked",
+      "pr_merged",
+      "accepted",
+      "reopen",
+      "dropped",
+    ]),
+  }),
+  Schema.Struct({
+    ...EventBase,
+    type: Schema.Literals(["link", "unlink"]),
+    kind: TicketReferenceKind,
+    ref: TrimmedNonEmptyString,
+    role: TicketLinkRole,
+    machine: TrimmedNonEmptyString,
+    title: Schema.optional(Schema.String),
+    machineLabel: Schema.optional(Schema.String),
+  }),
+  Schema.Struct({
+    ...EventBase,
+    type: Schema.Literal("entry"),
+    requestKey: Schema.optional(Schema.String),
+    kind: TicketEntryKind,
+    text: TrimmedNonEmptyString,
+    next: Schema.optional(Schema.String),
+    supersedes: Schema.optional(Schema.String),
+    resolves: Schema.optional(Schema.String),
+  }),
+  Schema.Struct({
+    ...EventBase,
+    type: Schema.Literal("auto"),
+    observationKey: Schema.optional(Schema.String),
+    kind: Schema.Literals([
+      "pr_closed",
+      "thread_started",
+      "thread_settled",
+      "needs_input",
+      "pr_linked",
+      "pr_merged",
+      "goal_iteration_done",
+      "task_done",
+    ]),
+    ref: Schema.String,
+  }),
+  Schema.Struct({ ...EventBase, type: Schema.Literals(["deleted", "restored"]) }),
+]);
+export type TicketEvent = typeof TicketEvent.Type;
+export const TicketTimelineInput = Schema.Struct({ id: TicketId });
+export const TicketTimelineResult = Schema.Struct({
+  events: Schema.Array(TicketEvent),
+  machines: Schema.Record(Schema.String, Schema.String),
 });
-export type TicketRefreshIssuesResult = typeof TicketRefreshIssuesResult.Type;
+export type TicketTimelineResult = typeof TicketTimelineResult.Type;
+export const TicketEntryInput = Schema.Struct({
+  id: TicketId,
+  kind: TicketEntryKind,
+  text: TrimmedNonEmptyString,
+  next: Schema.optional(Schema.String),
+  supersedes: Schema.optional(Schema.String),
+  resolves: Schema.optional(Schema.String),
+  clientRequestId: Schema.optional(TrimmedNonEmptyString),
+});
+export type TicketEntryInput = typeof TicketEntryInput.Type;
+export const TicketSyncStatus = Schema.Struct({
+  configured: Schema.Boolean,
+  remote: Schema.NullOr(Schema.String),
+  lastPullAt: Schema.NullOr(IsoDateTime),
+  lastPushAt: Schema.NullOr(IsoDateTime),
+  pendingEvents: Schema.Int,
+  pendingTicketIds: Schema.optional(Schema.Array(TicketId)),
+  lastError: Schema.NullOr(Schema.String),
+  machine: Schema.String,
+  label: Schema.String,
+});
+export type TicketSyncStatus = typeof TicketSyncStatus.Type;
+export const TicketSyncConfigureInput = Schema.Struct({ remoteUrl: TrimmedNonEmptyString });
+export const TicketProjectMapInput = Schema.Struct({
+  key: TrimmedNonEmptyString,
+  projectId: Schema.NullOr(ProjectId),
+  displayName: Schema.optional(TrimmedNonEmptyString),
+});
+export const TicketProjectsResult = Schema.Struct({
+  projects: Schema.Array(
+    Schema.Struct({
+      key: Schema.String,
+      displayName: Schema.String,
+      projectId: Schema.NullOr(ProjectId),
+      suggestedProjectId: Schema.NullOr(ProjectId),
+    }),
+  ),
+});
+export type TicketProjectsResult = typeof TicketProjectsResult.Type;
+
+export const TicketSetupCheck = Schema.Struct({
+  clonePresent: Schema.Boolean,
+  remoteReachable: Schema.Boolean,
+  authOk: Schema.NullOr(Schema.Boolean),
+  registryParsed: Schema.Boolean,
+  messages: Schema.Array(Schema.String),
+});
+export type TicketSetupCheck = typeof TicketSetupCheck.Type;
+export const TicketMachineLabelInput = Schema.Struct({ label: TrimmedNonEmptyString });
+
+export const TicketActionInput = Schema.Struct({
+  id: TicketId,
+  action: Schema.Literals(["accept", "drop", "reopen"]),
+});
+export type TicketActionInput = typeof TicketActionInput.Type;

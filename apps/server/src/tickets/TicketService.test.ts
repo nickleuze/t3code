@@ -296,7 +296,8 @@ it.effect(
         history,
       );
       assert.deepStrictEqual(yield* sql`SELECT * FROM fork_schema_versions`, [
-        { component: "tickets", version: 1 },
+        { component: "tickets", version: 3 },
+        { component: "tickets-v1-import", version: 1 },
       ]);
       yield* sql`DELETE FROM fork_tickets WHERE ticket_id = ${ticket.id}`;
       assert.deepStrictEqual(yield* sql`SELECT * FROM fork_ticket_links`, []);

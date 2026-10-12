@@ -14,8 +14,12 @@ import { Textarea } from "../ui/textarea";
 import { Sheet, SheetPopup, SheetHeader, SheetTitle, SheetDescription } from "../ui/sheet";
 import { toastManager } from "../ui/toast";
 import { TicketPicker } from "./TicketPicker";
-import { TicketGithubSection } from "./TicketGithub";
-import { TicketLinks } from "./TicketLinks";
+import { TicketActions } from "./TicketActions";
+import { Badge } from "../ui/badge";
+import { useTicketConnections } from "./useTicketConnections";
+import { ticketActivity } from "./ticketRecord.logic";
+
+import { TicketTimeline } from "./TicketTimeline";
 import { TicketStartWork } from "./TicketStartWork";
 
 export function TicketDetail({
@@ -26,6 +30,11 @@ export function TicketDetail({
   onClose: () => void;
 }) {
   const { ticket, environmentId } = entry;
+  const { linked } = useTicketConnections(entry);
+  const activity = ticketActivity(
+    ticket,
+    linked.filter((l) => l.link.role !== "origin").map((l) => l.thread.source),
+  );
   const canWrite = useTicketWriteAllowed(environmentId);
   const projects = useProjects().filter((p) => p.environmentId === environmentId);
   const shells = useThreadShells();
@@ -91,86 +100,109 @@ export function TicketDetail({
         if (!open && !busy) onClose();
       }}
     >
-      <SheetPopup variant="mobile-fullscreen">
+      <SheetPopup variant="wide">
         <SheetHeader>
-          <SheetTitle>Ticket</SheetTitle>
-          <SheetDescription>Edit this idea and see its linked work.</SheetDescription>
+          <SheetTitle>{ticket.title}</SheetTitle>
+          <SheetDescription>
+            {ticket.projectName ?? ticket.projectKey ?? "No project"} ·{" "}
+            {[
+              ...new Set(ticket.links.map((l) => l.machineLabel ?? l.machine).filter(Boolean)),
+            ].join(", ") || "Local record"}
+          </SheetDescription>
+          <div className="flex flex-wrap items-center gap-2">
+            <TicketActions entry={entry} />
+            <Badge
+              variant={
+                activity === "Blocked"
+                  ? "warning"
+                  : activity === "Result ready"
+                    ? "success"
+                    : "info"
+              }
+            >
+              {activity}
+            </Badge>
+          </div>
+          <TicketStartWork entry={entry} />
         </SheetHeader>
         <div className="min-h-0 flex-1 overflow-auto px-6 py-3">
           <div className="flex flex-col gap-4">
-            <label className="grid gap-1.5">
-              <span>Title</span>
-              <Input
-                size={narrow ? "touch" : "default"}
-                aria-label="Ticket title"
-                disabled={busy}
-                value={edited.title ? title : ticket.title}
-                onChange={(e) => {
-                  setTitle(e.target.value);
-                  setEdited((old) => ({ ...old, title: true }));
-                }}
-              />
-            </label>
-            <label className="grid gap-1.5">
-              <span>Body</span>
-              <Textarea
-                aria-label="Ticket body"
-                disabled={busy}
-                value={edited.body ? body : ticket.body}
-                onChange={(e) => {
-                  setBody(e.target.value);
-                  setEdited((old) => ({ ...old, body: true }));
-                }}
-              />
-            </label>
-            <TicketPicker
-              label="Project"
-              disabled={busy}
-              value={
-                edited.project
-                  ? projectId
-                  : projects.some((p) => p.id === ticket.projectId)
-                    ? ticket.projectId!
-                    : "none"
-              }
-              options={[
-                { value: "none", label: "No project" },
-                ...projects.map((p) => ({ value: p.id, label: p.title })),
-              ]}
-              onChange={(value) => {
-                setProjectId(value);
-                setEdited((old) => ({ ...old, project: true }));
-              }}
-            />
-            <TicketPicker
-              label="Status"
-              disabled={busy}
-              value={pickedStatus ?? status}
-              options={Object.entries(TICKET_STATUS_LABELS).map(([value, label]) => ({
-                value,
-                label,
-              }))}
-              onChange={(value) => setStatus(value as TicketStatus)}
-            />
-            <Button
-              size={narrow ? "touch" : "default"}
-              disabled={!canWrite || busy || !title.trim()}
-              onClick={() => {
-                void save();
-              }}
-            >
-              Save changes
-            </Button>
-            <TicketGithubSection
-              entry={entry}
-              unsaved={busy || Object.values(edited).some(Boolean) || pickedStatus !== null}
-            />
-            <TicketStartWork entry={entry} />
-            <h3 className="text-sm font-medium">Linked threads</h3>
-            <TicketLinks entry={entry} editable />
-            {ticket.links.length === 0 ? (
-              <p className="text-sm text-muted-foreground">No linked threads yet.</p>
+            <details>
+              <summary className="cursor-pointer text-sm text-muted-foreground">
+                Edit ticket
+              </summary>
+              <div className="grid gap-4 py-3">
+                <label className="grid gap-1.5">
+                  <span>Title</span>
+                  <Input
+                    size={narrow ? "touch" : "default"}
+                    aria-label="Ticket title"
+                    disabled={busy}
+                    value={edited.title ? title : ticket.title}
+                    onChange={(e) => {
+                      setTitle(e.target.value);
+                      setEdited((old) => ({ ...old, title: true }));
+                    }}
+                  />
+                </label>
+                <label className="grid gap-1.5">
+                  <span>Body</span>
+                  <Textarea
+                    aria-label="Ticket body"
+                    disabled={busy}
+                    value={edited.body ? body : ticket.body}
+                    onChange={(e) => {
+                      setBody(e.target.value);
+                      setEdited((old) => ({ ...old, body: true }));
+                    }}
+                  />
+                </label>
+                <TicketPicker
+                  label="Project"
+                  disabled={busy}
+                  value={
+                    edited.project
+                      ? projectId
+                      : projects.some((p) => p.id === ticket.projectId)
+                        ? ticket.projectId!
+                        : "none"
+                  }
+                  options={[
+                    { value: "none", label: "No project" },
+                    ...projects.map((p) => ({ value: p.id, label: p.title })),
+                  ]}
+                  onChange={(value) => {
+                    setProjectId(value);
+                    setEdited((old) => ({ ...old, project: true }));
+                  }}
+                />
+                <TicketPicker
+                  label="Status"
+                  disabled={busy}
+                  value={pickedStatus ?? status}
+                  options={Object.entries(TICKET_STATUS_LABELS).map(([value, label]) => ({
+                    value,
+                    label,
+                  }))}
+                  onChange={(value) => setStatus(value as TicketStatus)}
+                />
+                <Button
+                  size={narrow ? "touch" : "default"}
+                  disabled={!canWrite || busy || !title.trim()}
+                  onClick={() => {
+                    void save();
+                  }}
+                >
+                  Save changes
+                </Button>
+              </div>
+            </details>
+            {ticket.projectKey && !ticket.projectId ? (
+              <p className="text-sm text-muted-foreground">
+                {ticket.projectName ?? ticket.projectKey} · Map a local project to start work.
+              </p>
             ) : null}
+            <TicketTimeline entry={entry} />
           </div>
         </div>
         <div className="flex justify-end p-6">

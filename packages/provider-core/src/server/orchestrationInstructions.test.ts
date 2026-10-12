@@ -41,8 +41,14 @@ describe("T3 orchestration provider instructions", () => {
       assert.include(prompt, "a few at most per turn, mentioned in your reply");
       assert.include(prompt, "`t3_ticket_create`");
       assert.include(prompt, "`t3_ticket_list`");
-      assert.include(prompt, "`t3_ticket_link_thread`");
-      assert.include(prompt, "link your PR as usual");
+      assert.include(prompt, "read `t3_ticket_get` before working");
+      assert.include(prompt, "keep it linked with `t3_ticket_link`");
+      assert.include(
+        prompt,
+        "write decision, blocker, question, result or handoff entries at milestones with `t3_ticket_entry`",
+      );
+      assert.include(prompt, 'End handoffs with "Next:"');
+      assert.include(prompt, "Mention `T3 ticket <id>: <title>` in PR descriptions");
     }
   });
 

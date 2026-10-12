@@ -60,7 +60,7 @@ describe("draft ticket linking", () => {
     expect(mocks.run).toHaveBeenCalledTimes(1);
     expect(mocks.run.mock.calls[0]?.[2]).toEqual({
       environmentId,
-      input: { id: ticketId, threadId, role: "work" },
+      input: { id: ticketId, threadId, role: "work", startWork: true },
     });
     expect(usePendingTicketDrafts.getState().links).toEqual({});
   });
@@ -75,7 +75,7 @@ describe("draft ticket linking", () => {
     await linkFinalizedTicketDraft("draft", promoted);
     expect(mocks.run.mock.calls[0]?.[2]).toEqual({
       environmentId,
-      input: { id: ticketId, threadId: promoted.threadId, role: "work" },
+      input: { id: ticketId, threadId: promoted.threadId, role: "work", startWork: true },
     });
   });
   it("deduplicates simultaneous acknowledgements and retains failed links for retry", async () => {
@@ -150,7 +150,7 @@ describe("pending draft lifecycle", () => {
     await vi.waitFor(() => expect(mocks.run).toHaveBeenCalledTimes(2));
     expect(mocks.run.mock.calls[1]?.[2]).toEqual({
       environmentId,
-      input: { id: ticketId, threadId, role: "work" },
+      input: { id: ticketId, threadId, role: "work", startWork: true },
     });
     expect(usePendingTicketDrafts.getState().links).toEqual({});
   });

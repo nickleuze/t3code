@@ -40,7 +40,9 @@ const layerStubServices = Layer.mergeAll(
   Layer.mock(Orchestrator.OrchestratorV2)({}),
   Layer.mock(ProjectionStore.ProjectionStoreV2)({}),
   Layer.mock(ProjectStore.ProjectStoreV2)({}),
-  Layer.mock(TicketService.TicketService)({}),
+  Layer.mock(TicketService.TicketService)({
+    author: (by) => ({ actor: "user", ...by, machine: "test" }),
+  }),
   Layer.mock(DeviceService.DeviceService)({}),
   Layer.mock(ThreadManagementService.ThreadManagementService)({}),
   Layer.mock(ProviderRegistry.ProviderRegistry)({}),
