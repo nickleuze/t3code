@@ -232,18 +232,42 @@ local time zone, or a duration in minutes, hours, or days. Durations start when
 you confirm; one day means 24 hours. On web and desktop, you can also snooze
 several selected threads together. Choose **Wake thread** to bring a thread back early.
 
-## Capture work as tickets
+## Keep work in tickets
 
-On web and desktop, open **Tickets** from the sidebar or command palette to see
-ideas across projects and connected machines. Use **New ticket** to capture one;
-you can leave it without a project and choose a project when starting work.
-`ticket.new` and `tickets.open` can be assigned in **Settings > Keybindings** and
-have no default shortcuts.
+A ticket is the work record for an idea or task: its current state, decisions,
+handoffs, and linked threads, goals, agent tasks, and pull requests. Open **Tickets**
+from the sidebar or command palette and capture work with or without a project.
+`ticket.new` and `tickets.open` can be assigned in **Settings → Keybindings**.
+The board works at phone width, with one stage at a time.
 
-**Start work** opens a worktree draft. The ticket links to the thread when you
-first send it; leaving the draft does not start work. The adjacent menu also
-supports immediate launch, plan-first launch, and a draft that asks for a T3 goal.
-Status advances when newer linked work starts or gains a pull request. Moving a
-ticket to a status sets a manual override until newer work occurs. Done shows the
-last 14 days by default. Deleted tickets can be restored from **Recently deleted**
-or from the Undo notification.
+Stages are **Inbox**, **Ready**, **In progress**, **In review**, **Done**, and
+**Dropped**. Move a ticket yourself when its state changes. Starting linked work
+moves Inbox or Ready to In progress; planning alone does not. A witnessed
+non-draft pull request on the current work thread moves active work to In review,
+and its merge moves it to Done. Old thread history and sync do not advance stages.
+A result entry marks work ready for your acceptance; **Accept** moves it to Done.
+**Reopen** returns Done or Dropped work to Ready. Done shows the last 14 days by
+default; deleted tickets can be restored from **Recently deleted** or Undo.
+
+**Start work** opens a draft in the selected project. Its first send links the
+thread and starts work; an abandoned draft does not. You can also launch
+immediately, plan first, or start with a T3 goal. **Resume** returns to an available
+local work thread. Links from another machine retain their context; map the
+project locally before starting new work there.
+
+Record notes, decisions, questions, and handoffs as entries. A handoff captures
+what changed and **Next**; decisions can be superseded and questions resolved
+without erasing their history. Agents use `t3_ticket_list`, `t3_ticket_get`,
+`t3_ticket_upsert`, `t3_ticket_link`, and `t3_ticket_entry` to keep the same record.
+Handoff reminders ask an agent that used tools without an entry to record its
+handoff. They skip planning, read-only work, and terminal tickets, and can be
+turned off in **Settings → Tickets**.
+
+Tickets stay local until you configure sync. In **Settings → Tickets**, select the
+environment, enter a **Remote URL** for a Git repository, and configure it. Save a
+recognizable **Machine label** and confirm each shared project's mapping to a local
+project. **Check setup** reports clone presence, remote reachability,
+authentication, and registry validity. Git uses the environment machine's existing
+credentials; set those up first. Pending entries stay on that machine when the
+remote is unavailable and publish when sync succeeds. Each machine needs its own
+setup against the same remote.

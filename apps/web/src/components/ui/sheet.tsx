@@ -33,7 +33,7 @@ function SheetViewport({
   ...props
 }: SheetPrimitive.Viewport.Props & {
   side?: "right" | "left" | "top" | "bottom";
-  variant?: "default" | "inset" | "mobile-fullscreen" | "work-record";
+  variant?: "default" | "inset" | "mobile-fullscreen" | "wide";
 }) {
   return (
     <SheetPrimitive.Viewport
@@ -44,7 +44,7 @@ function SheetViewport({
         side === "left" && "flex justify-start",
         side === "right" && "flex justify-end",
         variant === "inset" && "sm:p-4",
-        (variant === "mobile-fullscreen" || variant === "work-record") && "max-[480px]:z-50",
+        (variant === "mobile-fullscreen" || variant === "wide") && "max-[480px]:z-50",
         className,
       )}
       data-slot="sheet-viewport"
@@ -68,11 +68,9 @@ function SheetPopup({
   keepMounted?: boolean;
   transitionDurationMs?: number;
   side?: "right" | "left" | "top" | "bottom";
-  variant?: "default" | "inset" | "mobile-fullscreen" | "work-record";
+  variant?: "default" | "inset" | "mobile-fullscreen" | "wide";
 }) {
-  const fullscreen = useMobileFullscreen(
-    variant === "mobile-fullscreen" || variant === "work-record",
-  );
+  const fullscreen = useMobileFullscreen(variant === "mobile-fullscreen" || variant === "wide");
   const transitionStyle =
     transitionDurationMs === undefined
       ? undefined
@@ -103,7 +101,7 @@ function SheetPopup({
               "col-start-2 w-[calc(100%-(--spacing(12)))] max-w-md border-s data-ending-style:translate-x-8 data-starting-style:translate-x-8",
             variant === "inset" &&
               "before:hidden sm:rounded-2xl sm:border sm:before:rounded-[calc(var(--radius-2xl)-1px)] sm:**:data-[slot=sheet-footer]:rounded-b-[calc(var(--radius-2xl)-1px)]",
-            variant === "work-record" && !fullscreen && "max-w-3xl",
+            variant === "wide" && !fullscreen && "max-w-3xl",
             fullscreen &&
               "col-start-1 w-full max-w-none border-0 pt-[env(safe-area-inset-top)] pb-[env(safe-area-inset-bottom)]",
             instant &&

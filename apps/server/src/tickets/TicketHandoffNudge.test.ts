@@ -24,6 +24,7 @@ it.effect(
       let items = [{ type: "dynamic_tool", runId }];
       let messages: { role: string; text: string }[] = [];
       const dispatched: OrchestrationV2ServerCommand[] = [];
+      let threadReads = 0;
       const ticketLayer = Tickets.layer.pipe(
         Layer.provide(Projects.layer),
         Layer.provide(NodeCrypto.layer),
@@ -38,21 +39,21 @@ it.effect(
         }),
         Layer.mock(Orchestrator.OrchestratorV2)({
           getThreadRecords: (() =>
-            Effect.sync(
-              () =>
-                ({
-                  thread: { id: threadId, archivedAt: null, deletedAt: null, interactionMode },
-                  runs: [
-                    {
-                      id: runId,
-                      startedAt: DateTime.makeUnsafe(0),
-                      completedAt: DateTime.makeUnsafe(1_000),
-                    },
-                  ],
-                  turnItems: items,
-                  messages,
-                }) as unknown as ProjectionRecords<"runs" | "turnItems" | "messages">,
-            )) as Orchestrator.OrchestratorV2["Service"]["getThreadRecords"],
+            Effect.sync(() => {
+              threadReads++;
+              return {
+                thread: { id: threadId, archivedAt: null, deletedAt: null, interactionMode },
+                runs: [
+                  {
+                    id: runId,
+                    startedAt: DateTime.makeUnsafe(0),
+                    completedAt: DateTime.makeUnsafe(1_000),
+                  },
+                ],
+                turnItems: items,
+                messages,
+              } as unknown as ProjectionRecords<"runs" | "turnItems" | "messages">;
+            })) as Orchestrator.OrchestratorV2["Service"]["getThreadRecords"],
           dispatch: (command) =>
             Effect.sync(() => {
               dispatched.push(command);
@@ -65,6 +66,10 @@ it.effect(
       const { ticket } = yield* tickets.upsert({ title: "Nudge" });
       yield* tickets.link({ id: ticket.id, threadId, role: "planning" });
       const nudge = yield* Nudge.make.pipe(Effect.provideContext(context));
+      yield* nudge.observe({ id: RunId.make("unlinked"), threadId: ThreadId.make("unlinked") });
+      yield* nudge.drain;
+      assert.equal(threadReads, 0);
+      assert.equal(dispatched.length, 0);
       yield* nudge.observe({ id: runId, threadId });
       yield* nudge.drain;
       assert.equal(dispatched.length, 0);

@@ -26,7 +26,8 @@ it.effect(
           },
         }),
         Layer.mock(Tickets.TicketService)({
-          list: () => Effect.succeed({ tickets: [] }),
+          ticketsLinkedToThread: () => Effect.succeed([]),
+          ticketsLinkedToReference: () => Effect.succeed([]),
           author: () => ({ actor: "user", machine: "A" }),
           observe: (input) =>
             Effect.sync(() => {
@@ -104,7 +105,8 @@ it.effect("an unrelated metadata update never replays a preexisting goal or its 
           ]),
       }),
       Layer.mock(Tickets.TicketService)({
-        list: () => Effect.succeed({ tickets: [] }),
+        ticketsLinkedToThread: () => Effect.succeed([]),
+        ticketsLinkedToReference: () => Effect.succeed([]),
         author: () => ({ actor: "user", machine: "A" }),
         observe: (input) =>
           Effect.sync(() => {
@@ -204,4 +206,49 @@ it.effect(
       for (const kind of ["goal_iteration_done", "task_done", "needs_input", "thread_settled"])
         assert.include(trail, kind);
     }),
+);
+
+it.effect("unlinked metadata costs one lookup and no ticket state or history reads", () =>
+  Effect.gen(function* () {
+    let lookups = 0;
+    let reads = 0;
+    const dependencies = Layer.mergeAll(
+      Layer.mock(Sink.EventSinkV2)({}),
+      Layer.mock(Tickets.TicketService)({
+        author: () => ({ actor: "user", machine: "A" }),
+        ticketsLinkedToThread: () =>
+          Effect.sync(() => {
+            lookups++;
+            return [];
+          }),
+        list: () =>
+          Effect.sync(() => {
+            reads++;
+            return { tickets: [] };
+          }),
+        get: () =>
+          Effect.sync(() => {
+            reads++;
+            throw new Error("Unexpected state read");
+          }),
+        timeline: () =>
+          Effect.sync(() => {
+            reads++;
+            return { events: [], machines: {} };
+          }),
+      }),
+    );
+    const worker = yield* Observations.make.pipe(Effect.provide(dependencies));
+    yield* worker.observe({
+      sequence: 1,
+      commandId: CommandId.make("metadata"),
+      event: {
+        type: "thread.metadata-updated",
+        payload: { id: ThreadId.make("unlinked"), title: "Pinned" },
+      },
+    } as unknown as OrchestrationV2StoredEvent);
+    yield* worker.drain;
+    assert.equal(lookups, 1);
+    assert.equal(reads, 0);
+  }),
 );

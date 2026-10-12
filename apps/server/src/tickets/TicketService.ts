@@ -98,6 +98,13 @@ export const bootstrapSchema = Effect.gen(function* () {
       yield* sql`CREATE TABLE IF NOT EXISTS fork_ticket_records (
         ticket_id TEXT PRIMARY KEY NOT NULL, state_json TEXT NOT NULL
       )`;
+      yield* sql`CREATE TABLE IF NOT EXISTS fork_ticket_record_links (
+        ticket_id TEXT NOT NULL, kind TEXT NOT NULL, ref TEXT NOT NULL,
+        machine TEXT NOT NULL, reference_json TEXT NOT NULL,
+        PRIMARY KEY (ticket_id, kind, ref, machine)
+      )`;
+      yield* sql`CREATE INDEX IF NOT EXISTS idx_fork_ticket_record_links_reference
+        ON fork_ticket_record_links(kind, ref, machine)`;
       yield* sql`CREATE TABLE IF NOT EXISTS fork_ticket_project_map (
         project_key TEXT PRIMARY KEY NOT NULL, project_id TEXT
       )`;
@@ -121,6 +128,7 @@ type ReferenceInput = {
   unlink?: boolean;
   title?: string | undefined;
 };
+type LinkedTicket = { id: TicketId; reference: TicketRecordState["references"][number] };
 export type TicketObservation = {
   threadId: ThreadId;
   key: string;
@@ -135,6 +143,15 @@ export class TicketService extends Context.Service<
   TicketService,
   {
     readonly action: (input: TicketActionInput) => Effect.Effect<TicketMutationResult, TicketError>;
+    readonly ticketsLinkedToThread: (
+      threadId: ThreadId,
+      machine: string,
+    ) => Effect.Effect<LinkedTicket[], TicketError>;
+    readonly ticketsLinkedToReference: (
+      kind: "goal" | "task" | "pr",
+      ref: string,
+      machine: string,
+    ) => Effect.Effect<LinkedTicket[], TicketError>;
     readonly observe: (input: TicketObservation) => Effect.Effect<void, TicketError>;
     readonly syncRefresh: () => Effect.Effect<TicketSyncStatus, TicketError>;
     readonly setupCheck: Effect.Effect<TicketSetupCheck, TicketError>;
@@ -264,6 +281,35 @@ export const make = Effect.gen(function* () {
       }>`SELECT event_json FROM fork_ticket_events WHERE ticket_id = ${id} ORDER BY event_id`;
       return yield* Effect.forEach(rows, (row) => decodeEvent(row.event_json));
     });
+  const writeProjection = (state: TicketRecordState) =>
+    Effect.gen(function* () {
+      const id = state.ticket.id;
+      yield* sql`INSERT INTO fork_ticket_records (ticket_id, state_json) VALUES (${id}, ${yield* encodeProjection(state)}) ON CONFLICT (ticket_id) DO UPDATE SET state_json = excluded.state_json`;
+      yield* sql`DELETE FROM fork_ticket_record_links WHERE ticket_id = ${id}`;
+      if (state.ticket.deletedAt !== null) return;
+      for (const reference of state.references)
+        yield* sql`INSERT INTO fork_ticket_record_links (ticket_id, kind, ref, machine, reference_json)
+          VALUES (${id}, ${reference.kind}, ${reference.ref}, ${reference.machine}, ${yield* encodeEvent(reference)})`;
+    });
+  const linkedTo = (kind: ReferenceInput["kind"], ref: string, machine: string) =>
+    Effect.gen(function* () {
+      const rows = yield* sql<{ ticket_id: string; reference_json: string }>`
+        SELECT ticket_id, reference_json FROM fork_ticket_record_links
+        WHERE kind = ${kind} AND ref = ${ref} AND machine = ${machine}
+        ORDER BY ticket_id`;
+      return yield* Effect.forEach(rows, (row) =>
+        Effect.gen(function* () {
+          return {
+            id: TicketId.make(row.ticket_id),
+            reference: (yield* decodeEvent(row.reference_json)) as LinkedTicket["reference"],
+          };
+        }),
+      );
+    }).pipe(mapError);
+  const ticketsLinkedToThread = (threadId: ThreadId, machine: string) =>
+    linkedTo("thread", threadId, machine);
+  const ticketsLinkedToReference = (kind: "goal" | "task" | "pr", ref: string, machine: string) =>
+    linkedTo(kind, ref, machine);
   const importEffect = (events: readonly TicketEvent[]) =>
     Effect.gen(function* () {
       const affected = new Set<TicketId>();
@@ -285,8 +331,7 @@ export const make = Effect.gen(function* () {
       }
       for (const id of affected) {
         const state = projectTicket(yield* eventsFor(id));
-        if (state !== null)
-          yield* sql`INSERT INTO fork_ticket_records (ticket_id, state_json) VALUES (${id}, ${yield* encodeProjection(state)}) ON CONFLICT (ticket_id) DO UPDATE SET state_json = excluded.state_json`;
+        if (state !== null) yield* writeProjection(state);
       }
     });
   const importEvents = (events: readonly TicketEvent[]) =>
@@ -585,81 +630,90 @@ export const make = Effect.gen(function* () {
     );
   // Only live observers call this method. Import/rebuild never synthesize events.
   const observe = (input: TicketObservation) =>
-    mutate(
-      Effect.gen(function* () {
-        const machine = sync?.machine ?? "test";
-        for (const { id } of (yield* list()).tickets) {
-          const state = yield* readState(id);
-          const local = state.references.find(
-            (l) =>
-              l.kind === "thread" &&
-              l.ref === input.threadId &&
-              l.machine === machine &&
-              l.role !== "origin",
-          );
-          if (!local) continue;
-          const history = yield* eventsFor(id);
-          const observationKey = deterministicEventId(input.threadId, input.key, machine);
-          if (history.some((e) => e.type === "auto" && e.observationKey === observationKey))
-            continue;
-          const by = author({
-            actor: "agent",
-            thread: input.threadId,
-            ...(input.model ? { model: input.model } : {}),
-          });
-          const events: TicketEvent[] = [];
-          const latestWork = state.references
-            .filter((l) => l.kind === "thread" && l.role === "work")
-            .sort((a, b) => b.at.localeCompare(a.at) || b.eventId.localeCompare(a.eventId))[0];
-          const currentWork =
-            local.role === "work" &&
-            latestWork?.ref === local.ref &&
-            latestWork.machine === machine;
-          const active =
-            state.ticket.status === "in_progress" || state.ticket.status === "in_review";
-          if (input.kind === "pr_linked" && input.isDraft) continue;
-          if (input.kind === "pr_linked" || input.referenceKind)
-            events.push({
-              ...(yield* base(id, by)),
-              type: "link",
-              kind: input.referenceKind ?? "pr",
-              ref: input.ref,
-              role: local.role,
+    lock
+      .withPermit(
+        sql.withTransaction(
+          Effect.gen(function* () {
+            let changed = false;
+            const machine = sync?.machine ?? "test";
+            for (const { id, reference: local } of yield* ticketsLinkedToThread(
+              input.threadId,
               machine,
-              title: input.title,
-              machineLabel: (yield* sync ? sync.status : Effect.succeed({ label: "Test" })).label,
-            });
-          if (
-            currentWork &&
-            ((input.kind === "pr_linked" && state.ticket.status === "in_progress") ||
-              (input.kind === "pr_merged" &&
-                active &&
-                history.some(
-                  (e) =>
-                    e.type === "auto" &&
-                    e.kind === "pr_linked" &&
-                    e.ref === input.ref &&
-                    e.by.thread === input.threadId &&
-                    e.by.machine === machine,
-                )))
-          )
-            events.push({
-              ...(yield* base(id, by)),
-              type: "stage",
-              stage: input.kind === "pr_merged" ? "done" : "in_review",
-              reason: input.kind,
-            });
-          events.push({
-            ...(yield* base(id, by)),
-            type: "auto",
-            kind: input.kind,
-            ref: input.ref,
-            observationKey,
-          });
-          yield* commitEvents(events);
-        }
-      }),
-    );
+            )) {
+              if (local.role === "origin") continue;
+              const state = yield* readState(id);
+              const history = yield* eventsFor(id);
+              const observationKey = deterministicEventId(input.threadId, input.key, machine);
+              if (history.some((e) => e.type === "auto" && e.observationKey === observationKey))
+                continue;
+              const by = author({
+                actor: "agent",
+                thread: input.threadId,
+                ...(input.model ? { model: input.model } : {}),
+              });
+              const events: TicketEvent[] = [];
+              const latestWork = state.references
+                .filter((l) => l.kind === "thread" && l.role === "work")
+                .sort((a, b) => b.at.localeCompare(a.at) || b.eventId.localeCompare(a.eventId))[0];
+              const currentWork =
+                local.role === "work" &&
+                latestWork?.ref === local.ref &&
+                latestWork.machine === machine;
+              const active =
+                state.ticket.status === "in_progress" || state.ticket.status === "in_review";
+              if (input.kind === "pr_linked" && input.isDraft) continue;
+              if (input.kind === "pr_linked" || input.referenceKind)
+                events.push({
+                  ...(yield* base(id, by)),
+                  type: "link",
+                  kind: input.referenceKind ?? "pr",
+                  ref: input.ref,
+                  role: local.role,
+                  machine,
+                  title: input.title,
+                  machineLabel: (yield* sync ? sync.status : Effect.succeed({ label: "Test" }))
+                    .label,
+                });
+              if (
+                currentWork &&
+                ((input.kind === "pr_linked" && state.ticket.status === "in_progress") ||
+                  (input.kind === "pr_merged" &&
+                    active &&
+                    history.some(
+                      (e) =>
+                        e.type === "auto" &&
+                        e.kind === "pr_linked" &&
+                        e.ref === input.ref &&
+                        e.by.thread === input.threadId &&
+                        e.by.machine === machine,
+                    )))
+              )
+                events.push({
+                  ...(yield* base(id, by)),
+                  type: "stage",
+                  stage: input.kind === "pr_merged" ? "done" : "in_review",
+                  reason: input.kind,
+                });
+              events.push({
+                ...(yield* base(id, by)),
+                type: "auto",
+                kind: input.kind,
+                ref: input.ref,
+                observationKey,
+              });
+              yield* commitEvents(events);
+              changed = true;
+            }
+            return changed;
+          }),
+        ),
+      )
+      .pipe(
+        Effect.tap((changed) => (changed ? PubSub.publish(changes, undefined) : Effect.void)),
+        Effect.asVoid,
+        Effect.uninterruptible,
+        mapError,
+      );
   const entry = (input: TicketEntryInput, by?: TicketAuthor, namespace = "user") =>
     mutate(
       Effect.gen(function* () {
@@ -722,10 +776,10 @@ export const make = Effect.gen(function* () {
         ticket_id: string;
       }>`SELECT DISTINCT ticket_id FROM fork_ticket_events`;
       yield* sql`DELETE FROM fork_ticket_records`;
+      yield* sql`DELETE FROM fork_ticket_record_links`;
       for (const row of rows) {
         const state = projectTicket(yield* eventsFor(TicketId.make(row.ticket_id)));
-        if (state)
-          yield* sql`INSERT INTO fork_ticket_records (ticket_id, state_json) VALUES (${row.ticket_id}, ${yield* encodeProjection(state)})`;
+        if (state) yield* writeProjection(state);
       }
     }),
   );
@@ -915,6 +969,8 @@ export const make = Effect.gen(function* () {
   return TicketService.of({
     action,
     observe,
+    ticketsLinkedToThread,
+    ticketsLinkedToReference,
     setupCheck: sync ? sync.setupCheck : syncUnavailable,
     machineLabel: (label) => (sync ? sync.setLabel(label) : syncUnavailable),
     syncRefresh,

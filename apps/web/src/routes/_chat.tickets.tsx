@@ -171,9 +171,7 @@ function TicketsPage() {
     <SidebarInset>
       <WorkspacePageHeader electron={isElectron}>
         <h1 className="flex-1 text-sm font-medium">Tickets</h1>
-        {ids.map((id) => (
-          <TicketSyncStatus key={id} environmentId={id} />
-        ))}
+        {!narrow && ids.map((id) => <TicketSyncStatus key={id} environmentId={id} />)}
         {ids.length ? (
           <Button size={narrow ? "touch" : "sm"} onClick={() => openTicketCapture()}>
             New ticket
@@ -191,6 +189,13 @@ function TicketsPage() {
             </div>
           ) : (
             <>
+              {narrow ? (
+                <div className="flex flex-wrap items-center gap-3">
+                  {ids.map((id) => (
+                    <TicketSyncStatus key={id} environmentId={id} />
+                  ))}
+                </div>
+              ) : null}
               {narrow ? (
                 <div className="flex items-center gap-2">
                   <div className="min-w-0 flex-1">

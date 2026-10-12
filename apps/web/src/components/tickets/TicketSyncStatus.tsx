@@ -1,3 +1,4 @@
+import { Link } from "@tanstack/react-router";
 import { useAtomRefresh, useAtomValue } from "@effect/atom-react";
 import { AsyncResult } from "effect/reactivity";
 import { useEffect, useMemo, useState } from "react";
@@ -6,6 +7,7 @@ import { ticketEnvironment } from "../../state/tickets";
 import { useAtomCommand } from "../../state/use-atom-command";
 import { Tooltip, TooltipTrigger, TooltipPopup } from "../ui/tooltip";
 import { Button } from "../ui/button";
+import { Badge } from "../ui/badge";
 
 export function TicketSyncStatus({ environmentId }: { environmentId: EnvironmentId }) {
   const query = useMemo(
@@ -25,10 +27,25 @@ export function TicketSyncStatus({ environmentId }: { environmentId: Environment
   return (
     <div className="flex items-center gap-2 text-xs">
       <Tooltip>
-        <TooltipTrigger render={<span aria-live="polite" />}>
+        <TooltipTrigger
+          render={
+            <Badge
+              variant="outline"
+              aria-live="polite"
+              render={
+                value && !value.configured ? (
+                  <Link
+                    to="/settings/tickets"
+                    aria-label="Sync not configured. Open Settings → Tickets"
+                  />
+                ) : undefined
+              }
+            />
+          }
+        >
           {value
             ? !value.configured
-              ? "Local tickets"
+              ? "Sync not configured"
               : value.lastError
                 ? `Offline · ${value.pendingEvents} pending`
                 : value.pendingEvents
@@ -36,7 +53,11 @@ export function TicketSyncStatus({ environmentId }: { environmentId: Environment
                   : "Synced"
             : "Sync…"}
         </TooltipTrigger>
-        <TooltipPopup>{value?.lastError ?? value?.remote ?? environmentId}</TooltipPopup>
+        <TooltipPopup>
+          {value && !value.configured
+            ? "Configure sync in Settings → Tickets"
+            : (value?.lastError ?? value?.remote ?? environmentId)}
+        </TooltipPopup>
       </Tooltip>
       <Button
         variant="ghost"

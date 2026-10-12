@@ -30,16 +30,15 @@ export const make = Effect.gen(function* () {
     model?: string,
   ) =>
     Effect.gen(function* () {
-      for (const ticket of (yield* tickets.list()).tickets) {
-        const state = yield* tickets.get(ticket.id);
-        const reference = state.references.find(
-          (l) => l.kind === kind && l.ref === ref && l.machine === tickets.author().machine,
+      for (const { id, reference } of yield* tickets.ticketsLinkedToReference(
+        kind,
+        ref,
+        tickets.author().machine,
+      )) {
+        yield* tickets.reference(
+          { id, kind, ref, role: reference.role, title },
+          tickets.author({ actor: "agent", thread: threadId, ...(model ? { model } : {}) }),
         );
-        if (reference)
-          yield* tickets.reference(
-            { id: ticket.id, kind, ref, role: reference.role, title },
-            tickets.author({ actor: "agent", thread: threadId, ...(model ? { model } : {}) }),
-          );
       }
     });
   const worker = yield* makeDrainableWorker((stored: OrchestrationV2StoredEvent) =>
@@ -47,17 +46,14 @@ export const make = Effect.gen(function* () {
       if (String(stored.commandId).startsWith("command:runtime-reconcile:")) return;
       const event = stored.event;
       if (event.type === "run.created") {
-        for (const ticket of (yield* tickets.list()).tickets) {
-          const link = ticket.links.find(
-            (l) =>
-              l.threadId === event.payload.threadId &&
-              l.machine === tickets.author().machine &&
-              ["work", "planning"].includes(l.role),
-          );
-          if (link)
+        for (const { id, reference: link } of yield* tickets.ticketsLinkedToThread(
+          event.payload.threadId,
+          tickets.author().machine,
+        )) {
+          if (["work", "planning"].includes(link.role))
             yield* tickets.link({
-              id: ticket.id,
-              threadId: link.threadId,
+              id,
+              threadId: event.payload.threadId,
               role: link.role,
               startWork: true,
               title: link.title,
@@ -70,25 +66,22 @@ export const make = Effect.gen(function* () {
         event.type === "thread.pull-request-synced"
       ) {
         const thread = event.payload;
-        for (const ticket of (yield* tickets.list()).tickets) {
-          for (const link of ticket.links.filter(
-            (l) => l.threadId === thread.id && l.machine === tickets.author().machine,
-          ))
-            yield* tickets.reference(
-              {
-                id: ticket.id,
-                kind: "thread",
-                ref: thread.id,
-                role: link.role,
-                title: thread.title,
-              },
-              tickets.author({
-                actor: "agent",
-                thread: thread.id,
-                model: thread.modelSelection?.model,
-              }),
-            );
-        }
+        const linked = yield* tickets.ticketsLinkedToThread(thread.id, tickets.author().machine);
+        for (const { id, reference: link } of linked)
+          yield* tickets.reference(
+            {
+              id,
+              kind: "thread",
+              ref: thread.id,
+              role: link.role,
+              title: thread.title,
+            },
+            tickets.author({
+              actor: "agent",
+              thread: thread.id,
+              model: thread.modelSelection?.model,
+            }),
+          );
         if (event.type === "thread.pull-request-synced") {
           for (const pr of thread.pullRequests ?? []) {
             if (pr.source === "stack-dismissed") continue;
@@ -135,16 +128,10 @@ export const make = Effect.gen(function* () {
           if (firstSeen && !isNewGoal)
             for (const iteration of thread.goal.history)
               knownIterations.add(`goal-iteration:${thread.goal.id}:${iteration.iteration}`);
-          for (const ticket of (yield* tickets.list()).tickets) {
-            const link = ticket.links.find(
-              (l) =>
-                l.threadId === thread.id &&
-                l.machine === tickets.author().machine &&
-                l.role === "work",
-            );
-            if (link && isNewGoal)
+          for (const { id, reference: link } of linked) {
+            if (link.role === "work" && isNewGoal)
               yield* tickets.link({
-                id: ticket.id,
+                id,
                 threadId: thread.id,
                 role: "work",
                 startWork: true,

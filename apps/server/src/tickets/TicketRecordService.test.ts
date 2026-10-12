@@ -371,3 +371,72 @@ it.effect("a superseded work thread and a closed PR do not change manual stages"
     assert.equal((yield* tickets.get(ticket.id)).ticket.status, "in_progress");
   }).pipe(Effect.provide(layer)),
 );
+
+it.effect("observation queries only the reference index for an unlinked thread", () =>
+  Effect.gen(function* () {
+    const sql = yield* SqlClient.SqlClient;
+    const queries: string[] = [];
+    const counted = new Proxy(sql, {
+      apply(target, thisArg, args) {
+        queries.push((args[0] as TemplateStringsArray).join("?"));
+        return Reflect.apply(target, thisArg, args);
+      },
+    });
+    const tickets = yield* Tickets.make.pipe(Effect.provideService(SqlClient.SqlClient, counted));
+    const { ticket } = yield* tickets.upsert({ title: "Linked record" });
+    const threadId = ThreadId.make("linked");
+    yield* tickets.link({ id: ticket.id, threadId, role: "work" });
+    queries.length = 0;
+    yield* tickets.observe({
+      threadId: ThreadId.make("unlinked"),
+      key: "settled",
+      kind: "thread_settled",
+      ref: "unlinked",
+    });
+    assert.equal(queries.length, 1);
+    assert.include(queries[0]!, "FROM fork_ticket_record_links");
+    yield* tickets.observe({ threadId, key: "settled", kind: "thread_settled", ref: threadId });
+    assert.equal(
+      (yield* tickets.timeline({ id: ticket.id })).events.filter(
+        (e) => e.type === "auto" && e.kind === "thread_settled",
+      ).length,
+      1,
+    );
+  }).pipe(
+    Effect.provide(
+      Layer.mergeAll(Projects.layer, NodeCrypto.layer).pipe(Layer.provideMerge(Sqlite.layerMemory)),
+    ),
+  ),
+);
+
+it.effect(
+  "reference index follows unlink, deletion, restore, import and rebuild with machine isolation",
+  () =>
+    Effect.gen(function* () {
+      const tickets = yield* Tickets.TicketService;
+      const { ticket } = yield* tickets.upsert({ title: "Index" });
+      const threadId = ThreadId.make("owner");
+      yield* tickets.link({ id: ticket.id, threadId, role: "work" });
+      for (const kind of ["goal", "task", "pr"] as const)
+        yield* tickets.reference({ id: ticket.id, kind, ref: kind, role: "review", title: kind });
+      assert.equal((yield* tickets.ticketsLinkedToThread(threadId, "other-machine")).length, 0);
+      const original = yield* tickets.ticketsLinkedToThread(threadId, "test");
+      assert.equal(original.length, 1);
+      for (const kind of ["goal", "task", "pr"] as const)
+        assert.equal(
+          (yield* tickets.ticketsLinkedToReference(kind, kind, "test"))[0]?.reference.title,
+          kind,
+        );
+      yield* tickets.rebuild;
+      assert.deepStrictEqual(yield* tickets.ticketsLinkedToThread(threadId, "test"), original);
+      yield* tickets.delete({ id: ticket.id });
+      assert.equal((yield* tickets.ticketsLinkedToThread(threadId, "test")).length, 0);
+      yield* tickets.restore({ id: ticket.id });
+      assert.deepStrictEqual(yield* tickets.ticketsLinkedToThread(threadId, "test"), original);
+      yield* tickets.unlink({ id: ticket.id, threadId });
+      assert.equal((yield* tickets.ticketsLinkedToThread(threadId, "test")).length, 0);
+      yield* tickets.importEvents((yield* tickets.timeline({ id: ticket.id })).events);
+      yield* tickets.rebuild;
+      assert.equal((yield* tickets.ticketsLinkedToThread(threadId, "test")).length, 0);
+    }).pipe(Effect.provide(layer)),
+);

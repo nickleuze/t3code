@@ -87,6 +87,11 @@ export const make = Effect.gen(function* () {
       Effect.gen(function* () {
         if (nudged.has(run.id)) return;
         if (!(yield* settings.getSettings).ticketHandoffNudge) return;
+        const machine = tickets.author().machine;
+        const linked = (yield* tickets.ticketsLinkedToThread(run.threadId, machine)).filter(
+          ({ reference }) => ["work", "planning", "review"].includes(reference.role),
+        );
+        if (!linked.length) return;
         const { thread, runs, turnItems, messages } = yield* orchestrator.getThreadRecords(
           run.threadId,
           ["runs", "turnItems", "messages"],
@@ -107,17 +112,9 @@ export const make = Effect.gen(function* () {
         }
         const finished = runs.find((r) => r.id === run.id);
         if (!finished?.startedAt || !finished.completedAt) return;
-        const machine = tickets.author().machine;
-        const linked = (yield* tickets.list()).tickets.filter((ticket) =>
-          ticket.links.some(
-            (link) =>
-              link.threadId === thread.id &&
-              link.machine === machine &&
-              ["work", "planning", "review"].includes(link.role),
-          ),
-        );
         const eligible = [];
-        for (const ticket of linked) {
+        for (const { id } of linked) {
+          const { ticket } = yield* tickets.get(id);
           const { events } = yield* tickets.timeline({ id: ticket.id });
           if (
             needsTicketHandoff({

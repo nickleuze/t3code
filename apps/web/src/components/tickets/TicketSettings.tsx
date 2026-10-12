@@ -17,6 +17,7 @@ import { SettingsPageContainer } from "../settings/settingsLayout";
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";
 import { Switch } from "../ui/switch";
+import { useMediaQuery } from "../../hooks/useMediaQuery";
 import { TicketPicker } from "./TicketPicker";
 
 export function TicketSettings() {
@@ -50,6 +51,7 @@ function failureMessage(result: Parameters<typeof squashAtomCommandFailure>[0]):
   return error instanceof Error ? error.message : "The request failed. Your input is kept.";
 }
 function EnvironmentTicketSettings({ environmentId }: { environmentId: EnvironmentId }) {
+  const narrow = useMediaQuery("(max-width: 480px)");
   const query = useMemo(
     () => ticketEnvironment.syncStatus({ environmentId, input: {} }),
     [environmentId],
@@ -96,6 +98,7 @@ function EnvironmentTicketSettings({ environmentId }: { environmentId: Environme
         <label className="grid gap-1.5">
           Remote URL
           <Input
+            size={narrow ? "touch" : "default"}
             aria-label="Ticket remote URL"
             value={remote || value?.remote || ""}
             onChange={(e) => setRemote(e.target.value)}
@@ -110,6 +113,7 @@ function EnvironmentTicketSettings({ environmentId }: { environmentId: Environme
         ) : null}
         <div className="flex flex-wrap gap-2">
           <Button
+            size={narrow ? "touch" : "default"}
             disabled={busy || !allowed || !(remote || value?.remote)}
             onClick={() =>
               void run(async () => {
@@ -124,6 +128,7 @@ function EnvironmentTicketSettings({ environmentId }: { environmentId: Environme
             Configure remote
           </Button>
           <Button
+            size={narrow ? "touch" : "default"}
             variant="outline"
             disabled={busy}
             onClick={() =>
@@ -136,6 +141,7 @@ function EnvironmentTicketSettings({ environmentId }: { environmentId: Environme
             Refresh
           </Button>
           <Button
+            size={narrow ? "touch" : "default"}
             variant="outline"
             disabled={busy}
             onClick={() =>
@@ -173,14 +179,14 @@ function EnvironmentTicketSettings({ environmentId }: { environmentId: Environme
             </div>
             <div>
               <dt className="inline font-medium">Last error: </dt>
-              <dd className="inline">{value.lastError ?? "None"}</dd>
+              <dd className="inline wrap-anywhere">{value.lastError ?? "None"}</dd>
             </div>
           </dl>
         ) : (
           <p>Loading sync status…</p>
         )}
         {checks ? (
-          <div aria-live="polite" className="grid gap-1 text-sm">
+          <div aria-live="polite" className="grid gap-1 text-sm wrap-anywhere">
             <p>Clone present: {checks.clonePresent ? "Yes" : "No"}</p>
             <p>Remote reachable: {checks.remoteReachable ? "Yes" : "No"}</p>
             <p>
@@ -193,7 +199,7 @@ function EnvironmentTicketSettings({ environmentId }: { environmentId: Environme
           </div>
         ) : null}
         {error ? (
-          <p role="alert" className="text-sm text-destructive">
+          <p role="alert" className="text-sm text-destructive wrap-anywhere">
             {error}
           </p>
         ) : null}
@@ -201,6 +207,7 @@ function EnvironmentTicketSettings({ environmentId }: { environmentId: Environme
       <label className="grid gap-1.5">
         Machine label
         <Input
+          size={narrow ? "touch" : "default"}
           aria-label="Ticket machine label"
           value={label ?? value?.label ?? ""}
           onChange={(e) => setMachineLabel(e.target.value)}
@@ -208,6 +215,7 @@ function EnvironmentTicketSettings({ environmentId }: { environmentId: Environme
         />
       </label>
       <Button
+        size={narrow ? "touch" : "default"}
         variant="outline"
         disabled={busy || !allowed || !label?.trim()}
         onClick={() =>
@@ -255,6 +263,7 @@ function ProjectMapping({
   mapping: TicketProjectsResult["projects"][number];
   onSaved: () => void;
 }) {
+  const narrow = useMediaQuery("(max-width: 480px)");
   const projects = useProjects().filter((p) => p.environmentId === environmentId);
   const [selected, setSelected] = useState<string>(
     mapping.projectId ?? mapping.suggestedProjectId ?? "none",
@@ -271,6 +280,7 @@ function ProjectMapping({
         {!mapping.projectId && mapping.suggestedProjectId ? " · Suggested local match" : ""}
       </p>
       <Input
+        size={narrow ? "touch" : "default"}
         aria-label={`Display name for ${mapping.key}`}
         value={name}
         onChange={(e) => setName(e.target.value)}
@@ -287,6 +297,7 @@ function ProjectMapping({
         disabled={busy || !allowed}
       />
       <Button
+        size={narrow ? "touch" : "default"}
         variant="outline"
         disabled={busy || !allowed || !name.trim()}
         onClick={() => {

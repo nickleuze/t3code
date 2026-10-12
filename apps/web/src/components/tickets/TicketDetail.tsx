@@ -100,7 +100,7 @@ export function TicketDetail({
         if (!open && !busy) onClose();
       }}
     >
-      <SheetPopup variant="work-record">
+      <SheetPopup variant="wide">
         <SheetHeader>
           <SheetTitle>{ticket.title}</SheetTitle>
           <SheetDescription>
