@@ -116,6 +116,10 @@ export const make = Effect.gen(function* () {
       timeout: "30 seconds",
       maxOutputBytes: 2 * 1024 * 1024,
       env: {
+        GIT_AUTHOR_NAME: "T3 Tickets",
+        GIT_AUTHOR_EMAIL: "tickets@localhost",
+        GIT_COMMITTER_NAME: "T3 Tickets",
+        GIT_COMMITTER_EMAIL: "tickets@localhost",
         GCM_INTERACTIVE: "never",
         GIT_ASKPASS: "",
         GIT_TERMINAL_PROMPT: "0",
@@ -123,14 +127,18 @@ export const make = Effect.gen(function* () {
         SSH_ASKPASS_REQUIRE: "never",
       },
     });
-  const hasConflict = Effect.gen(function* () {
-    const markers = yield* git(["diff", "--name-only", "--diff-filter=U"]);
-    return (
-      Boolean(markers.stdout.trim()) ||
-      (yield* fs.exists(path.join(repo, ".git/rebase-merge"))) ||
-      (yield* fs.exists(path.join(repo, ".git/rebase-apply")))
-    );
-  });
+  const hasConflict = (stderr: string) =>
+    Effect.gen(function* () {
+      const markers = yield* git(["diff", "--name-only", "--diff-filter=U"]);
+      return (
+        Boolean(markers.stdout.trim()) ||
+        /\bconflicts?\b/i.test(stderr) ||
+        // Git can leave rebase state after a fatal identity/network failure too.
+        (!/\bfatal:|identity unknown/i.test(stderr) &&
+          ((yield* fs.exists(path.join(repo, ".git/rebase-merge"))) ||
+            (yield* fs.exists(path.join(repo, ".git/rebase-apply")))))
+      );
+    });
   const checked = (args: readonly string[], cwd = repo) =>
     Effect.gen(function* () {
       const output = yield* git(args, cwd);
@@ -138,10 +146,11 @@ export const make = Effect.gen(function* () {
       return yield* new TicketError({
         message:
           args[0] === "pull"
-            ? (yield* hasConflict)
+            ? (yield* hasConflict(output.stderr))
               ? "Ticket sync pull/rebase conflict. Resolve the clone conflict manually; local events are kept."
               : "Ticket sync pull failed, will retry. Local events are queued."
             : `Ticket sync ${args[0]} failed. Local events are queued.`,
+        cause: output.stderr.slice(-400),
       });
     });
   const registry = Effect.gen(function* () {
@@ -216,16 +225,7 @@ export const make = Effect.gen(function* () {
     }
     yield* checked(["add", "--all", "--", "."]);
     const dirty = yield* checked(["diff", "--cached", "--name-only"]);
-    if (dirty.trim())
-      yield* checked([
-        "-c",
-        "user.name=T3 Tickets",
-        "-c",
-        "user.email=tickets@localhost",
-        "commit",
-        "-m",
-        "Append ticket work records",
-      ]);
+    if (dirty.trim()) yield* checked(["commit", "-m", "Append ticket work records"]);
     const remoteRefs = yield* checked(["ls-remote", "--heads", "origin", state.branch]);
     if (remoteRefs.trim()) {
       yield* checked(["pull", "--rebase", "origin", state.branch]);
