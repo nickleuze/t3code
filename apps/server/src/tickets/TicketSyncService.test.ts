@@ -11,7 +11,7 @@ import * as Sync from "./TicketSyncService.ts";
 import { projectTicket, ticketIds } from "./TicketRecord.ts";
 
 const layer = Processes.layer.pipe(Layer.provideMerge(NodeServices.layer));
-const setup = Effect.gen(function* () {
+const setupRemote = Effect.fn(function* (readmeOnly = false) {
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
   const runner = yield* Processes.ProcessRunner;
@@ -62,6 +62,22 @@ const setup = Effect.gen(function* () {
       Effect.map((output) => output.stdout),
     );
   yield* git(root, ["init", "--bare", "--initial-branch=main", remote]);
+  if (readmeOnly) {
+    const seed = path.join(root, "seed");
+    yield* git(root, ["clone", "--", remote, seed]);
+    yield* fs.writeFileString(path.join(seed, "README.md"), "# Backlog\n");
+    yield* git(seed, ["add", "README.md"]);
+    yield* git(seed, [
+      "-c",
+      "user.name=Test",
+      "-c",
+      "user.email=test@localhost",
+      "commit",
+      "-m",
+      "Initialize backlog",
+    ]);
+    yield* git(seed, ["push", "origin", "HEAD:main"]);
+  }
   const aHome = path.join(root, "A");
   const bHome = path.join(root, "B");
   const a = yield* Sync.make.pipe(Effect.provide(ServerConfig.layerTest(root, aHome)));
@@ -84,6 +100,19 @@ const setup = Effect.gen(function* () {
   };
   return { fs, path, root, remote, aHome, bHome, a, b, git, ids, id, created };
 });
+
+const setup = setupRemote();
+
+it.effect("configuring a README-only remote writes a valid empty project registry", () =>
+  Effect.gen(function* () {
+    const { a, remote, git } = yield* setupRemote(true);
+    assert.deepStrictEqual(
+      JSON.parse(yield* git(remote, ["show", "HEAD:registry/projects.json"])),
+      {},
+    );
+    assert.isTrue((yield* a.setupCheck).registryParsed);
+  }).pipe(Effect.provide(layer)),
+);
 
 it.effect(
   "two machines retain concurrent writes to one ticket and converge deterministically",

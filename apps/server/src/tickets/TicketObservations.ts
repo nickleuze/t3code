@@ -51,13 +51,20 @@ export const make = Effect.gen(function* () {
           tickets.author().machine,
         )) {
           if (["work", "planning"].includes(link.role))
-            yield* tickets.link({
-              id,
-              threadId: event.payload.threadId,
-              role: link.role,
-              startWork: true,
-              title: link.title,
-            });
+            yield* tickets.link(
+              {
+                id,
+                threadId: event.payload.threadId,
+                role: link.role,
+                startWork: true,
+                title: link.title,
+              },
+              tickets.author({
+                actor: "agent",
+                thread: event.payload.threadId,
+                model: event.payload.modelSelection?.model,
+              }),
+            );
         }
       }
       if (

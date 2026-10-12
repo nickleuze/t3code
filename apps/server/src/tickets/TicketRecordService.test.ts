@@ -1,6 +1,6 @@
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import { assert, it } from "@effect/vitest";
-import { ThreadId } from "@t3tools/contracts";
+import { EventId, ProjectId, ThreadId } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Deferred from "effect/Deferred";
@@ -14,6 +14,57 @@ import * as Tickets from "./TicketService.ts";
 const layer = Tickets.layer.pipe(
   Layer.provide(Layer.mergeAll(Projects.layer, NodeCrypto.layer)),
   Layer.provideMerge(Sqlite.layerMemory),
+);
+
+it.effect.each([
+  { folder: ".t3", expected: "t3" },
+  { folder: "My  App!!", expected: "my-app" },
+  { folder: "my---app", expected: "my-app" },
+  { folder: "...", expected: "project" },
+  { folder: ".t3", mapped: "-t3", expected: "-t3" },
+])("project keys normalize $folder and preserve existing mappings ($expected)", (test) =>
+  Effect.gen(function* () {
+    const projects = yield* Projects.ProjectStoreV2;
+    const tickets = yield* Tickets.TicketService;
+    const projectId = ProjectId.make("project-key");
+    yield* projects.apply({
+      sequence: 1,
+      eventId: EventId.make("project-key-created"),
+      aggregateKind: "project",
+      aggregateId: projectId,
+      occurredAt: "2026-10-12T00:00:00.000Z",
+      commandId: null,
+      causationEventId: null,
+      correlationId: null,
+      metadata: {},
+      type: "project.created",
+      payload: {
+        projectId,
+        title: test.folder,
+        workspaceRoot: `/tmp/${test.folder}`,
+        defaultModelSelection: null,
+        scripts: [],
+        createdAt: "2026-10-12T00:00:00.000Z",
+        updatedAt: "2026-10-12T00:00:00.000Z",
+      },
+    });
+    if (test.mapped) yield* tickets.projectsMap({ key: test.mapped, projectId });
+    const { ticket } = yield* tickets.upsert({ title: "Project key", projectId });
+    assert.equal(ticket.projectKey, test.expected);
+    assert.equal(ticket.projectId, projectId);
+    assert.deepStrictEqual(
+      (yield* tickets.projectsList).projects.map((project) => project.key),
+      [test.expected],
+    );
+  }).pipe(
+    Effect.provide(
+      Tickets.layer.pipe(
+        Layer.provideMerge(Projects.layer),
+        Layer.provide(NodeCrypto.layer),
+        Layer.provideMerge(Sqlite.layerMemory),
+      ),
+    ),
+  ),
 );
 
 it.effect("import is idempotent, collision safe and rebuildable", () =>
