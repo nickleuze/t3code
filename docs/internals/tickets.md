@@ -29,3 +29,28 @@ orchestration events. Reconciliation snapshots establish baselines, not activity
 changing these workers to replay history would manufacture transitions or dispatch
 new agent work from an old completed turn. The nudge also checks RuntimePolicy:
 record-keeping must not turn read-only work into an automatic write request.
+
+## Launch decisions
+
+[TicketLaunchService](../../apps/server/src/tickets/TicketLaunchService.ts) owns
+launch decisions for RPC, MCP and the web. A plan-first launch is linked as `work`:
+planning belongs to the work thread and its activity must be visible on the ticket.
+A local work link with a running turn, pending request, actionable plan or active /
+needs-input goal returns `already_active` unless parallel work is explicitly
+allowed. Another machine's link does not block a local launch.
+
+The caller's thread and command IDs are the retry identity. Preserve them after an
+ambiguous failure; use fresh IDs for a different launch mode or destination. The
+accepted receipt and thread settings govern retries even if project defaults or
+mappings change. MCP derives those IDs from the caller-scoped `clientRequestId`.
+
+Launch settings come only from project defaults and the shared model fallback
+resolver, never remembered per-ticket web selections. An unset workspace defaults
+to a HEAD worktree for repositories with a commit; non-Git folders and repositories
+without HEAD launch at the project root. Explicit local mode also uses the root.
+This fallback is ticket-specific so tickets can start non-coding work.
+
+Cross-machine launches resolve project mappings and defaults on the destination.
+A missing ticket triggers one sync refresh and one retry with the same IDs; a
+missing project asks for a project from that destination. Capture commits creation
+before launch, so a launch failure must preserve the new ticket and offer Retry.

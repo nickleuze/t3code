@@ -34,6 +34,7 @@ import {
   ChatGptHandoffState,
 } from "./providerSetup.ts";
 import * as Schema from "effect/Schema";
+import { OrchestratorMcpFailure } from "./orchestratorMcp.ts";
 import * as Rpc from "effect/rpc/Rpc";
 import * as RpcGroup from "effect/rpc/RpcGroup";
 import * as RpcMiddleware from "effect/rpc/RpcMiddleware";
@@ -368,6 +369,11 @@ import {
   ScheduledTaskMutationResult,
 } from "./scheduledTask.ts";
 import {
+  TicketStartInput,
+  TicketStartResult,
+  TicketNotFound,
+  TicketLaunchNeedsProject,
+  TicketLaunchError,
   TicketDeleteInput,
   TicketDeleteResult,
   TicketError,
@@ -551,6 +557,7 @@ export const WS_METHODS = {
   serverRefreshUsageRates: "server.refreshUsageRates",
 
   // Tickets
+  ticketsStart: "tickets.start",
   ticketsAction: "tickets.action",
   ticketsSetupCheck: "tickets.setup.check",
   ticketsMachineLabel: "tickets.machine.label",
@@ -1848,6 +1855,19 @@ const WsSubscribeServerLifecycleRpc = Rpc.make(WS_METHODS.subscribeServerLifecyc
   stream: true,
 });
 
+const WsTicketsStartRpc = Rpc.make(WS_METHODS.ticketsStart, {
+  payload: TicketStartInput,
+  success: TicketStartResult,
+  error: Schema.Union([
+    TicketNotFound,
+    TicketLaunchNeedsProject,
+    TicketLaunchError,
+    TicketError,
+    OrchestratorMcpFailure,
+    EnvironmentAuthorizationError,
+  ]),
+});
+
 const WsTicketsActionRpc = Rpc.make(WS_METHODS.ticketsAction, {
   payload: TicketActionInput,
   success: TicketMutationResult,
@@ -2044,6 +2064,7 @@ export class RpcScopeAuthorization extends RpcMiddleware.Service<RpcScopeAuthori
 ) {}
 
 export const TicketRecordRpcGroup = RpcGroup.make(
+  WsTicketsStartRpc,
   WsTicketsActionRpc,
   WsTicketsSetupCheckRpc,
   WsTicketsMachineLabelRpc,

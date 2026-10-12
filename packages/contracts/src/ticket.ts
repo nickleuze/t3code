@@ -1,5 +1,8 @@
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
+import { ModelSelection } from "./modelSelection.ts";
+import { RuntimeMode, ProviderInteractionMode } from "./providerPolicy.ts";
+import { OrchestrationV2CreationSource } from "./orchestrationV2.ts";
 
 import {
   CommandId,
@@ -133,6 +136,7 @@ export type TicketDeleteResult = typeof TicketDeleteResult.Type;
 
 export class TicketError extends Schema.TaggedError<TicketError>()("TicketError", {
   message: Schema.String,
+  reason: Schema.optional(Schema.Literal("not_found")),
   ticketId: Schema.optional(TicketId),
   cause: Schema.optional(Schema.Defect()),
 }) {}
@@ -292,3 +296,61 @@ export const TicketActionInput = Schema.Struct({
   action: Schema.Literals(["accept", "drop", "reopen"]),
 });
 export type TicketActionInput = typeof TicketActionInput.Type;
+
+export const TicketStartMode = Schema.Literals(["plan", "default", "goal"]);
+export type TicketStartMode = typeof TicketStartMode.Type;
+export const TicketStartInput = Schema.Struct({
+  ticketId: TicketId,
+  threadId: ThreadId,
+  commandId: CommandId,
+  mode: Schema.optional(TicketStartMode),
+  projectId: Schema.optional(ProjectId),
+  modelSelection: Schema.optional(ModelSelection),
+  runtimeMode: Schema.optional(RuntimeMode),
+  allowParallel: Schema.optional(Schema.Boolean),
+  creationSource: OrchestrationV2CreationSource,
+});
+export type TicketStartInput = typeof TicketStartInput.Type;
+export const TicketStartResult = Schema.Struct({
+  status: Schema.Literals(["launched", "already_active"]),
+  threadId: ThreadId,
+  projectId: ProjectId,
+  modelSelection: ModelSelection,
+  interactionMode: ProviderInteractionMode,
+});
+export type TicketStartResult = typeof TicketStartResult.Type;
+export class TicketNotFound extends Schema.TaggedError<TicketNotFound>()("TicketNotFound", {
+  ticketId: TicketId,
+}) {
+  override get message() {
+    return "Ticket not found on this machine.";
+  }
+}
+export class TicketLaunchNeedsProject extends Schema.TaggedError<TicketLaunchNeedsProject>()(
+  "TicketLaunchNeedsProject",
+  {
+    ticketId: TicketId,
+  },
+) {
+  override get message() {
+    return "Choose a project on this machine.";
+  }
+}
+export class TicketLaunchError extends Schema.TaggedError<TicketLaunchError>()(
+  "TicketLaunchError",
+  {
+    ticketId: TicketId,
+    operation: Schema.Literals([
+      "resolve-project",
+      "resolve-model",
+      "read-thread",
+      "launch",
+      "goal",
+    ]),
+    cause: Schema.optional(Schema.Defect()),
+  },
+) {
+  override get message() {
+    return `Ticket launch failed during ${this.operation}.`;
+  }
+}

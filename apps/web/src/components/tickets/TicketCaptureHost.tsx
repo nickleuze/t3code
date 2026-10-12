@@ -29,6 +29,8 @@ import { resolveSettingsScope } from "../settings/settingsScope";
 import { usePendingTicketDrafts, linkPromotedTicketDraft } from "../../pendingTicketDrafts";
 import { useThreadShells } from "../../state/entities";
 
+import { useTicketLaunch } from "./useTicketLaunch";
+
 export function TicketCaptureHost() {
   const request = useTicketCapture((state) => state.request);
   const environmentIds = useAtomValue(ticketEnvironmentIdsAtom);
@@ -111,9 +113,11 @@ function TicketCaptureDialog() {
   const submitting = useRef(false);
   const upsert = useAtomCommand(ticketEnvironment.upsertTicket);
   const link = useAtomCommand(ticketEnvironment.linkTicket);
+  const { launch } = useTicketLaunch();
   const close = () => useTicketCapture.setState({ request: null });
-  const save = async (another: boolean) => {
-    if (!canWrite || !title.trim() || submitting.current) return;
+  const save = async (another: boolean, launchWork = false) => {
+    if (!canWrite || !title.trim() || submitting.current || (launchWork && projectId === "none"))
+      return;
     submitting.current = true;
     setBusy(true);
     setError(null);
@@ -150,7 +154,16 @@ function TicketCaptureDialog() {
         "t3-ticket-last-project",
         JSON.stringify({ environmentId, projectId: projectId === "none" ? null : projectId }),
       );
-      if (another) {
+      if (launchWork) {
+        close();
+        await launch({
+          environmentId,
+          ticketId: result.value.ticket.id,
+          title: result.value.ticket.title,
+          mode: "plan",
+          created: true,
+        });
+      } else if (another) {
         setSavedId(null);
         setTitle("");
         setBody("");
@@ -171,6 +184,12 @@ function TicketCaptureDialog() {
       <DialogPopup variant="mobile-fullscreen" initialFocus={input}>
         <form
           className={narrow ? "contents" : undefined}
+          onKeyDown={(event) => {
+            if ((event.metaKey || event.ctrlKey) && event.shiftKey && event.key === "Enter") {
+              event.preventDefault();
+              void save(false, true);
+            }
+          }}
           onSubmit={(event) => {
             event.preventDefault();
             void save(false);
@@ -234,6 +253,15 @@ function TicketCaptureDialog() {
             ) : null}
           </DialogPanel>
           <DialogFooter>
+            <Button
+              size={narrow ? "touch" : "default"}
+              variant="outline"
+              type="button"
+              disabled={busy || !canWrite || !title.trim() || projectId === "none"}
+              onClick={() => void save(false, true)}
+            >
+              Create &amp; launch
+            </Button>
             <Button
               size={narrow ? "touch" : "default"}
               variant="outline"

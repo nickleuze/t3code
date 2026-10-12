@@ -19,6 +19,7 @@ import * as Stream from "effect/Stream";
 import * as ThreadLaunch from "../../../orchestration-v2/ThreadLaunchService.ts";
 import * as ThreadManagement from "../../../orchestration-v2/ThreadManagementService.ts";
 import * as ServerConfig from "../../../config.ts";
+import * as Defaults from "../../../project/ProjectLaunchDefaults.ts";
 import * as Project from "../../../project/ProjectService.ts";
 import * as ManagedProjectFolders from "../../../project/ManagedProjectFolders.ts";
 import * as GitVcsDriver from "../../../vcs/GitVcsDriver.ts";
@@ -47,6 +48,15 @@ it.effect("attributes a launched thread's first message to the calling thread", 
     } as OrchestrationV2ThreadShell;
     let launchedSender: ThreadId | undefined;
     const layerDependencies = Layer.mergeAll(
+      Layer.mock(Defaults.ProjectLaunchDefaults)({
+        resolve: (project) =>
+          Effect.succeed({
+            modelSelection: project.defaultModelSelection,
+            runtimeMode: "auto",
+            envMode: "worktree",
+          }),
+        runtimeMode: (mode) => Effect.succeed(mode),
+      }),
       NodeCrypto.layer,
       Layer.succeed(McpInvocationContext.McpInvocationContext, {
         environmentId: EnvironmentId.make("environment"),
@@ -118,6 +128,15 @@ it.effect("launches a scratch thread into the Scratch project", () =>
     } as OrchestrationV2ThreadShell;
     const launched: Array<ThreadLaunch.ThreadLaunchInput> = [];
     const layerDependencies = Layer.mergeAll(
+      Layer.mock(Defaults.ProjectLaunchDefaults)({
+        resolve: (project) =>
+          Effect.succeed({
+            modelSelection: project.defaultModelSelection,
+            runtimeMode: "auto",
+            envMode: "worktree",
+          }),
+        runtimeMode: (mode) => Effect.succeed(mode),
+      }),
       NodeCrypto.layer,
       Layer.succeed(McpInvocationContext.McpInvocationContext, {
         environmentId: EnvironmentId.make("environment"),
@@ -215,6 +234,15 @@ it.effect("starts a project from just a title when workspaceRoot is omitted", ()
       deletedAt: null,
     };
     const layerDependencies = Layer.mergeAll(
+      Layer.mock(Defaults.ProjectLaunchDefaults)({
+        resolve: (project) =>
+          Effect.succeed({
+            modelSelection: project.defaultModelSelection,
+            runtimeMode: "auto",
+            envMode: "worktree",
+          }),
+        runtimeMode: (mode) => Effect.succeed(mode),
+      }),
       NodeCrypto.layer,
       Layer.succeed(McpInvocationContext.McpInvocationContext, {
         environmentId: EnvironmentId.make("environment"),
@@ -306,6 +334,15 @@ const clientLaunchHarness = (input: {
   const projectId = ProjectId.make("project:client-target");
   const modelSelection = { instanceId: ProviderInstanceId.make("claude"), model: "claude-opus" };
   const layerDependencies = Layer.mergeAll(
+    Layer.mock(Defaults.ProjectLaunchDefaults)({
+      resolve: (project) =>
+        Effect.succeed({
+          modelSelection: project.defaultModelSelection,
+          runtimeMode: "auto",
+          envMode: "worktree",
+        }),
+      runtimeMode: (mode) => Effect.succeed(mode),
+    }),
     NodeCrypto.layer,
     Layer.succeed(McpInvocationContext.McpInvocationContext, {
       environmentId: EnvironmentId.make("environment"),

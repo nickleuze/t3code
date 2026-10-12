@@ -249,16 +249,25 @@ A result entry marks work ready for your acceptance; **Accept** moves it to Done
 **Reopen** returns Done or Dropped work to Ready. Done shows the last 14 days by
 default; deleted tickets can be restored from **Recently deleted** or Undo.
 
-**Start work** opens a draft in the selected project. Its first send links the
-thread and starts work; an abandoned draft does not. You can also launch
-immediately, plan first, or start with a T3 goal. **Resume** returns to an available
-local work thread. Links from another machine retain their context; map the
-project locally before starting new work there.
+**Launch** starts work in plan mode using the project's defaults. Choose a project
+when the ticket has none on that machine. The launch menu also offers work without
+planning, a T3 goal, and launch on another connected machine. If work is already
+active, Open returns to that thread; **Resume** opens an available local work
+thread. A remote launch refreshes sync if the ticket is missing there; if it is
+still missing, sync it before trying again. Choose a local project on the target
+machine when its shared project key has no mapping.
+
+To capture and start work together, choose a project and use **Create & launch**
+(or Mod+Shift+Enter) in New ticket. If launch fails, the created ticket remains and
+Retry continues that launch safely.
 
 Record notes, decisions, questions, and handoffs as entries. A handoff captures
 what changed and **Next**; decisions can be superseded and questions resolved
 without erasing their history. Agents use `t3_ticket_list`, `t3_ticket_get`,
 `t3_ticket_create`, `t3_ticket_update`, `t3_ticket_link`, and `t3_ticket_entry` to keep the same record.
+Use `t3_ticket_start` to start or hand off a ticket: it launches in plan mode by
+default, accepts `default` or `goal` mode, and returns an Open thread link. Reuse
+`clientRequestId` when retrying the same launch.
 Handoff reminders ask an agent that used tools without an entry to record its
 handoff. They skip planning, read-only work, and terminal tickets, and can be
 turned off in **Settings → Tickets**.

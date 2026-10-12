@@ -5,6 +5,7 @@ import { T3_MCP_TOOL_NAMES, resolveT3McpToolPresentation } from "./t3McpToolPres
 describe("resolveT3McpToolPresentation", () => {
   it("presents ticket tools with the shared T3 branding", () => {
     for (const [name, displayName] of [
+      ["t3_ticket_start", "Launch ticket work"],
       ["t3_ticket_create", "File a T3 ticket"],
       ["t3_ticket_list", "List T3 tickets"],
       ["t3_ticket_update", "Update a T3 ticket"],

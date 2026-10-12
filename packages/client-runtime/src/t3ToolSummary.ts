@@ -212,6 +212,9 @@ export function summarizeT3ToolCalls(
     case "goal-propose":
       label = phrase("Proposed", "propose", quantity(selected.length, "T3 goal"));
       break;
+    case "ticket-start":
+      label = phrase("Launched", "launch", quantity(selected.length, "ticket thread"));
+      break;
     case "ticket-create":
       label = phrase("Filed", "file", quantity(countEntities(entityIds("id")), "ticket"));
       break;

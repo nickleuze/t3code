@@ -55,6 +55,8 @@ import * as TurnItemPositionStore from "./TurnItemPositionStore.ts";
 import * as TicketObservations from "../tickets/TicketObservations.ts";
 import * as TicketHandoffNudge from "../tickets/TicketHandoffNudge.ts";
 import * as TicketSyncService from "../tickets/TicketSyncService.ts";
+import * as ProjectLaunchDefaults from "../project/ProjectLaunchDefaults.ts";
+import * as TicketLaunchService from "../tickets/TicketLaunchService.ts";
 import * as TicketService from "../tickets/TicketService.ts";
 import * as ScheduledTaskService from "../scheduledTasks/ScheduledTaskService.ts";
 import * as SecretRequests from "../secrets/SecretRequests.ts";
@@ -362,6 +364,19 @@ export const layerProduction = Layer.mergeAll(
   layerThreadLifecycleProvided,
   layerScheduledTaskProvided,
   layerTickets,
+  ProjectLaunchDefaults.layer,
+  TicketLaunchService.layer.pipe(
+    Layer.provide(
+      Layer.mergeAll(
+        layerTickets,
+        layerProjectService,
+        ProjectLaunchDefaults.layer,
+        layerThreadManagementProvided,
+        layerThreadLaunchProvided,
+        layerCommandReceiptStoreProvided,
+      ),
+    ),
+  ),
   layerTicketSync,
   layerSecretRequestsProvided,
   GoalLoopWorker.layer.pipe(

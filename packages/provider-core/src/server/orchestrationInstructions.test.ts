@@ -39,6 +39,8 @@ describe("T3 orchestration provider instructions", () => {
       assert.include(prompt, "T3 tickets are the user's backlog");
       assert.include(prompt, "outside your current task");
       assert.include(prompt, "a few at most per turn, mentioned in your reply");
+      assert.include(prompt, "`t3_ticket_start`");
+      assert.include(prompt, "reuse clientRequestId after a lost response");
       assert.include(prompt, "`t3_ticket_create`");
       assert.include(prompt, "`t3_ticket_list`");
       assert.include(prompt, "read `t3_ticket_get` before working");
