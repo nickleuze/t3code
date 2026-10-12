@@ -2400,6 +2400,22 @@ export function GeneralSettingsPanel() {
           }
         />
 
+        <SettingsRow
+          serverScoped
+          settingKeys={["ticketHandoffNudge"]}
+          title="Ticket handoff reminders"
+          description="Ask for one handoff entry when ticket work ends a tool-using turn without an entry."
+          control={
+            <ScopedSwitch
+              settingKeys={["ticketHandoffNudge"]}
+              checked={settings.ticketHandoffNudge}
+              onCheckedChange={(checked) =>
+                updateSettings({ ticketHandoffNudge: Boolean(checked) })
+              }
+              aria-label="Ticket handoff reminders"
+            />
+          }
+        />
         {supportsAutoSettlement ? (
           <>
             <SettingsRow

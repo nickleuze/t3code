@@ -16,6 +16,7 @@ import { toastManager } from "../ui/toast";
 import { TicketPicker } from "./TicketPicker";
 import { TicketGithubSection } from "./TicketGithub";
 import { TicketLinks } from "./TicketLinks";
+import { TicketTimeline } from "./TicketTimeline";
 import { TicketStartWork } from "./TicketStartWork";
 
 export function TicketDetail({
@@ -161,11 +162,19 @@ export function TicketDetail({
             >
               Save changes
             </Button>
-            <TicketGithubSection
-              entry={entry}
-              unsaved={busy || Object.values(edited).some(Boolean) || pickedStatus !== null}
-            />
+            {!ticket.record ? (
+              <TicketGithubSection
+                entry={entry}
+                unsaved={busy || Object.values(edited).some(Boolean) || pickedStatus !== null}
+              />
+            ) : null}
+            {ticket.projectKey && !ticket.projectId ? (
+              <p className="text-sm text-muted-foreground">
+                {ticket.projectName ?? ticket.projectKey} · Map a local project to start work.
+              </p>
+            ) : null}
             <TicketStartWork entry={entry} />
+            <TicketTimeline entry={entry} />
             <h3 className="text-sm font-medium">Linked threads</h3>
             <TicketLinks entry={entry} editable />
             {ticket.links.length === 0 ? (

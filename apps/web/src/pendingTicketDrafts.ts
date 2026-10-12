@@ -27,7 +27,10 @@ export async function linkPromotedTicketDraft(
   if (!target || inFlight.has(draftId)) return;
   inFlight.add(draftId);
   try {
-    const result = await runAtomCommand(appAtomRegistry, ticketEnvironment.linkTicket, target);
+    const result = await runAtomCommand(appAtomRegistry, ticketEnvironment.linkTicket, {
+      ...target,
+      input: { ...target.input, startWork: true },
+    });
     if (result._tag === "Success") {
       clearPendingTicketDraft(draftId);
     } else {

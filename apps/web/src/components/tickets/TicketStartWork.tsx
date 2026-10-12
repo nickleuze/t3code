@@ -19,7 +19,7 @@ import { useNewThreadHandler } from "../../hooks/useHandleNewThread";
 import { useEnvironmentSettings } from "../../hooks/useSettings";
 import { useComposerDraftStore } from "../../composerDraftStore";
 import { setPendingTicketDraft } from "../../pendingTicketDrafts";
-import { useProjects, useServerConfigs } from "../../state/entities";
+import { useProjects, useServerConfigs, useThreadShells } from "../../state/entities";
 import { ticketEnvironment } from "../../state/tickets";
 import { useAtomCommand } from "../../state/use-atom-command";
 import { useOrchestrationCommand } from "../../state/use-orchestration-command";
@@ -53,6 +53,14 @@ type StartMode = "draft" | "launch" | "plan" | "goal";
 export function TicketStartWork({ entry }: { entry: EnvironmentTicket }) {
   const { environmentId, ticket } = entry;
   const canWrite = useTicketWriteAllowed(environmentId);
+  const shells = useThreadShells();
+  const branches = ticket.links
+    .filter((link) => link.role !== "origin")
+    .flatMap(
+      (link) =>
+        shells.find((shell) => shell.environmentId === environmentId && shell.id === link.threadId)
+          ?.source.branch ?? [],
+    );
   const projects = useProjects().filter((p) => p.environmentId === environmentId);
   const project = projects.find((p) => p.id === ticket.projectId);
   const [mode, setMode] = useState<StartMode | null>(null);
@@ -70,7 +78,7 @@ export function TicketStartWork({ entry }: { entry: EnvironmentTicket }) {
         .getState()
         .setPrompt(
           opened.draftId,
-          `${goal ? "Make this a T3 goal: " : ""}${ticketStartPrompt(target)}`,
+          `${goal ? "Make this a T3 goal: " : ""}${ticketStartPrompt(target, branches)}`,
         );
       useComposerDraftStore.getState().setDraftThreadContext(opened.draftId, {
         environmentSelection: "manual",
@@ -168,6 +176,14 @@ function TicketStartDialog({
   const narrow = useMediaQuery("(max-width: 480px)");
   const { environmentId, ticket } = entry;
   const canWrite = useTicketWriteAllowed(environmentId);
+  const shells = useThreadShells();
+  const branches = ticket.links
+    .filter((link) => link.role !== "origin")
+    .flatMap(
+      (link) =>
+        shells.find((shell) => shell.environmentId === environmentId && shell.id === link.threadId)
+          ?.source.branch ?? [],
+    );
   const projects = useProjects().filter((p) => p.environmentId === environmentId);
   const [projectId, setProjectId] = useState<string>(
     projects.find((p) => p.id === ticket.projectId)?.id ?? projects[0]?.id ?? "none",
@@ -216,6 +232,7 @@ function TicketStartDialog({
     ? defaultRuntimeMode
     : (compatibleModes[0] ?? defaultRuntimeMode);
   const upsert = useAtomCommand(ticketEnvironment.upsertTicket);
+  const map = useAtomCommand(ticketEnvironment.projectsMap);
   const launch = useOrchestrationCommand(ticketEnvironment.launchTicketThread);
   const link = useAtomCommand(ticketEnvironment.linkTicket);
   const unlink = useAtomCommand(ticketEnvironment.unlinkTicket);
@@ -228,7 +245,21 @@ function TicketStartDialog({
     setError(null);
     try {
       let target = ticket;
-      if (ticket.projectId !== project.id) {
+      if (ticket.projectKey && ticket.projectId !== project.id) {
+        const mapped = await map({
+          environmentId,
+          input: {
+            key: ticket.projectKey,
+            projectId: ProjectId.make(project.id),
+            displayName: ticket.projectName ?? ticket.projectKey,
+          },
+        });
+        if (mapped._tag !== "Success") {
+          setError("Could not map the project.");
+          return;
+        }
+        target = { ...ticket, projectId: ProjectId.make(project.id) };
+      } else if (ticket.projectId !== project.id) {
         const patched = await upsert({
           environmentId,
           input: { id: ticket.id, requireExisting: true, projectId: ProjectId.make(project.id) },
@@ -256,7 +287,7 @@ function TicketStartDialog({
           workspace === "worktree"
             ? { type: "worktree" as const, baseRef: baseRef.trim() || "HEAD" }
             : { type: "root" as const },
-        initialMessage: { text: ticketStartPrompt(target), attachments: [] },
+        initialMessage: { text: ticketStartPrompt(target, branches), attachments: [] },
         creationSource: "web" as const,
       };
       setLaunchInput(input);

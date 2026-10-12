@@ -25,6 +25,7 @@ import { SortableContext, useSortable, verticalListSortingStrategy } from "@dnd-
 import { CSS } from "@dnd-kit/utilities";
 import { ArrowUpRightIcon, ListFilterIcon, GripVerticalIcon } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
+import { TicketSyncStatus } from "../components/tickets/TicketSyncStatus";
 import { WorkspacePageHeader } from "../components/WorkspacePageHeader";
 import { WorkspacePageContainer } from "../components/WorkspacePageContainer";
 import { SidebarInset } from "../components/ui/sidebar";
@@ -34,7 +35,7 @@ import { Tooltip, TooltipTrigger, TooltipPopup } from "../components/ui/tooltip"
 import { Input } from "../components/ui/input";
 import { Menu, MenuTrigger, MenuPopup, MenuItem } from "../components/ui/menu";
 import { TicketPicker } from "../components/tickets/TicketPicker";
-import { TicketGithubBoardActions, TicketIssueBadge } from "../components/tickets/TicketGithub";
+import { TicketIssueBadge } from "../components/tickets/TicketGithub";
 import { TicketLinks } from "../components/tickets/TicketLinks";
 import { TicketDetail } from "../components/tickets/TicketDetail";
 import { TicketStartWork } from "../components/tickets/TicketStartWork";
@@ -170,7 +171,9 @@ function TicketsPage() {
     <SidebarInset>
       <WorkspacePageHeader electron={isElectron}>
         <h1 className="flex-1 text-sm font-medium">Tickets</h1>
-        {!narrow ? <TicketGithubBoardActions /> : null}
+        {ids.map((id) => (
+          <TicketSyncStatus key={id} environmentId={id} />
+        ))}
         {ids.length ? (
           <Button size={narrow ? "touch" : "sm"} onClick={() => openTicketCapture()}>
             New ticket
@@ -216,7 +219,6 @@ function TicketsPage() {
                 hidden={narrow && !filtersOpen}
                 className="flex flex-wrap items-end gap-3 max-[480px]:flex-col max-[480px]:items-stretch"
               >
-                {narrow ? <TicketGithubBoardActions /> : null}
                 <div hidden={narrow} className="min-w-48 flex-1">
                   <Input
                     aria-label="Search tickets"
@@ -485,7 +487,9 @@ function TicketCard({
     >
       <div className="flex items-center gap-1">
         <div className="min-w-0 overflow-hidden">
-          <Badge variant="secondary">{project?.title ?? "No project"}</Badge>
+          <Badge variant="secondary">
+            {project?.title ?? entry.ticket.projectName ?? entry.ticket.projectKey ?? "No project"}
+          </Badge>
         </div>
         {status !== entry.ticket.status ? (
           <Tooltip>
