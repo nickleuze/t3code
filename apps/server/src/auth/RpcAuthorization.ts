@@ -6,6 +6,7 @@ import {
   AssetCreateUrlInput,
   AuthAccessReadScope,
   ServerSettingsPatch,
+  type ServerSettings,
   ProviderInstanceMutation,
   requiredScopesForServerSettingsPatch,
   AuthSettingsWriteScope,
@@ -149,6 +150,16 @@ export const RPC_REQUIRED_SCOPES = {
   [WS_METHODS.pullRequestsLabelCandidates]: AuthOrchestrationReadScope,
   [WS_METHODS.sourceControlLookupRepository]: AuthOrchestrationReadScope,
   [WS_METHODS.subscribeProjectClones]: AuthOrchestrationReadScope,
+  // The server lists skill folders itself; a client never names a path.
+  [WS_METHODS.skillsInspect]: AuthFilesystemReadScope,
+  // A preview unpacks a source into a temp folder and deletes it.
+  [WS_METHODS.skillsPreview]: AuthFilesystemReadScope,
+  // Packs a folder an agent reports for that skill, nothing a client names.
+  [WS_METHODS.skillsExport]: AuthFilesystemReadScope,
+  // Listing a server's tools runs its command with its stored secrets, which
+  // only a connection allowed to add that command may do. A read the client
+  // caches as a query, so the client checks the scope itself (no guard entry).
+  [WS_METHODS.mcpServersListTools]: AuthProvidersManageScope,
   [WS_METHODS.projectsListEntries]: AuthFilesystemReadScope,
   [WS_METHODS.projectsReadFile]: AuthFilesystemReadScope,
   [WS_METHODS.projectsSearchContents]: AuthFilesystemReadScope,
@@ -238,9 +249,12 @@ const SettingsUpdate = Schema.Struct({
   providerInstanceMutation: Schema.optionalKey(ProviderInstanceMutation),
 });
 
-const requiredScopesForSettingsUpdate = (payload: unknown) => {
+const requiredScopesForSettingsUpdate = (
+  payload: unknown,
+  current: Pick<ServerSettings, "projectSettingsOverrides"> | undefined,
+) => {
   const input = Schema.decodeUnknownSync(SettingsUpdate)(payload);
-  const scopes = requiredScopesForServerSettingsPatch(input.patch);
+  const scopes = requiredScopesForServerSettingsPatch(input.patch, current);
   if (input.providerInstanceMutation === undefined) return scopes;
   // An atomic provider mutation carries an empty patch unless it also changes settings.
   return Object.values(input.patch).every((value) => value === undefined)
@@ -251,6 +265,7 @@ const requiredScopesForSettingsUpdate = (payload: unknown) => {
 const requiredScopesForRpcCall = (
   method: string,
   payload: unknown,
+  currentSettings?: Pick<ServerSettings, "projectSettingsOverrides">,
 ): ReadonlyArray<AuthEnvironmentScope> => {
   if (method === WS_METHODS.serverRetryResourceTelemetry) {
     return [AuthEnvironmentMaintainScope, AuthDiagnosticsReadScope];
@@ -265,19 +280,36 @@ const requiredScopesForRpcCall = (
         : AuthOrchestrationReadScope,
     ];
   }
-  if (method === WS_METHODS.serverUpdateSettings) return requiredScopesForSettingsUpdate(payload);
+  if (method === WS_METHODS.serverUpdateSettings) {
+    return requiredScopesForSettingsUpdate(payload, currentSettings);
+  }
   const guarded = clientRpcRequiredScopes(method, payload);
   if (guarded.length > 0) return guarded;
   return [requiredScopeForRpcMethod(method)];
 };
 
-/** Authorizes every RPC on one connection against that connection's session scopes. */
-export const layer = (scopes: ReadonlyArray<AuthEnvironmentScope>) =>
-  Layer.succeed(RpcScopeAuthorization)((effect, { rpc, payload }) => {
-    const requiredScopes = requiredScopesForRpcCall(rpc._tag, payload);
-    const requiredScope = requiredScopes.find((scope) => !scopes.includes(scope));
-    return requiredScope === undefined ? effect : Effect.fail(rpcAuthorizationError(requiredScope));
-  });
+/**
+ * Authorizes every RPC on one connection against that connection's session scopes.
+ * `currentSettings` lets a settings update that only resends a project's stored
+ * MCP servers pass with `settings:write`.
+ */
+export const layer = (
+  scopes: ReadonlyArray<AuthEnvironmentScope>,
+  currentSettings: Effect.Effect<
+    Pick<ServerSettings, "projectSettingsOverrides"> | undefined
+  > = Effect.succeed(undefined),
+) =>
+  Layer.succeed(RpcScopeAuthorization)((effect, { rpc, payload }) =>
+    Effect.gen(function* () {
+      const settings =
+        rpc._tag === WS_METHODS.serverUpdateSettings ? yield* currentSettings : undefined;
+      const requiredScopes = requiredScopesForRpcCall(rpc._tag, payload, settings);
+      const requiredScope = requiredScopes.find((scope) => !scopes.includes(scope));
+      return requiredScope === undefined
+        ? yield* effect
+        : yield* Effect.fail(rpcAuthorizationError(requiredScope));
+    }),
+  );
 
 /** Retrying can install or restart tools even though ordinary listing is readable. */
 export const requiredScopeForDeviceList = (input: DeviceListInput): AuthEnvironmentScope =>

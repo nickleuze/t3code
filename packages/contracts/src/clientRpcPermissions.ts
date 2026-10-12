@@ -3,6 +3,7 @@ import { GitPreparePullRequestThreadInput } from "./git.ts";
 import {
   AuthOrchestrationOperateScope,
   AuthSettingsWriteScope,
+  AuthProvidersManageScope,
   AuthSourceControlWriteScope,
   type AuthEnvironmentScope,
 } from "./auth.ts";
@@ -47,6 +48,12 @@ export const CLIENT_GUARDED_RPC_SCOPES = {
   [WS_METHODS.ticketsRestore]: AuthOrchestrationOperateScope,
   [WS_METHODS.ticketsLink]: AuthOrchestrationOperateScope,
   [WS_METHODS.ticketsUnlink]: AuthOrchestrationOperateScope,
+  // Skills from a source may carry scripts every agent on the environment can
+  // run, the same reach as adding an MCP server.
+  [WS_METHODS.skillsInstall]: AuthProvidersManageScope,
+  [WS_METHODS.skillsUpdate]: AuthProvidersManageScope,
+  [WS_METHODS.skillsRemove]: AuthProvidersManageScope,
+  [WS_METHODS.skillsImport]: AuthProvidersManageScope,
 
   [WS_METHODS.scheduledTasksUpsert]: AuthOrchestrationOperateScope,
   [WS_METHODS.scheduledTasksSetEnabled]: AuthOrchestrationOperateScope,
