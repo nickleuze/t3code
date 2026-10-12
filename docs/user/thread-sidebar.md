@@ -258,7 +258,7 @@ project locally before starting new work there.
 Record notes, decisions, questions, and handoffs as entries. A handoff captures
 what changed and **Next**; decisions can be superseded and questions resolved
 without erasing their history. Agents use `t3_ticket_list`, `t3_ticket_get`,
-`t3_ticket_upsert`, `t3_ticket_link`, and `t3_ticket_entry` to keep the same record.
+`t3_ticket_create`, `t3_ticket_update`, `t3_ticket_link`, and `t3_ticket_entry` to keep the same record.
 Handoff reminders ask an agent that used tools without an entry to record its
 handoff. They skip planning, read-only work, and terminal tickets, and can be
 turned off in **Settings → Tickets**.
