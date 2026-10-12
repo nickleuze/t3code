@@ -28,6 +28,7 @@ import {
   type OrchestrationV2Subagent,
   type OrchestrationV2TurnItem,
   type OrchestrationV2UserInputQuestion,
+  mcpServerVariableRecord,
   type ProviderInstanceId,
   type ThreadId,
 } from "@t3tools/contracts";
@@ -216,7 +217,25 @@ export function cursorMcpServers(
   if (session === undefined) {
     return undefined;
   }
+  const servers = session.tools?.servers ?? [];
   return {
+    ...Object.fromEntries(
+      servers.map((server): [string, McpServerConfig] => [
+        server.name,
+        server.transport.type === "stdio"
+          ? {
+              type: "stdio",
+              command: server.transport.command,
+              args: [...server.transport.args],
+              env: mcpServerVariableRecord(server.transport.env),
+            }
+          : {
+              type: "http",
+              url: server.transport.url,
+              headers: mcpServerVariableRecord(server.transport.headers),
+            },
+      ]),
+    ),
     "t3-code": {
       type: "http",
       url: session.endpoint,

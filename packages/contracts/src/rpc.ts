@@ -161,6 +161,20 @@ import {
 } from "./review.ts";
 import { KeybindingsConfigError } from "./keybindings.ts";
 import {
+  InstalledSkillInput,
+  SkillBundle,
+  SkillExportInput,
+  SkillImportInput,
+  SkillInspectInput,
+  SkillInspectResult,
+  SkillInstallInput,
+  SkillInstallResult,
+  SkillLibraryError,
+  SkillPreviewInput,
+  SkillPreviewResult,
+} from "./skills.ts";
+import { McpServerToolsError, McpServerToolsInput, McpServerToolsResult } from "./agentTools.ts";
+import {
   OrchestrationSearchThreadsError,
   OrchestrationSearchThreadsInput,
   OrchestrationSearchThreadsResult,
@@ -493,6 +507,14 @@ export const WS_METHODS = {
   serverProbe: "server.probe",
   serverGetConfig: "server.getConfig",
   serverRefreshProviders: "server.refreshProviders",
+  skillsInspect: "skills.inspect",
+  skillsPreview: "skills.preview",
+  skillsInstall: "skills.install",
+  skillsUpdate: "skills.update",
+  skillsRemove: "skills.remove",
+  skillsExport: "skills.export",
+  skillsImport: "skills.import",
+  mcpServersListTools: "mcpServers.listTools",
   serverUpdateProvider: "server.updateProvider",
   serverUpdateServer: "server.updateServer",
   serverUpdateServerWithProgress: "server.updateServerWithProgress",
@@ -636,6 +658,54 @@ const WsServerProbeRpc = Rpc.make(WS_METHODS.serverProbe, {
   payload: Schema.Struct({}),
   success: Schema.Struct({}),
   error: EnvironmentAuthorizationError,
+});
+
+const WsSkillsInspectRpc = Rpc.make(WS_METHODS.skillsInspect, {
+  payload: SkillInspectInput,
+  success: SkillInspectResult,
+  error: EnvironmentAuthorizationError,
+});
+
+const WsSkillsPreviewRpc = Rpc.make(WS_METHODS.skillsPreview, {
+  payload: SkillPreviewInput,
+  success: SkillPreviewResult,
+  error: Schema.Union([SkillLibraryError, EnvironmentAuthorizationError]),
+});
+
+const WsSkillsInstallRpc = Rpc.make(WS_METHODS.skillsInstall, {
+  payload: SkillInstallInput,
+  success: SkillInstallResult,
+  error: Schema.Union([SkillLibraryError, EnvironmentAuthorizationError]),
+});
+
+const WsSkillsUpdateRpc = Rpc.make(WS_METHODS.skillsUpdate, {
+  payload: InstalledSkillInput,
+  success: SkillInstallResult,
+  error: Schema.Union([SkillLibraryError, EnvironmentAuthorizationError]),
+});
+
+const WsSkillsRemoveRpc = Rpc.make(WS_METHODS.skillsRemove, {
+  payload: InstalledSkillInput,
+  success: Schema.Struct({}),
+  error: Schema.Union([SkillLibraryError, EnvironmentAuthorizationError]),
+});
+
+const WsSkillsExportRpc = Rpc.make(WS_METHODS.skillsExport, {
+  payload: SkillExportInput,
+  success: SkillBundle,
+  error: Schema.Union([SkillLibraryError, EnvironmentAuthorizationError]),
+});
+
+const WsSkillsImportRpc = Rpc.make(WS_METHODS.skillsImport, {
+  payload: SkillImportInput,
+  success: Schema.Struct({}),
+  error: Schema.Union([SkillLibraryError, EnvironmentAuthorizationError]),
+});
+
+const WsMcpServersListToolsRpc = Rpc.make(WS_METHODS.mcpServersListTools, {
+  payload: McpServerToolsInput,
+  success: McpServerToolsResult,
+  error: Schema.Union([McpServerToolsError, ServerSettingsError, EnvironmentAuthorizationError]),
 });
 
 const WsServerGetConfigRpc = Rpc.make(WS_METHODS.serverGetConfig, {
@@ -1986,6 +2056,19 @@ export const TicketRecordRpcGroup = RpcGroup.make(
   WsTicketsProjectsMapRpc,
 ).middleware(RpcScopeAuthorization);
 
+// Settings → Tools RPCs. A separate group keeps the server's handler record
+// below the type checker's instantiation depth, like TicketRecordRpcGroup.
+export const AgentToolsRpcGroup = RpcGroup.make(
+  WsSkillsInspectRpc,
+  WsSkillsPreviewRpc,
+  WsSkillsInstallRpc,
+  WsSkillsUpdateRpc,
+  WsSkillsRemoveRpc,
+  WsSkillsExportRpc,
+  WsSkillsImportRpc,
+  WsMcpServersListToolsRpc,
+).middleware(RpcScopeAuthorization);
+
 export const CoreWsRpcGroup = RpcGroup.make(
   WsServerProbeRpc,
   WsServerGetConfigRpc,
@@ -2185,4 +2268,4 @@ export const CoreWsRpcGroup = RpcGroup.make(
   WsOrchestrationV2SubscribeThreadRpc,
 ).middleware(RpcScopeAuthorization);
 
-export const WsRpcGroup = CoreWsRpcGroup.merge(TicketRecordRpcGroup);
+export const WsRpcGroup = CoreWsRpcGroup.merge(TicketRecordRpcGroup, AgentToolsRpcGroup);

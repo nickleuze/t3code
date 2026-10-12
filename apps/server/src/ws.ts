@@ -103,6 +103,7 @@ import {
   WsRpcGroup,
   CoreWsRpcGroup,
   TicketRecordRpcGroup,
+  AgentToolsRpcGroup,
 } from "@t3tools/contracts";
 import { resolveServerBackgroundActivitySettings } from "@t3tools/shared/backgroundActivitySettings";
 import {
@@ -194,6 +195,8 @@ import { deletePendingAttachment, issueAttachmentUploadUrl } from "./assets/Atta
 import * as PortScanner from "./preview/PortScanner.ts";
 import * as WorkspaceEntries from "./workspace/WorkspaceEntries.ts";
 import * as WorkspaceFileSystem from "./workspace/WorkspaceFileSystem.ts";
+import * as McpServerTools from "./mcpServers/McpServerTools.ts";
+import * as SkillLibrary from "./skills/SkillLibrary.ts";
 import { readWorkflowScript } from "./orchestration-v2/workflowScriptQuery.ts";
 import * as WorkspacePaths from "./workspace/WorkspacePaths.ts";
 import * as VcsStatusBroadcaster from "./vcs/VcsStatusBroadcaster.ts";
@@ -545,6 +548,7 @@ const PROVIDER_STATUS_DEBOUNCE_MS = 200;
 const ServerWsRpcGroup = WsRpcGroup.middleware(RpcInstrumentation);
 const ServerCoreWsRpcGroup = CoreWsRpcGroup.middleware(RpcInstrumentation);
 const ServerTicketRecordRpcGroup = TicketRecordRpcGroup.middleware(RpcInstrumentation);
+const ServerAgentToolsRpcGroup = AgentToolsRpcGroup.middleware(RpcInstrumentation);
 const layerTicketRecordRpc = ServerTicketRecordRpcGroup.toLayer(
   Effect.gen(function* () {
     const tickets = yield* Tickets.TicketService;
@@ -559,6 +563,22 @@ const layerTicketRecordRpc = ServerTicketRecordRpcGroup.toLayer(
       [WS_METHODS.ticketsSyncRefresh]: () => tickets.syncRefresh(),
       [WS_METHODS.ticketsProjectsList]: () => tickets.projectsList,
       [WS_METHODS.ticketsProjectsMap]: (input) => tickets.projectsMap(input),
+    };
+  }),
+);
+const layerAgentToolsRpc = ServerAgentToolsRpcGroup.toLayer(
+  Effect.gen(function* () {
+    const skillLibrary = yield* SkillLibrary.SkillLibrary;
+    const mcpServerTools = yield* McpServerTools.McpServerTools;
+    return {
+      [WS_METHODS.skillsInspect]: (input) => skillLibrary.inspect(input),
+      [WS_METHODS.skillsPreview]: (input) => skillLibrary.preview(input),
+      [WS_METHODS.skillsInstall]: (input) => skillLibrary.install(input),
+      [WS_METHODS.skillsUpdate]: (input) => skillLibrary.update(input),
+      [WS_METHODS.skillsRemove]: (input) => skillLibrary.remove(input).pipe(Effect.as({})),
+      [WS_METHODS.skillsExport]: (input) => skillLibrary.exportSkill(input),
+      [WS_METHODS.skillsImport]: (input) => skillLibrary.importSkill(input).pipe(Effect.as({})),
+      [WS_METHODS.mcpServersListTools]: (input) => mcpServerTools.listTools(input),
     };
   }),
 );
@@ -3165,6 +3185,7 @@ export const layer = Layer.unwrap(
     const serverSelfUpdate = yield* ServerSelfUpdate.ServerSelfUpdate;
     const pullRequests = yield* PullRequestService.PullRequestService;
     const sql = yield* SqlClient.SqlClient;
+    const serverSettingsService = yield* ServerSettings.ServerSettingsService;
     return HttpRouter.add(
       "GET",
       "/ws",
@@ -3204,7 +3225,13 @@ export const layer = Layer.unwrap(
           yield* RpcServer.make(ServerWsRpcGroup, WS_RPC_SERVER_OPTIONS).pipe(
             Effect.provideService(RpcServer.Protocol, withTerminalOutputWindow(protocol)),
             Effect.provide(
-              Layer.merge(RpcAuthorization.layer(session.scopes), rpcInstrumentationLayer),
+              Layer.merge(
+                RpcAuthorization.layer(
+                  session.scopes,
+                  serverSettingsService.getSettings.pipe(Effect.orElseSucceed(() => undefined)),
+                ),
+                rpcInstrumentationLayer,
+              ),
             ),
             Effect.forkScoped,
           );
@@ -3220,6 +3247,7 @@ export const layer = Layer.unwrap(
               serverBrowser,
             ).pipe(
               Layer.merge(layerTicketRecordRpc),
+              Layer.merge(layerAgentToolsRpc),
               Layer.provideMerge(RpcSerialization.layerJson),
               // Request fibers run in the handlers' context, so this reporter sees
               // their defects, not the rest of the server's.

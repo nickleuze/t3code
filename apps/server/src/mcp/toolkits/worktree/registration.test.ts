@@ -35,6 +35,7 @@ import * as McpHttpServer from "../../McpHttpServer.ts";
 import * as McpSessionRegistry from "../../McpSessionRegistry.ts";
 import * as PreviewAutomationBroker from "../../PreviewAutomationBroker.ts";
 import * as PreviewBrowser from "../../../preview/PreviewBrowser.ts";
+import * as SkillLibrary from "../../../skills/SkillLibrary.ts";
 
 const layerStubServices = Layer.mergeAll(
   Layer.mock(Orchestrator.OrchestratorV2)({}),
@@ -58,6 +59,7 @@ const layerStubServices = Layer.mergeAll(
   Layer.mock(ManagedProjectFolders.ManagedProjectFolders)({ namedProjectsRoot: "/unused" }),
   Layer.mock(PreviewManager.PreviewManager)({}),
   Layer.mock(ServerSecretStore.ServerSecretStore)({}),
+  Layer.mock(SkillLibrary.SkillLibrary)({}),
   Layer.mock(SourceControlRepositoryService.SourceControlRepositoryService)({}),
   Layer.mock(ThreadLaunchService.ThreadLaunchService)({}),
   Layer.mock(ThreadSearch.ThreadSearch)({}),
@@ -153,6 +155,14 @@ it.effect("production mcp layer lists worktree tools over http", () =>
       expect(tools.find((tool) => tool.name === "t3_ticket_list")?.annotations?.readOnlyHint).toBe(
         true,
       );
+      // Settings → Tools describes t3-code from this list without a session.
+      expect(
+        new Set(
+          McpHttpServer.T3_MCP_TOOLKITS.flatMap((toolkit) =>
+            Object.values(toolkit.tools).map((tool) => tool.name),
+          ),
+        ),
+      ).toEqual(new Set(toolNames));
 
       // The handoff tool mutates thread state, reaches the network (origin
       // fetch), and runs project setup scripts, so its MCP hints must not
