@@ -136,4 +136,28 @@ describe("work record projection", () => {
       deterministicEventId("caller", "request", "A"),
     );
   });
+  it("clears a historical Run's blocker when another Run explicitly resolves it", () => {
+    const blocker = event(7, {
+      type: "entry",
+      kind: "blocker",
+      text: "Volume access denied",
+      by: { actor: "agent", machine: "A", thread: "older-run" },
+    } as Omit<TicketEvent, "eventId" | "ticketId" | "by" | "at">);
+    const resolved = event(8, {
+      type: "entry",
+      kind: "result",
+      text: "Sync verified",
+      resolves: blocker.eventId,
+      by: { actor: "agent", machine: "B", thread: "current-run" },
+    } as Omit<TicketEvent, "eventId" | "ticketId" | "by" | "at">);
+    expect(projectTicket([created, blocker])?.blocked).toBe(true);
+    expect(projectTicket([created, blocker, resolved])?.blocked).toBe(false);
+    expect(projectTicket([resolved, blocker, created])?.blocked).toBe(false);
+    const reopened = {
+      ...blocker,
+      eventId: "01K79000000000000000000009-A",
+      at: "2026-10-12T00:00:09.000Z",
+    };
+    expect(projectTicket([created, blocker, resolved, reopened])?.blocked).toBe(true);
+  });
 });
