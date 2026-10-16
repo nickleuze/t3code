@@ -1,3 +1,4 @@
+import { readmeFrontmatter } from "../project/ProjectHome.ts";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, it } from "@effect/vitest";
 import { ProjectId, ThreadId, TicketId, type TicketEvent } from "@t3tools/contracts";
@@ -370,11 +371,11 @@ it("the agent prompt carries the Idea, candidates and the no-new-Projects rule",
 });
 
 it("parses README frontmatter and finds title duplicates", () => {
-  assert.deepStrictEqual(Triage.readmeFrontmatter("---\narea: life\ngoal: 'Ship it'\n---\n"), {
+  assert.deepStrictEqual(readmeFrontmatter("---\narea: life\ngoal: 'Ship it'\n---\n"), {
     area: "life",
     goal: "Ship it",
   });
-  assert.deepStrictEqual(Triage.readmeFrontmatter("# No frontmatter"), {});
+  assert.deepStrictEqual(readmeFrontmatter("# No frontmatter"), {});
   const open = [
     {
       id: TicketId.make("a"),

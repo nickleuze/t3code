@@ -183,7 +183,7 @@ function TicketCaptureDialog() {
     >
       <DialogPopup variant="mobile-fullscreen" initialFocus={input}>
         <form
-          className={narrow ? "contents" : undefined}
+          className="contents"
           onKeyDown={(event) => {
             if ((event.metaKey || event.ctrlKey) && event.shiftKey && event.key === "Enter") {
               event.preventDefault();

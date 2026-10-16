@@ -1,6 +1,11 @@
 import { expect, it } from "vite-plus/test";
 import { TicketId, ThreadId, type TicketEvent } from "@t3tools/contracts";
-import { resumeTicketLinks, ticketTimelineLabel, ticketActivity } from "./ticketRecord.logic";
+import {
+  isClosedProjectOrigin,
+  resumeTicketLinks,
+  ticketTimelineLabel,
+  ticketActivity,
+} from "./ticketRecord.logic";
 it("Resume picks the latest available local work/planning thread and excludes other machines and origin", () => {
   const old = ThreadId.make("old"),
     newer = ThreadId.make("new"),
@@ -76,4 +81,23 @@ it("activity follows live input/runs and record markers without deriving stage",
     ticketActivity(ticket, [{ status: "waiting", pendingRuntimeRequest: { id: "question" } }]),
   ).toBe("Needs your input");
   expect(ticket.status).toBe("ready");
+});
+
+it("keeps a closed Project origin as history and permits an explicit reopen", () => {
+  const ticket = {
+    status: "done" as const,
+    workState: {
+      blocked: false,
+      decisions: [{ eventId: "origin", text: "[Project origin project-id] Established Home." }],
+      questions: [],
+      prs: [],
+      lastHandoff: null,
+    },
+  };
+  expect(isClosedProjectOrigin(ticket)).toBe(true);
+  expect(ticketActivity(ticket, [])).toBe("Project origin");
+  expect(isClosedProjectOrigin({ ...ticket, status: "ready" })).toBe(false);
+  expect(
+    isClosedProjectOrigin({ ...ticket, workState: { ...ticket.workState, decisions: [] } }),
+  ).toBe(false);
 });
