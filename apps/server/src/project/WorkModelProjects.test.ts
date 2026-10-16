@@ -258,6 +258,32 @@ it.effect("preserves a created Home on registration failure and recovers through
   ),
 );
 
+it.effect("closes each Idea independently when adopting the same Project", () =>
+  withHome(() =>
+    Effect.gen(function* () {
+      const service = yield* WorkModel.WorkModelProjects,
+        tickets = yield* Tickets.TicketService;
+      const first = (yield* tickets.upsert({ title: "First origin", projectId: null })).ticket;
+      const second = (yield* tickets.upsert({ title: "Second origin", projectId: null })).ticket;
+      const created = yield* service.create({ ...draft, sourceIdeaId: first.id });
+      const adopted = yield* service.create({
+        ...draft,
+        sourceIdeaId: second.id,
+        adoptExisting: true,
+      });
+      assert.equal(adopted.projectId, created.projectId);
+      for (const id of [first.id, second.id]) {
+        const record = yield* tickets.get(id);
+        assert.equal(record.ticket.status, "done");
+        assert.equal(record.ticket.projectId, created.projectId);
+        assert.equal(record.decisions.length, 1);
+      }
+      yield* service.create({ ...draft, sourceIdeaId: second.id, adoptExisting: true });
+      assert.equal((yield* tickets.get(second.id)).decisions.length, 1);
+    }),
+  ),
+);
+
 it.effect("rejects unknown Areas and escaping slugs before touching the filesystem", () =>
   withHome(() =>
     Effect.gen(function* () {

@@ -280,6 +280,7 @@ const make = (settings: { readonly projectsRoot: string; readonly initializer: s
               Effect.mapError((cause) => fail("registration-failed", checked.workspaceRoot, cause)),
             );
           if (input.sourceIdeaId) {
+            const requestId = `project-origin:${project.id}:${input.sourceIdeaId}`;
             yield* Effect.gen(function* () {
               const origin = yield* tickets.get(input.sourceIdeaId!);
               const author = tickets.author({ actor: "user" });
@@ -289,7 +290,7 @@ const make = (settings: { readonly projectsRoot: string; readonly initializer: s
                   id: input.sourceIdeaId!,
                   kind: "decision",
                   text,
-                  clientRequestId: `project-origin:${project.id}`,
+                  clientRequestId: requestId,
                 },
                 author,
                 "work-model-projects",
@@ -301,7 +302,7 @@ const make = (settings: { readonly projectsRoot: string; readonly initializer: s
                     kind: "result",
                     text: `Resolved by establishing Project ${project.title} (${checked.projectKey}).`,
                     resolves: question.eventId,
-                    clientRequestId: `project-origin:${project.id}:${question.eventId}`,
+                    clientRequestId: `${requestId}:${question.eventId}`,
                   },
                   author,
                   "work-model-projects",
@@ -312,7 +313,7 @@ const make = (settings: { readonly projectsRoot: string; readonly initializer: s
                   requireExisting: true,
                   projectId: project.id,
                   status: "done",
-                  commandId: CommandId.make(`project-origin-close:${project.id}`),
+                  commandId: CommandId.make(`${requestId}:close`),
                 },
                 author,
               );

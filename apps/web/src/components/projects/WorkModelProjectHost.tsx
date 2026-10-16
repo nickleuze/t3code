@@ -319,6 +319,7 @@ function ProjectDialog() {
                 <Button
                   type="button"
                   size={size}
+                  disabled={!group}
                   onClick={() => {
                     close();
                     openTicketCapture({
