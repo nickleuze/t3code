@@ -9,7 +9,8 @@ import { useMediaQuery } from "../../hooks/useMediaQuery";
 import { Button } from "../ui/button";
 import { Menu, MenuTrigger, MenuPopup, MenuItem } from "../ui/menu";
 import { Popover, PopoverTrigger, PopoverPopup } from "../ui/popover";
-import { resumeTicketLinks } from "./ticketRecord.logic";
+import { isClosedProjectOrigin, resumeTicketLinks } from "./ticketRecord.logic";
+import { Badge } from "../ui/badge";
 import { useTicketConnections } from "./useTicketConnections";
 
 import { useTicketLaunch } from "./useTicketLaunch";
@@ -55,6 +56,7 @@ export function TicketStartWork({ entry }: { entry: EnvironmentTicket }) {
       mode,
     });
   };
+  if (isClosedProjectOrigin(ticket)) return <Badge variant="info">Project origin</Badge>;
   return (
     <div className="flex items-center gap-1">
       <Popover

@@ -1,3 +1,4 @@
+import { WorkModelProjectHost } from "../components/projects/WorkModelProjectHost";
 import { TicketCaptureHost } from "../components/tickets/TicketCaptureHost";
 import { PermissionUpdateNotice } from "../components/PermissionUpdateNotice";
 import { type ServerLifecycleWelcomePayload } from "@t3tools/contracts";
@@ -240,6 +241,7 @@ function RootRouteView() {
           <ReopenClosedViewShortcut />
           <ConfirmDialogHost />
           <TicketCaptureHost />
+          <WorkModelProjectHost />
           <CustomSnoozeDialogHost />
           <SlowRpcRequestToastCoordinator />
           <PermissionUpdateNotice />

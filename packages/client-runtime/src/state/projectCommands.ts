@@ -154,6 +154,15 @@ export function createProjectEnvironmentAtoms<R, E>(
       scheduler: projectScheduler,
       concurrency: { mode: "serial", key: ({ environmentId }) => environmentId },
     }),
+    workModelOptions: createEnvironmentRpcQueryAtomFamily(runtime, {
+      label: "environment-data:projects:work-model-options",
+      tag: WS_METHODS.projectsWorkModelOptions,
+      staleTimeMs: 30_000,
+    }),
+    workModelPreview: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:projects:work-model-preview",
+      tag: WS_METHODS.projectsWorkModelPreview,
+    }),
     writeFile: createEnvironmentRpcCommand(runtime, {
       label: "environment-data:projects:write-file",
       tag: WS_METHODS.projectsWriteFile,

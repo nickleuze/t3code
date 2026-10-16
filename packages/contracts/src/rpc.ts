@@ -240,6 +240,9 @@ import {
   OrchestrationV2ThreadLaunchError,
 } from "./orchestrationV2.ts";
 import {
+  WorkModelProjectDraft,
+  WorkModelProjectOptions,
+  WorkModelProjectPreview,
   ProjectCreateNewInput,
   ProjectCreateNewResult,
   ProjectEnsureScratchResult,
@@ -421,6 +424,8 @@ export const WS_METHODS = {
   projectsMutate: "projects.mutate",
   projectsEnsureScratch: "projects.ensureScratch",
   projectsCreateNew: "projects.createNew",
+  projectsWorkModelOptions: "projects.workModelOptions",
+  projectsWorkModelPreview: "projects.workModelPreview",
 
   // Shell methods
   shellOpenInEditor: "shell.openInEditor",
@@ -1345,7 +1350,17 @@ const WsProjectsEnsureScratchRpc = Rpc.make(WS_METHODS.projectsEnsureScratch, {
   error: Schema.Union([OrchestrationDispatchCommandError, EnvironmentAuthorizationError]),
 });
 
-// Makes a folder under ServerConfig.newProjectsRoot with a first commit, then the project.
+// Work Model setup is available only on servers with existing Areas.
+const WsProjectsWorkModelOptionsRpc = Rpc.make(WS_METHODS.projectsWorkModelOptions, {
+  payload: Schema.Struct({}),
+  success: WorkModelProjectOptions,
+  error: Schema.Union([OrchestrationDispatchCommandError, EnvironmentAuthorizationError]),
+});
+const WsProjectsWorkModelPreviewRpc = Rpc.make(WS_METHODS.projectsWorkModelPreview, {
+  payload: WorkModelProjectDraft,
+  success: WorkModelProjectPreview,
+  error: Schema.Union([OrchestrationDispatchCommandError, EnvironmentAuthorizationError]),
+});
 const WsProjectsCreateNewRpc = Rpc.make(WS_METHODS.projectsCreateNew, {
   payload: ProjectCreateNewInput,
   success: ProjectCreateNewResult,
@@ -2206,6 +2221,8 @@ export const CoreWsRpcGroup = RpcGroup.make(
   WsProjectsSearchEntriesRpc,
   WsProjectsEnsureScratchRpc,
   WsProjectsCreateNewRpc,
+  WsProjectsWorkModelOptionsRpc,
+  WsProjectsWorkModelPreviewRpc,
   WsProjectsWriteFileRpc,
   WsProjectsMutateRpc,
   WsShellOpenInEditorRpc,
