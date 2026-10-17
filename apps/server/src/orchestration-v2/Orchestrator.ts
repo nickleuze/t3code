@@ -6552,9 +6552,6 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
             type: "set",
             commandId: command.commandId,
             objective: command.objective,
-            checkCommand: command.checkCommand ?? null,
-            burnGuard: command.burnGuard,
-            noProgressLimit: command.noProgressLimit,
             modelSelection: command.modelSelection ?? thread.modelSelection,
             runtimeMode: command.runtimeMode ?? thread.runtimeMode,
             doneWhen: command.doneWhen ?? null,
@@ -6580,7 +6577,6 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
             type: "control",
             goalId: command.goalId,
             action: command.action,
-            burnGuard: command.burnGuard,
           };
         case "thread.goal.report":
           return {
@@ -6666,7 +6662,6 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
               objective: command.objective,
               doneWhen: command.doneWhen,
               background: command.background,
-              checkCommand: command.checkCommand,
               permissions: command.permissions,
               iterationTimeoutMins: command.iterationTimeoutMins,
               reason: command.reason,

@@ -391,7 +391,6 @@ export const layerProduction = Layer.mergeAll(
         layerOrchestratorProvided,
         ProjectionStore.layer,
         ProjectStore.layer,
-        ProcessRunner.layer,
         EffectOutbox.layer,
       ),
     ),

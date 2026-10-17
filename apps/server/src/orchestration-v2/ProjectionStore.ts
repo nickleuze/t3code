@@ -401,7 +401,7 @@ export interface ProjectionStoreV2Shape {
   readonly getSettlementCandidates: (
     threadId?: ThreadId,
   ) => Effect.Effect<ReadonlyArray<ProjectionSettlementCandidate>, ProjectionStoreV2Error>;
-  /** Live loops and owners whose last iteration or completion check still needs reconciliation. */
+  /** Live loops and owners whose last iteration still needs reconciliation. */
   readonly getGoalThreads: () => Effect.Effect<
     ReadonlyArray<OrchestrationV2AppThread>,
     ProjectionStoreV2Error

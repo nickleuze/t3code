@@ -18,7 +18,6 @@ import {
   DialogPopup,
   DialogTitle,
 } from "../ui/dialog";
-import { Input } from "../ui/input";
 import { Label } from "../ui/label";
 import {
   NumberField,
@@ -35,7 +34,6 @@ export interface GoalBrief {
   readonly doneWhen: string;
   readonly background: string | null;
   readonly permissions: string | null;
-  readonly checkCommand: string | null;
   readonly iterationTimeoutMins: number;
 }
 
@@ -47,7 +45,6 @@ interface GoalDialogProps {
     readonly doneWhen?: string | null | undefined;
     readonly background?: string | null | undefined;
     readonly permissions?: string | null | undefined;
-    readonly checkCommand?: string | null | undefined;
     readonly iterationTimeoutMins?: number | null | undefined;
   };
   readonly runtimeMode: RuntimeMode;
@@ -70,7 +67,6 @@ export function GoalDialog({
   const [doneWhen, setDoneWhen] = useState(initial.doneWhen ?? "");
   const [background, setBackground] = useState(initial.background ?? "");
   const [permissions, setPermissions] = useState(initial.permissions ?? "");
-  const [checkCommand, setCheckCommand] = useState(initial.checkCommand ?? "");
   const [timeoutMins, setTimeoutMins] = useState<number | null>(goalIterationTimeoutMins(initial));
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -93,7 +89,6 @@ export function GoalDialog({
         doneWhen: doneWhen.trim(),
         background: background.trim() || null,
         permissions: permissions.trim() || null,
-        checkCommand: checkCommand.trim() || null,
         iterationTimeoutMins: Math.max(
           MIN_GOAL_ITERATION_TIMEOUT_MINS,
           Math.round(timeoutMins ?? DEFAULT_GOAL_ITERATION_TIMEOUT_MINS),
@@ -187,34 +182,23 @@ export function GoalDialog({
                         onChange={(event) => setBackground(event.target.value)}
                       />
                     </div>
-                    {/* thread.goal.update edits the brief only; the time limit and check stay as started. */}
+                    {/* thread.goal.update edits the brief only; the time limit stays as started. */}
                     {mode === "start" ? (
-                      <div className="grid grid-cols-2 gap-3">
-                        <NumberField
-                          id={`${id}-timeout`}
-                          min={MIN_GOAL_ITERATION_TIMEOUT_MINS}
-                          max={480}
-                          step={15}
-                          value={timeoutMins}
-                          onValueChange={setTimeoutMins}
-                        >
-                          <Label htmlFor={`${id}-timeout`}>Minutes per iteration</Label>
-                          <NumberFieldGroup>
-                            <NumberFieldDecrement aria-label="Decrease iteration time limit" />
-                            <NumberFieldInput />
-                            <NumberFieldIncrement aria-label="Increase iteration time limit" />
-                          </NumberFieldGroup>
-                        </NumberField>
-                        <div className="flex flex-col gap-1.5">
-                          <Label htmlFor={`${id}-check`}>Completion check</Label>
-                          <Input
-                            id={`${id}-check`}
-                            value={checkCommand}
-                            placeholder="pnpm test"
-                            onChange={(event) => setCheckCommand(event.target.value)}
-                          />
-                        </div>
-                      </div>
+                      <NumberField
+                        id={`${id}-timeout`}
+                        min={MIN_GOAL_ITERATION_TIMEOUT_MINS}
+                        max={480}
+                        step={15}
+                        value={timeoutMins}
+                        onValueChange={setTimeoutMins}
+                      >
+                        <Label htmlFor={`${id}-timeout`}>Minutes per iteration</Label>
+                        <NumberFieldGroup>
+                          <NumberFieldDecrement aria-label="Decrease iteration time limit" />
+                          <NumberFieldInput />
+                          <NumberFieldIncrement aria-label="Increase iteration time limit" />
+                        </NumberFieldGroup>
+                      </NumberField>
                     ) : null}
                   </div>
                 </CollapsiblePanel>

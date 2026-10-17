@@ -14,7 +14,6 @@ const proposal = {
   id: CommandId.make("proposal"),
   objective: "Ship",
   doneWhen: "Tests pass",
-  checkCommand: null,
   reason: null,
 } as OrchestrationV2GoalProposal;
 let renderer: ReactTestRenderer;

@@ -103,7 +103,6 @@ const proposal: OrchestrationV2GoalProposal = {
   doneWhen: "Checks pass",
   background: "Use the isolated candidate",
   permissions: "Local edits",
-  checkCommand: "test",
   iterationTimeoutMins: 30,
   reason: null,
   proposedAt: "2026-01-01T00:00:00Z",
@@ -175,7 +174,6 @@ it("waits for the user to Start and suppresses repeat Start through acknowledgem
       doneWhen: "Checks pass",
       background: proposal.background,
       permissions: proposal.permissions,
-      checkCommand: "test",
       iterationTimeoutMins: 30,
     },
   });
@@ -292,9 +290,6 @@ it("edits a proposal without starting, validates limits and submits the edited b
     permissions: "Merge after CI passes",
     iterationTimeoutMins: 45,
   });
-  // Limits the editor does not show keep their server defaults.
-  expect(sent).not.toHaveProperty("burnGuard");
-  expect(sent).not.toHaveProperty("noProgressLimit");
 });
 it("exposes historical iterations and progress without starting provider work", async () => {
   fixture.projection = {
@@ -302,9 +297,7 @@ it("exposes historical iterations and progress without starting provider work", 
       thread: {
         goal: {
           ...goal,
-          usageAccounting: "unavailable",
           progressNotes: [{ iteration: 2, at: "now", text: "The check failed" }],
-          lastCheck: { passed: false, command: "test", outputTail: "Assertion failed" },
           history: [{ iteration: 2, childThreadId: "old-iteration", outcome: "check_failed" }],
           current: null,
         },
@@ -314,8 +307,6 @@ it("exposes historical iterations and progress without starting provider work", 
   await render({ ...shell, t3Goal: goal });
   await act(async () => button("Goal details").click());
   expect(container.textContent).toContain("The check failed");
-  expect(container.textContent).toContain("Assertion failed");
-  expect(container.textContent).toContain("token usage not reported");
   await act(async () => button("Iteration 2: Check failed").click());
   expect(fixture.navigate).toHaveBeenCalledWith("Thread", {
     environmentId: "remote-host",
@@ -339,9 +330,6 @@ it("edits a paused goal's brief without resuming it, and only while paused or bl
           background: "Old context",
           permissions: "Local edits",
           iterationTimeoutMins: 20,
-          usageAccounting: "exact",
-          burnGuard: { maxPercentPoints: 20, windowMins: 60 },
-          usageSample: { at: "now", windows: [{ id: "5h", usedPercent: 41.4 }], risePoints: 3.2 },
           progressNotes: [],
           history: [],
           current: null,
@@ -354,9 +342,8 @@ it("edits a paused goal's brief without resuming it, and only while paused or bl
   await render({ ...shell, goalProposal: null, t3Goal: paused });
   await act(async () => button("Goal details").click());
   expect(container.textContent).toContain("45 min per iteration");
-  expect(container.textContent).toContain("burn guard 20% / 60m, now +3 (highest window 41%)");
   await act(async () => button("Edit").click());
-  // The update command edits the brief only; the time limit and check stay put.
+  // The update command edits the brief only; the time limit stays put.
   expect(container.querySelector('[aria-label="Minutes per iteration (45–480)"]')).toBeNull();
   await change("Pre-approved actions", "Local edits, push and merge after CI");
   await act(async () => button("Save changes").click());

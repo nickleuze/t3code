@@ -238,7 +238,6 @@ it.effect("proposes only descriptive state and rejects blank reports/proposals",
         doneWhen: "Tests pass",
         permissions: "Local edits",
         iterationTimeoutMins: 60,
-        checkCommand: null,
       },
     ]);
     expect(yield* harness.call("t3_goal_update", { note: "   " })).toMatchObject({

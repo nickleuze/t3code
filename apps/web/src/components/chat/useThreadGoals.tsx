@@ -109,7 +109,6 @@ export function useThreadGoals(input: {
           doneWhen: brief.doneWhen,
           background: brief.background,
           permissions: brief.permissions,
-          checkCommand: brief.checkCommand,
           ...(brief.iterationTimeoutMins === null
             ? {}
             : { iterationTimeoutMins: brief.iterationTimeoutMins }),

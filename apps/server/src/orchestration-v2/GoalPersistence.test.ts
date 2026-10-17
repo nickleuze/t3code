@@ -57,9 +57,6 @@ const result = applyGoalCommand(
     objective: "Validate candidate",
     modelSelection,
     runtimeMode: "full-access",
-    checkCommand: "node --test",
-    burnGuard: null,
-    noProgressLimit: undefined,
     doneWhen: "Checks pass",
     background: null,
     permissions: null,
@@ -101,7 +98,8 @@ it("retains old fork goal fields when decoding stored events and accepts pre-goa
 
 /**
  * A goal as the first fork release stored it (trimmed from a real owner
- * thread): no brief fields, no time limit, no uncached tokens or usage sample.
+ * thread): no brief fields, no time limit, no uncached tokens, and the
+ * fields of guards that were later removed.
  */
 const legacyGoal = {
   id: "1ceab76a-77bc-442d-85cc-c8f6f9ced574",
@@ -166,7 +164,8 @@ it.effect("replays goals saved before the brief, time floor and token split", ()
       assert.strictEqual(goalIterationTimeoutMins(goal), readAs);
       assert.include(buildGoalIterationPrompt(goal, 3), `about ${readAs} minutes`);
       assert.isUndefined(goal.uncachedTokensUsed);
-      assert.isUndefined(goal.usageSample);
+      // Fields of removed guards are dropped on decode.
+      assert.notProperty(goal, "burnGuard");
       assert.notProperty(goalSummary(goal)!, "uncachedTokensUsed");
 
       const edited = applyGoalCommand(
@@ -278,12 +277,10 @@ const discoveryBehavior = Effect.gen(function* () {
     iteration: 1,
     childThreadId: ThreadId.make("iteration:pending"),
     startedAt: DateTime.formatIso(now),
-    phase: "checking" as const,
     baselineRef: null,
     notesThisIteration: 0,
     claim: null,
     waitingOnRequest: null,
-    finished: null,
   };
   for (const status of ["active", "paused", "stopped"] as const) {
     yield* store.apply({

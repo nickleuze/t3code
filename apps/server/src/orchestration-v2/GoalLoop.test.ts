@@ -3,7 +3,6 @@ import {
   CommandId,
   EventId,
   type ModelSelection,
-  type ServerProvider,
   ProjectId,
   ProviderDriverKind,
   ProviderInstanceId,
@@ -18,12 +17,9 @@ import * as Deferred from "effect/Deferred";
 import * as Layer from "effect/Layer";
 import * as Stream from "effect/Stream";
 import * as TestClock from "effect/testing/TestClock";
-import * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
 import * as SqlitePersistence from "../persistence/Sqlite.ts";
 import * as Scheduler from "../scheduling/Scheduler.ts";
 import * as ServerActivation from "../serverActivation.ts";
-import * as ProcessRunner from "../processRunner.ts";
-import * as ProviderRegistry from "../provider/ProviderRegistry.ts";
 import * as VcsDriverRegistry from "../vcs/VcsDriverRegistry.ts";
 import { CodexProviderCapabilitiesV2 } from "./Adapters/CodexAdapterV2.ts";
 import * as EffectOutbox from "./EffectOutbox.ts";
@@ -63,8 +59,6 @@ const TestLayer = Layer.mergeAll(
 const setup = Effect.fn("GoalLoopTest.setup")(function* (
   name: string,
   goal: {
-    readonly checkCommand?: string;
-    readonly noProgressLimit?: number;
     readonly iterationTimeoutMins?: number;
   } = {},
 ) {
@@ -196,7 +190,6 @@ it.layer(TestLayer)("goal commands", (it) => {
           type: "iteration_finished",
           childOutcome: "completed",
           tokens: 4_200,
-          accounting: "exact",
           workspaceChanged: true,
           resumeAt: null,
         },
@@ -231,7 +224,6 @@ it.layer(TestLayer)("goal commands", (it) => {
           objective: "Migrate every package to the new API",
           doneWhen: "No package imports the old API",
           background: "The new API lives in packages/api.",
-          checkCommand: null,
           permissions: null,
           iterationTimeoutMins: null,
           reason: null,
@@ -341,33 +333,9 @@ it.layer(TestLayer)("goal commands", (it) => {
   );
 });
 
-const checkResults: Array<{ readonly code: number; readonly stdout: string }> = [];
-let usageWindows: ServerProvider["usageLimits"] = undefined;
-
-const WorkerDependencies = Layer.mergeAll(
-  Layer.mock(ProviderRegistry.ProviderRegistry)({
-    getProviders: Effect.sync(() => [
-      { instanceId: modelSelection.instanceId, usageLimits: usageWindows } as ServerProvider,
-    ]),
-  }),
-  Layer.mock(ProcessRunner.ProcessRunner)({
-    run: () =>
-      Effect.sync(() => {
-        const result = checkResults.shift() ?? { code: 0, stdout: "" };
-        return {
-          stdout: result.stdout,
-          stderr: "",
-          code: ChildProcessSpawner.ExitCode(result.code),
-          timedOut: false,
-          stdoutTruncated: false,
-          stderrTruncated: false,
-          stdoutInvalidUtf8: false,
-          stderrInvalidUtf8: false,
-        };
-      }),
-  }),
-  Layer.mock(VcsDriverRegistry.VcsDriverRegistry)({ detect: () => Effect.succeed(null) }),
-);
+const WorkerDependencies = Layer.mock(VcsDriverRegistry.VcsDriverRegistry)({
+  detect: () => Effect.succeed(null),
+});
 
 const goalLoop = GoalLoopWorker.make.pipe(Effect.provide(WorkerDependencies));
 
@@ -586,106 +554,6 @@ it.layer(TestLayer)("goal loop worker", (it) => {
     ),
   );
 
-  it.effect("Stop interrupts an in-flight completion check before clearing it", () =>
-    Effect.scoped(
-      Effect.gen(function* () {
-        const { orchestrator, threadId, goalId } = yield* setup("loop-stop-check", {
-          checkCommand: "long-check",
-        });
-        const started = yield* Deferred.make<void>();
-        const interrupted = yield* Deferred.make<void>();
-        const loop = yield* GoalLoopWorker.make.pipe(
-          Effect.provideService(
-            ProcessRunner.ProcessRunner,
-            ProcessRunner.ProcessRunner.of({
-              run: () =>
-                Deferred.succeed(started, undefined).pipe(
-                  Effect.andThen(Effect.never),
-                  Effect.onInterrupt(() => Deferred.succeed(interrupted, undefined)),
-                ),
-            }),
-          ),
-          Effect.provide(WorkerDependencies),
-        );
-        yield* loop.sweep();
-        yield* reportFromChild(threadId, goalId, {
-          type: "claim",
-          status: "complete",
-          summary: "Ready",
-        });
-        yield* completeChildRun((yield* readGoal(threadId)).current!.childThreadId);
-        yield* loop.sweep();
-        yield* loop.sweep();
-        yield* Deferred.await(started);
-        yield* orchestrator.dispatch({
-          type: "thread.goal.control",
-          commandId: CommandId.make("stop:check"),
-          threadId,
-          goalId,
-          action: "stop",
-        });
-        yield* loop.sweep();
-        yield* Deferred.await(interrupted);
-        yield* loop.awaitChecks;
-        assert.deepInclude(yield* readGoal(threadId), { status: "stopped", current: null });
-        assert.strictEqual((yield* readGoal(threadId)).lastCheck?.passed, false);
-      }),
-    ),
-  );
-
-  it.effect("reconstructs a check interrupted by worker teardown from durable state", () =>
-    Effect.scoped(
-      Effect.gen(function* () {
-        const { threadId, goalId } = yield* setup("loop-check-teardown", {
-          checkCommand: "restart-check",
-        });
-        const setupWorker = yield* goalLoop;
-        yield* setupWorker.sweep();
-        yield* reportFromChild(threadId, goalId, {
-          type: "claim",
-          status: "complete",
-          summary: "Verified",
-        });
-        yield* completeChildRun((yield* readGoal(threadId)).current!.childThreadId);
-        yield* setupWorker.sweep();
-        const entered = yield* Deferred.make<void>();
-        const cancelled = yield* Deferred.make<void>();
-        yield* Effect.scoped(
-          Effect.gen(function* () {
-            const worker = yield* GoalLoopWorker.make.pipe(
-              Effect.provideService(
-                ProcessRunner.ProcessRunner,
-                ProcessRunner.ProcessRunner.of({
-                  run: () =>
-                    Deferred.succeed(entered, undefined).pipe(
-                      Effect.andThen(Effect.never),
-                      Effect.onInterrupt(() => Deferred.succeed(cancelled, undefined)),
-                    ),
-                }),
-              ),
-              Effect.provide(WorkerDependencies),
-            );
-            yield* worker.sweep();
-            yield* Deferred.await(entered);
-          }),
-        );
-        yield* Deferred.await(cancelled);
-        assert.deepInclude(yield* readGoal(threadId), { status: "active", iteration: 1 });
-        assert.strictEqual((yield* readGoal(threadId)).current?.phase, "checking");
-        checkResults.push({ code: 0, stdout: "restarted check passed" });
-        const restarted = yield* goalLoop;
-        yield* restarted.sweep();
-        yield* restarted.awaitChecks;
-        assert.deepInclude(yield* readGoal(threadId), {
-          status: "complete",
-          iteration: 1,
-          current: null,
-        });
-        assert.strictEqual((yield* readGoal(threadId)).lastCheck?.passed, true);
-      }),
-    ),
-  );
-
   it.effect(
     "backs off a limited iteration across reconstruction and resumes through the owner only",
     () =>
@@ -790,33 +658,6 @@ it.layer(TestLayer)("goal loop worker", (it) => {
           assert.strictEqual((yield* readGoal(threadId)).iteration, 2);
         }),
       ),
-  );
-
-  it.effect("restarts a pending completion check and completes only after a passing result", () =>
-    Effect.scoped(
-      Effect.gen(function* () {
-        const { threadId, goalId } = yield* setup("loop-check-restart", {
-          checkCommand: "candidate-check",
-        });
-        const firstWorker = yield* goalLoop;
-        yield* firstWorker.sweep();
-        yield* reportFromChild(threadId, goalId, {
-          type: "claim",
-          status: "complete",
-          summary: "Candidate ready",
-        });
-        yield* completeChildRun((yield* readGoal(threadId)).current!.childThreadId);
-        yield* firstWorker.sweep();
-        assert.strictEqual((yield* readGoal(threadId)).current?.phase, "checking");
-        assert.strictEqual((yield* readGoal(threadId)).status, "active");
-        const restartedWorker = yield* goalLoop;
-        checkResults.push({ code: 0, stdout: "passed" });
-        yield* restartedWorker.sweep();
-        yield* restartedWorker.awaitChecks;
-        assert.deepInclude(yield* readGoal(threadId), { status: "complete", current: null });
-        assert.strictEqual((yield* readGoal(threadId)).lastCheck?.passed, true);
-      }),
-    ),
   );
 
   it.effect("honors a paused owner across worker reconstruction and starts once on resume", () =>
@@ -984,41 +825,6 @@ it.layer(TestLayer)("goal loop worker", (it) => {
     ),
   );
 
-  it.effect("keeps going when the completion check fails", () =>
-    Effect.scoped(
-      Effect.gen(function* () {
-        const { threadId, goalId } = yield* setup("loop-check", { checkCommand: "pnpm test" });
-        const loop = yield* goalLoop;
-        checkResults.push({ code: 1, stdout: "2 failing" });
-
-        yield* loop.sweep();
-        yield* reportFromChild(threadId, goalId, {
-          type: "claim",
-          status: "complete",
-          summary: "Done",
-        });
-        yield* completeChildRun((yield* readGoal(threadId)).current!.childThreadId);
-        yield* loop.sweep();
-        assert.strictEqual((yield* readGoal(threadId)).current?.phase, "checking");
-
-        yield* loop.sweep();
-        yield* loop.awaitChecks;
-        const afterCheck = yield* readGoal(threadId);
-        assert.deepInclude(afterCheck, { status: "active", current: null });
-        assert.deepInclude(afterCheck.lastCheck, { passed: false, exitCode: 1 });
-
-        yield* loop.sweep();
-        const retry = yield* readGoal(threadId);
-        const retryChild = yield* Orchestrator.OrchestratorV2.pipe(
-          Effect.flatMap((orchestrator) =>
-            orchestrator.getThreadRecords(retry.current!.childThreadId, ["messages"]),
-          ),
-        );
-        assert.include(retryChild.messages[0]?.text, "2 failing");
-      }),
-    ),
-  );
-
   it.effect("delivers a reply from the goal thread into the running iteration", () =>
     Effect.scoped(
       Effect.gen(function* () {
@@ -1174,34 +980,6 @@ it.layer(TestLayer)("goal loop worker", (it) => {
           nextChild.messages[0]?.text,
           '[iteration 1] The user answered "Which priority applies when it is omitted?": normal',
         );
-      }),
-    ),
-  );
-
-  it.effect("pauses when provider usage climbs faster than the burn guard allows", () =>
-    Effect.scoped(
-      Effect.gen(function* () {
-        const { threadId } = yield* setup("loop-burn");
-        const loop = yield* goalLoop;
-        const window = (usedPercent: number) => ({
-          checkedAt: "2026-10-04T12:00:00.000Z",
-          windows: [{ id: "session", kind: "session" as const, label: "5h", usedPercent }],
-        });
-
-        usageWindows = window(10);
-        yield* loop.sweep();
-        yield* loop.sweep();
-        // The guard's reading is on the goal for the goal panel to show.
-        assert.deepInclude((yield* readGoal(threadId)).usageSample, {
-          windows: [{ id: "session", usedPercent: 10 }],
-          risePoints: 0,
-        });
-        usageWindows = window(45);
-        yield* loop.sweep();
-        const paused = yield* readGoal(threadId);
-        assert.deepInclude(paused, { status: "paused", statusReason: "burn_rate" });
-        assert.strictEqual(paused.usageSample?.risePoints, 35);
-        usageWindows = undefined;
       }),
     ),
   );

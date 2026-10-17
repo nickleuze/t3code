@@ -42,19 +42,6 @@ export function buildGoalIterationPrompt(
         .join("\n")}`,
     );
   }
-  const check = goal.lastCheck;
-  if (check !== null && !check.passed) {
-    const outcome = check.timedOut
-      ? "timed out"
-      : `failed with exit code ${check.exitCode ?? "unknown"}`;
-    sections.push(
-      `## Last completion check\n\nAfter iteration ${check.iteration} claimed the goal was done, \`${check.command}\` ${outcome}:\n\n\`\`\`\n${check.outputTail.trim() || "(no output)"}\n\`\`\``,
-    );
-  }
-  const completion =
-    goal.checkCommand === null
-      ? ""
-      : ` T3 Code then runs \`${goal.checkCommand}\`, and the goal only completes if it exits 0.`;
   sections.push(
     [
       "## How to work",
@@ -63,7 +50,7 @@ export function buildGoalIterationPrompt(
       "- Keep the handoff file a current-state document for a fresh agent: current state, decisions, what is verified (and by which command), and next steps. Rewrite it each time instead of appending, keep it under about 15 KB, and keep its change log to at most 10 dated lines.",
       "- Do not save command output, logs or other evidence files per step unless the goal asks for them. Record each result as one line in the handoff.",
       "- Before your turn ends, rewrite the handoff and call `t3_goal_update` with one or two sentences on what changed. Details belong in the handoff file, not the note.",
-      `- As soon as the goal is achieved${goal.doneWhen ? ' and the "Done when" conditions hold' : ""}, call \`t3_goal_complete\` with status "complete" and a summary. Do not add checks, reviews or approvals the goal does not ask for.${completion}`,
+      `- As soon as the goal is achieved${goal.doneWhen ? ' and the "Done when" conditions hold' : ""}, call \`t3_goal_complete\` with status "complete" and a summary. Do not add checks, reviews or approvals the goal does not ask for.`,
       '- If you need a decision or approval from the user, ask with your question tool (or `t3_ask_user_question`) and wait for the answer; the user is notified. Use `t3_goal_complete` with status "blocked" only when work cannot continue for a long time, and say what you need.',
     ].join("\n"),
   );
