@@ -172,3 +172,6 @@ feed (`app-update.yml` points at the fork) and each host's installation/reconnec
 state/settings backup before state-changing upgrades: an old binary may not
 read a new schema or event kind. Define the compatible restore path before
 shipping, and wait for active turns to finish before restarting either host.
+The recovery updater (`fork/update*.sh`) moves removals to the Trash, keeps
+every app backup and stops instead of force-quitting when a normal Quit fails;
+`--stage-only` lets signing and feed checks run on the staged app first.
