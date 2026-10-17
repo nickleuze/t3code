@@ -190,9 +190,14 @@ NodeTest.test("install quits normally and keeps the previous app and every older
   NodeAssert.match(result.trace, /osascript -e tell application id "fixture\.alpha" to quit/);
   NodeAssert.equal(appVersion(host.app), "fixture-version");
   for (const path of older) NodeAssert.ok(NodeFS.existsSync(path), path);
-  const backup = NodeFS.readdirSync(host.backups).find((name) => name.endsWith("-from-previous-version"));
+  const backup = NodeFS.readdirSync(host.backups).find((name) =>
+    name.endsWith("-from-previous-version"),
+  );
   NodeAssert.ok(backup, NodeFS.readdirSync(host.backups).join(", "));
-  NodeAssert.equal(appVersion(NodePath.join(host.backups, backup, "T3 Code (Alpha).app")), "previous-version");
+  NodeAssert.equal(
+    appVersion(NodePath.join(host.backups, backup, "T3 Code (Alpha).app")),
+    "previous-version",
+  );
   NodeAssert.ok(!NodeFS.existsSync(host.stage));
   NodeAssert.match(result.trace, /trash .*staged-fixture-version/);
   NodeAssert.doesNotMatch(result.trace, /unexpected/);
@@ -216,7 +221,10 @@ NodeTest.test("a staged update installs later only over the app it was staged ag
   NodeAssert.equal(stageOnly.status, 0, stageOnly.stderr);
   NodeAssert.match(stageOnly.stdout, /Install with: launchctl submit/);
   NodeAssert.doesNotMatch(stageOnly.trace, /launchctl|osascript|unexpected/);
-  NodeAssert.equal(appVersion(NodePath.join(staged.stage, "T3 Code (Alpha).app")), "fixture-version");
+  NodeAssert.equal(
+    appVersion(NodePath.join(staged.stage, "T3 Code (Alpha).app")),
+    "fixture-version",
+  );
   const installed = staged.runInstaller(staged.installer);
   NodeAssert.equal(installed.status, 0, installed.log);
   NodeAssert.equal(appVersion(staged.app), "fixture-version");
@@ -226,22 +234,31 @@ NodeTest.test("a staged update installs later only over the app it was staged ag
   writeApp(changed.app, "other-version");
   const result = changed.runInstaller(changed.installer);
   NodeAssert.equal(result.status, 1, result.log);
-  NodeAssert.match(result.log, /ABORTED: installed app is other-version, but this update was staged against previous-version/);
+  NodeAssert.match(
+    result.log,
+    /ABORTED: installed app is other-version, but this update was staged against previous-version/,
+  );
   NodeAssert.doesNotMatch(result.trace, /osascript|unexpected/);
   NodeAssert.equal(appVersion(changed.app), "other-version");
   NodeAssert.ok(!NodeFS.existsSync(changed.backups));
 });
 
-NodeTest.test("a new app that does not start goes to the Trash and the previous app returns", () => {
-  const host = fixture([{ output: "0" }, { output: "0" }], { quit: "ok", start: "fail" });
-  const result = host.update([]);
-  NodeAssert.equal(result.status, 1, result.log);
-  NodeAssert.match(result.log, /FAILED: the new app did not start; restoring the previous app/);
-  NodeAssert.equal(appVersion(host.app), "previous-version");
-  const trashed = NodeFS.readdirSync(host.trash).map((name) => NodePath.join(host.trash, name));
-  NodeAssert.ok(trashed.some((path) => appVersion(path) === "fixture-version"), trashed.join(", "));
-  NodeAssert.doesNotMatch(result.trace, /unexpected/);
-});
+NodeTest.test(
+  "a new app that does not start goes to the Trash and the previous app returns",
+  () => {
+    const host = fixture([{ output: "0" }, { output: "0" }], { quit: "ok", start: "fail" });
+    const result = host.update([]);
+    NodeAssert.equal(result.status, 1, result.log);
+    NodeAssert.match(result.log, /FAILED: the new app did not start; restoring the previous app/);
+    NodeAssert.equal(appVersion(host.app), "previous-version");
+    const trashed = NodeFS.readdirSync(host.trash).map((name) => NodePath.join(host.trash, name));
+    NodeAssert.ok(
+      trashed.some((path) => appVersion(path) === "fixture-version"),
+      trashed.join(", "),
+    );
+    NodeAssert.doesNotMatch(result.trace, /unexpected/);
+  },
+);
 
 NodeTest.test("a failed unpack moves the stage and download to the Trash", () => {
   const result = install([{ output: "0" }], [], { unpack: "fail" });
