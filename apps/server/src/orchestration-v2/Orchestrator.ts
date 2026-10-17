@@ -8755,6 +8755,21 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         attempt.status !== "running"
       )
         return;
+      // A settle after Stop repeats the reason the earlier interrupt request recorded.
+      const interruptReason =
+        input.command.type === "run.interrupt"
+          ? (input.command.reason ?? null)
+          : RunExecutionService.interruptRequestReason(
+              yield* projectionStore
+                .getTurnItem({
+                  threadId: run.threadId,
+                  itemId: idAllocator.derive.runSignalTurnItem({
+                    runId: run.id,
+                    signal: "interrupt-request",
+                  }),
+                })
+                .pipe(Effect.orElseSucceed(() => null)),
+            );
       const emitEvent = emit(input.events, input.command);
       const base = {
         threadId: input.command.threadId,
@@ -8871,6 +8886,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
             rootNode,
             providerThread,
             completedAt: input.now,
+            reason: interruptReason,
           }),
         });
       }
@@ -8970,7 +8986,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         completedAt: now,
         updatedAt: now,
         type: "run_interrupt_request",
-        message: command.reason ?? "Interrupt requested",
+        message: command.reason ?? RunExecutionService.INTERRUPT_REQUEST_DEFAULT_MESSAGE,
       },
     });
   });
@@ -9286,7 +9302,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         completedAt: now,
         updatedAt: now,
         type: "run_interrupt_request",
-        message: command.reason ?? "Interrupt requested",
+        message: command.reason ?? RunExecutionService.INTERRUPT_REQUEST_DEFAULT_MESSAGE,
       };
 
       // Background work can outlive a provider switch, such as a Codex dev

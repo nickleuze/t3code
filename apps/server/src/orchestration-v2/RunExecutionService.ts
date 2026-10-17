@@ -518,6 +518,8 @@ export interface RunExecutionServiceV2StartRootRunInput {
   readonly shouldStartProviderTurn?: () => Effect.Effect<boolean, ProjectionStoreV2Error>;
   readonly shouldFinalizeRun?: () => Effect.Effect<boolean, ProjectionStoreV2Error>;
   readonly hasUnpairedRunInterruptRequest?: () => Effect.Effect<boolean, never>;
+  /** The reason the run's interrupt request recorded, read when the run ends interrupted. */
+  readonly interruptReason?: () => Effect.Effect<string | null, never>;
   readonly message: ProviderAdapter.ProviderAdapterV2TurnMessage;
   readonly modelSelection: ModelSelection;
   readonly runtimePolicy: ProviderAdapter.ProviderAdapterV2RuntimePolicy;
@@ -565,6 +567,7 @@ export const layer: Layer.Layer<
       readonly attempt: OrchestrationV2RunAttempt;
       readonly shouldFinalizeRun?: () => Effect.Effect<boolean, ProjectionStoreV2Error>;
       readonly hasUnpairedRunInterruptRequest?: () => Effect.Effect<boolean, never>;
+      readonly interruptReason?: () => Effect.Effect<string | null, never>;
       readonly openRunOwnedSubagents?: OpenRunOwnedSubagentProjection;
       readonly terminal: ProviderTerminalEvent;
       readonly failureItemPersisted: boolean;
@@ -576,6 +579,8 @@ export const layer: Layer.Layer<
     }) =>
       Effect.gen(function* () {
         const completedAt = yield* DateTime.now;
+        const interruptReason = () =>
+          input.interruptReason === undefined ? Effect.succeed(null) : input.interruptReason();
         const finalizedAttempt: OrchestrationV2RunAttempt | null = {
           ...input.attempt,
           status: input.terminal.status,
@@ -610,6 +615,7 @@ export const layer: Layer.Layer<
                       rootNode: input.rootNode,
                       providerThread: input.providerThread,
                       completedAt,
+                      reason: yield* interruptReason(),
                     }),
                   },
                 ],
@@ -720,6 +726,7 @@ export const layer: Layer.Layer<
                       rootNode: input.rootNode,
                       providerThread: input.providerThread,
                       completedAt,
+                      reason: yield* interruptReason(),
                     }),
                   },
                 ]
@@ -988,6 +995,9 @@ export const layer: Layer.Layer<
                   : {
                       hasUnpairedRunInterruptRequest: input.hasUnpairedRunInterruptRequest,
                     }),
+                ...(input.interruptReason === undefined
+                  ? {}
+                  : { interruptReason: input.interruptReason }),
                 openRunOwnedSubagents: openSubagents,
                 terminal,
                 failureItemPersisted: terminal.status === "failed",
@@ -1469,12 +1479,28 @@ export const layer: Layer.Layer<
   }),
 );
 
+/** What a `run_interrupt_request` says when the interrupt gave no reason. */
+export const INTERRUPT_REQUEST_DEFAULT_MESSAGE = "Interrupt requested";
+
+/**
+ * The reason a run's interrupt request recorded, or null when it gave none.
+ * The interrupt result repeats it so the timeline says who stopped the run.
+ */
+export function interruptRequestReason(item: OrchestrationV2TurnItem | null): string | null {
+  return item?.type === "run_interrupt_request" &&
+    item.message !== INTERRUPT_REQUEST_DEFAULT_MESSAGE
+    ? item.message
+    : null;
+}
+
 export function makeInterruptResultTurnItem(input: {
   readonly idAllocator: IdAllocator.IdAllocatorV2["Service"];
   readonly run: OrchestrationV2Run;
   readonly rootNode: OrchestrationV2ExecutionNode;
   readonly providerThread: OrchestrationV2ProviderThread;
   readonly completedAt: DateTime.Utc;
+  /** Why the run was interrupted, as its interrupt request recorded it. */
+  readonly reason: string | null | undefined;
 }): OrchestrationV2TurnItem {
   return {
     id: input.idAllocator.derive.runSignalTurnItem({
@@ -1498,6 +1524,6 @@ export function makeInterruptResultTurnItem(input: {
     completedAt: input.completedAt,
     updatedAt: input.completedAt,
     type: "run_interrupt_result",
-    message: "Run interrupted by user",
+    message: input.reason ?? "Run interrupted",
   };
 }
