@@ -146,6 +146,8 @@ import * as CloudCliTokenManager from "./cloud/CliTokenManager.ts";
 import * as CloudCliState from "./cloud/CliState.ts";
 import * as ServerSelfUpdate from "./cloud/selfUpdate.ts";
 import * as DesktopAppUpdate from "./desktopUpdate/DesktopAppUpdate.ts";
+import * as HostDeployment from "./deploy/HostDeployment.ts";
+import * as HostDeploymentHost from "./deploy/HostDeploymentHost.ts";
 import * as ServiceLauncherClient from "./cloud/serviceLauncherClient.ts";
 import * as ProcessDiagnostics from "./diagnostics/ProcessDiagnostics.ts";
 import * as HostResources from "./resourceTelemetry/HostResources.ts";
@@ -249,6 +251,14 @@ const layerHostPowerMonitor = HostPowerMonitor.layer.pipe(
 // would open a second reader on the desktop telemetry fd.
 const layerDesktopAppUpdate = DesktopAppUpdate.layer.pipe(
   Layer.provide(layerDesktopTelemetryReceiver),
+);
+
+// Shares layerDesktopAppUpdate with ServerSelfUpdate, so a deployment's
+// reservation refuses ordinary updates on the same instance.
+const layerHostDeployment = HostDeployment.layer.pipe(
+  Layer.provide(
+    Layer.mergeAll(layerDesktopAppUpdate, HostDeploymentHost.layer, ProjectionStoreV2.layer),
+  ),
 );
 
 const layerBackground = BackgroundPolicy.layer.pipe(
@@ -729,6 +739,7 @@ const layerMakeRoutes = Layer.mergeAll(
   Layer.provide(PreviewBrowser.layer),
   Layer.provide(PreviewAutomationBroker.layer),
   Layer.provide(ServerSelfUpdate.layer.pipe(Layer.provide(layerDesktopAppUpdate))),
+  Layer.provide(layerHostDeployment),
   Layer.provide(layerCommandReadiness),
   Layer.provide(ServerHttp.layerBrowserApiCors),
   Layer.provide(ServerHttp.layerHttpCompression),

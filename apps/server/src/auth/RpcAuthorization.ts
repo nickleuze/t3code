@@ -111,6 +111,7 @@ export const RPC_REQUIRED_SCOPES = {
   [WS_METHODS.serverReportClientActivity]: AuthOrchestrationReadScope,
   [WS_METHODS.serverReportHostPowerState]: AuthEnvironmentMaintainScope,
   [WS_METHODS.serverGetBackgroundPolicy]: AuthOrchestrationReadScope,
+  [WS_METHODS.deploymentsSubscribe]: AuthOrchestrationReadScope,
   [WS_METHODS.ticketsTimeline]: AuthOrchestrationReadScope,
   [WS_METHODS.ticketsSetupCheck]: AuthOrchestrationReadScope,
   [WS_METHODS.ticketsSyncStatus]: AuthOrchestrationReadScope,

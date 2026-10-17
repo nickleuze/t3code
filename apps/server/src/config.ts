@@ -101,6 +101,8 @@ export class ServerConfig extends Context.Service<
     readonly desktopBrowserFd?: number | undefined;
     readonly desktopBrowserControlFd?: number | undefined;
     readonly resourceMonitorPath?: string | undefined;
+    readonly appCommitHash?: string | undefined;
+    readonly appBundlePath?: string | undefined;
     readonly autoBootstrapProjectFromCwd: boolean;
     readonly logWebSocketEvents: boolean;
     readonly tailscaleServeEnabled: boolean;

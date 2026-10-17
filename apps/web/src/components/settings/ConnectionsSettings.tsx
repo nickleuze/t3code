@@ -195,6 +195,7 @@ import {
   ServerUpdateProgress,
   ServerUpdatesAction,
 } from "../ServerUpdateAction";
+import { EnvironmentDeploymentStatus } from "../ReleaseDeployment";
 import { CloudEnvironmentConnectRows } from "../cloud/CloudEnvironmentConnectList";
 import { ITEM_ROW_CLASSNAME, ITEM_ROW_INNER_CLASSNAME } from "./itemRows";
 import {
@@ -1685,11 +1686,14 @@ function SavedBackendListRow({
         </span>
       }
       below={
-        serverUpdateState.status !== "idle" ? (
-          <div className="mt-1 max-w-md">
-            <ServerUpdateProgress state={serverUpdateState} />
-          </div>
-        ) : null
+        <>
+          {serverUpdateState.status !== "idle" ? (
+            <div className="mt-1 max-w-md">
+              <ServerUpdateProgress state={serverUpdateState} />
+            </div>
+          ) : null}
+          <EnvironmentDeploymentStatus environment={environment} />
+        </>
       }
       detail={
         <>
@@ -3612,16 +3616,21 @@ export function ConnectionsSettings() {
               <SettingsRow
                 title="Version"
                 description={
-                  primaryServerUpdateState.status !== "idle" ? (
-                    <ServerUpdateProgress state={primaryServerUpdateState} />
-                  ) : (
-                    [
-                      primaryServerConfig?.environment.serverVersion ?? null,
-                      primaryEnvironment?.displayUrl ?? null,
-                    ]
-                      .filter((value): value is string => value !== null)
-                      .join(" · ") || "Loading…"
-                  )
+                  <>
+                    {primaryServerUpdateState.status !== "idle" ? (
+                      <ServerUpdateProgress state={primaryServerUpdateState} />
+                    ) : (
+                      [
+                        primaryServerConfig?.environment.serverVersion ?? null,
+                        primaryEnvironment?.displayUrl ?? null,
+                      ]
+                        .filter((value): value is string => value !== null)
+                        .join(" · ") || "Loading…"
+                    )}
+                    {primaryEnvironment ? (
+                      <EnvironmentDeploymentStatus environment={primaryEnvironment} />
+                    ) : null}
+                  </>
                 }
                 control={
                   primaryVersionMismatch &&

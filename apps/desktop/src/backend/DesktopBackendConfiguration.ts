@@ -19,6 +19,7 @@ import serverPackageJson from "../../../server/package.json" with { type: "json"
 import * as DesktopBackendManager from "./DesktopBackendManager.ts";
 import * as DesktopCliShim from "../app/DesktopCliShim.ts";
 import * as DesktopEnvironment from "../app/DesktopEnvironment.ts";
+import { resolveCommitHash } from "../app/appCommitHash.ts";
 import * as DesktopServerExposure from "./DesktopServerExposure.ts";
 import * as DesktopAppSettings from "../settings/DesktopAppSettings.ts";
 import * as DesktopWslEnvironment from "../wsl/DesktopWslEnvironment.ts";
@@ -544,11 +545,19 @@ const buildObservabilityFragment = (observabilitySettings: BackendObservabilityS
   }),
 });
 
+/** The packaged `.app` bundle containing this executable, on macOS only. */
+const macAppBundlePath = (platform: string, isPackaged: boolean): Option.Option<string> => {
+  if (platform !== "darwin" || !isPackaged) return Option.none();
+  const marker = process.execPath.lastIndexOf(".app/");
+  return marker === -1 ? Option.none() : Option.some(process.execPath.slice(0, marker + 4));
+};
+
 const resolvePrimaryStartConfig = Effect.fn("desktop.backendConfiguration.resolvePrimary")(
   function* (
     input: SharedBootstrapInput & {
       readonly resourceMonitorPath: Option.Option<string>;
       readonly cliPath: Option.Option<string>;
+      readonly appCommitHash: Option.Option<string>;
     },
   ): Effect.fn.Return<
     DesktopBackendManager.DesktopBackendStartConfig,
@@ -580,6 +589,14 @@ const resolvePrimaryStartConfig = Effect.fn("desktop.backendConfiguration.resolv
       ...Option.match(input.resourceMonitorPath, {
         onNone: () => ({}),
         onSome: (resourceMonitorPath) => ({ resourceMonitorPath }),
+      }),
+      ...Option.match(input.appCommitHash, {
+        onNone: () => ({}),
+        onSome: (appCommitHash) => ({ appCommitHash }),
+      }),
+      ...Option.match(macAppBundlePath(environment.platform, environment.isPackaged), {
+        onNone: () => ({}),
+        onSome: (appBundlePath) => ({ appBundlePath }),
       }),
       ...buildObservabilityFragment(input.observabilitySettings),
     };
@@ -924,7 +941,16 @@ export const make = Effect.gen(function* () {
       Effect.provideService(FileSystem.FileSystem, fileSystem),
       Effect.provideService(DesktopEnvironment.DesktopEnvironment, environment),
     );
-    return yield* resolvePrimaryStartConfig({ ...shared, resourceMonitorPath, cliPath }).pipe(
+    const appCommitHash = yield* resolveCommitHash.pipe(
+      Effect.provideService(FileSystem.FileSystem, fileSystem),
+      Effect.provideService(DesktopEnvironment.DesktopEnvironment, environment),
+    );
+    return yield* resolvePrimaryStartConfig({
+      ...shared,
+      resourceMonitorPath,
+      cliPath,
+      appCommitHash,
+    }).pipe(
       Effect.provideService(DesktopEnvironment.DesktopEnvironment, environment),
       Effect.provideService(DesktopServerExposure.DesktopServerExposure, serverExposure),
     );

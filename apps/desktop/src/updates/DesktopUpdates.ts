@@ -66,7 +66,18 @@ const UpdateInfo = Schema.Struct({
   // fail the decode and block the update state transition. The shape is
   // validated defensively in normalizeDesktopUpdateReleaseNotes.
   releaseNotes: Schema.optional(Schema.Unknown),
+  // The feed's artifact digests; electron-updater verifies the download against them.
+  files: Schema.optional(
+    Schema.Array(Schema.Struct({ url: Schema.String, sha512: Schema.optional(Schema.String) })),
+  ),
 });
+
+/** Digest of the downloaded archive (the zip on macOS), as listed in the feed. */
+function downloadedSha512(info: typeof UpdateInfo.Type): string | null {
+  const files = info.files ?? [];
+  const archive = files.find((file) => file.url.endsWith(".zip")) ?? files[0];
+  return archive?.sha512 ?? null;
+}
 
 const DownloadProgressInfo = Schema.Struct({
   percent: Schema.Number,
@@ -187,6 +198,11 @@ export class DesktopUpdates extends Context.Service<
     readonly installPrepared: (
       expectedVersion: string,
     ) => Effect.Effect<DesktopPreparedUpdateInstallResult>;
+    /** Version and feed digest of the last completed download, if any. */
+    readonly downloadedArtifact: Effect.Effect<{
+      readonly version: string;
+      readonly sha512: string | null;
+    } | null>;
   }
 >()("@t3tools/desktop/updates/DesktopUpdates") {}
 
@@ -289,6 +305,10 @@ export const make = Effect.gen(function* () {
   const finishedUpdateActions = yield* PubSub.unbounded<UpdateAction>();
   const updaterConfiguredRef = yield* Ref.make(false);
   const lastLoggedDownloadMilestoneRef = yield* Ref.make(-1);
+  const downloadedArtifactRef = yield* Ref.make<{
+    readonly version: string;
+    readonly sha512: string | null;
+  } | null>(null);
   const updateStateRef = yield* Ref.make<DesktopUpdateState>(
     createInitialDesktopUpdateState(
       environment.appVersion,
@@ -874,6 +894,10 @@ export const make = Effect.gen(function* () {
       Effect.flatMap(
         Effect.fn("desktop.updates.applyUpdateDownloaded")(function* (info) {
           const state = yield* Ref.get(updateStateRef);
+          yield* Ref.set(downloadedArtifactRef, {
+            version: info.version,
+            sha512: downloadedSha512(info),
+          });
           yield* setState(reduceDesktopUpdateStateOnDownloadComplete(state, info.version));
           yield* logUpdaterInfo("update downloaded", { version: info.version });
         }),
@@ -893,6 +917,7 @@ export const make = Effect.gen(function* () {
 
   return DesktopUpdates.of({
     getState: Ref.get(updateStateRef),
+    downloadedArtifact: Ref.get(downloadedArtifactRef),
     isActionActive: activeUpdateAction.pipe(Effect.map(Option.isSome)),
     isInstallActive: activeUpdateAction.pipe(
       Effect.map((action) => Option.isSome(action) && action.value === "install"),

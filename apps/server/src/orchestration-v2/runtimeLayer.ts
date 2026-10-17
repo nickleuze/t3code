@@ -45,6 +45,7 @@ import * as ProviderTurnControlService from "./ProviderTurnControlService.ts";
 import * as ProviderTurnStartService from "./ProviderTurnStartService.ts";
 import * as RunExecutionService from "./RunExecutionService.ts";
 import * as RunFinalizationService from "./RunFinalizationService.ts";
+import * as RunAdmissionGate from "./RunAdmissionGate.ts";
 import * as RuntimePolicy from "./RuntimePolicy.ts";
 import * as RuntimeRequestService from "./RuntimeRequestService.ts";
 import * as ThreadManagementService from "./ThreadManagementService.ts";
@@ -88,6 +89,8 @@ const layerStores = Layer.mergeAll(
   layerCommandReceiptStoreProvided,
   EffectOutbox.layer,
   TurnItemPositionStore.layer,
+  // One instance shared by the event sink, the orchestrator and release deployment.
+  RunAdmissionGate.layer,
 );
 
 export const layerEventSink = EventSink.layerFromStores.pipe(Layer.provide(layerStores));
@@ -360,6 +363,10 @@ const layerTickets = TicketService.layer.pipe(
 
 export const layerProduction = Layer.mergeAll(
   layer.pipe(Layer.provide(layerProjectService)),
+  // Same layer references as layerStores, so release deployment shares the
+  // event sink and its admission gate.
+  RunAdmissionGate.layer,
+  layerEventSinkProvided,
   layerProjectService,
   layerManagedProjectFoldersProvided,
   layerThreadLaunchProvided,

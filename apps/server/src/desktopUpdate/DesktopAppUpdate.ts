@@ -40,6 +40,16 @@ function desktopUpdateProgressStage(
   }
 }
 
+/** A prepared desktop update, with the feed digest of what was downloaded. */
+export type DesktopAppUpdatePrepared = ServerSelfUpdateResult & {
+  readonly downloadedSha512?: string;
+};
+
+/** Identifies the release deployment that owns the updater, when one does. */
+export interface DesktopAppUpdateOwner {
+  readonly deployment?: string;
+}
+
 export class DesktopAppUpdate extends Context.Service<
   DesktopAppUpdate,
   {
@@ -52,13 +62,18 @@ export class DesktopAppUpdate extends Context.Service<
       reportProgress: (
         stage: ServerSelfUpdateProgressStage,
       ) => Effect.Effect<void, ServerSelfUpdateError>,
-    ) => Effect.Effect<ServerSelfUpdateResult, ServerSelfUpdateError>;
+      owner?: DesktopAppUpdateOwner,
+    ) => Effect.Effect<DesktopAppUpdatePrepared, ServerSelfUpdateError>;
     /** Starts the prepared install. Success stops this server, so this effect
         returns only when installation fails or times out. */
     readonly commit: (
       requestId: string,
       onHandoffAccepted?: () => Effect.Effect<void>,
+      owner?: DesktopAppUpdateOwner,
     ) => Effect.Effect<never, ServerSelfUpdateError>;
+    /** While a release deployment holds the updater, runs and commits from
+        anyone else are refused. `undefined` releases it. */
+    readonly reserve: (deployment: string | undefined) => Effect.Effect<void>;
   }
 >()("t3/desktopUpdate/DesktopAppUpdate") {}
 
@@ -67,12 +82,25 @@ export const make = Effect.fn("desktopUpdate.desktopAppUpdate.make")(function* (
   const crypto = yield* Crypto.Crypto;
   const receiver = yield* DesktopTelemetryReceiver.DesktopTelemetryReceiver;
   const inFlight = yield* Ref.make(false);
+  const reservedBy = yield* Ref.make<string | undefined>(undefined);
 
   const available = config.mode === "desktop" && config.desktopTelemetryControlFd !== undefined;
   const failWith = (reason: string, cause?: unknown) =>
     cause === undefined
       ? new ServerSelfUpdateError({ reason })
       : new ServerSelfUpdateError({ reason, cause });
+  const checkOwner = (owner: DesktopAppUpdateOwner | undefined) =>
+    Ref.get(reservedBy).pipe(
+      Effect.flatMap((reserved) =>
+        reserved === undefined || reserved === owner?.deployment
+          ? Effect.void
+          : Effect.fail(
+              failWith(
+                `Release deployment ${reserved} is installing on this host; wait for it or cancel it first.`,
+              ),
+            ),
+      ),
+    );
 
   const consumeReports = (
     requestId: string,
@@ -131,7 +159,14 @@ export const make = Effect.fn("desktopUpdate.desktopAppUpdate.make")(function* (
           targetVersion,
         });
         yield* Ref.set(inFlight, false);
-        return { targetVersion, method: "desktop-app" as const, desktopUpdateToken: requestId };
+        return {
+          targetVersion,
+          method: "desktop-app" as const,
+          desktopUpdateToken: requestId,
+          ...(report.downloadedSha512 === undefined
+            ? {}
+            : { downloadedSha512: report.downloadedSha512 }),
+        };
       }
       if (report.outcome === "up-to-date") {
         return yield* failWith(
@@ -144,12 +179,13 @@ export const make = Effect.fn("desktopUpdate.desktopAppUpdate.make")(function* (
     });
 
   const run: DesktopAppUpdate["Service"]["run"] = Effect.fn("desktopUpdate.desktopAppUpdate.run")(
-    function* (reportProgress) {
+    function* (reportProgress, owner) {
       if (!available) {
         return yield* failWith(
           "This server was not started by the T3 Code desktop app, so it cannot drive a desktop update.",
         );
       }
+      yield* checkOwner(owner);
       if (yield* Ref.getAndSet(inFlight, true)) {
         return yield* failWith("A desktop app update is already in progress.");
       }
@@ -187,10 +223,11 @@ export const make = Effect.fn("desktopUpdate.desktopAppUpdate.make")(function* (
 
   const commit: DesktopAppUpdate["Service"]["commit"] = Effect.fn(
     "desktopUpdate.desktopAppUpdate.commit",
-  )(function* (requestId, onHandoffAccepted = () => Effect.void) {
+  )(function* (requestId, onHandoffAccepted = () => Effect.void, owner) {
     if (!available) {
       return yield* failWith("This server cannot commit a desktop app update.");
     }
+    yield* checkOwner(owner);
     const terminal = yield* Effect.scoped(
       Effect.gen(function* () {
         const { latest, changes } = yield* receiver.desktopUpdates;
@@ -225,7 +262,12 @@ export const make = Effect.fn("desktopUpdate.desktopAppUpdate.make")(function* (
     );
   });
 
-  return DesktopAppUpdate.of({ available, run, commit });
+  return DesktopAppUpdate.of({
+    available,
+    run,
+    commit,
+    reserve: (deployment) => Ref.set(reservedBy, deployment),
+  });
 });
 
 export const layer = Layer.effect(DesktopAppUpdate, make());

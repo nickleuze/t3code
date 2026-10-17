@@ -27,6 +27,8 @@ import * as OrchestratorMcpService from "./OrchestratorMcpService.ts";
 import { PreviewControlsToolkit } from "./toolkits/previewControls/tools.ts";
 import * as PreviewControlsHandlers from "./toolkits/previewControls/handlers.ts";
 import { EnvironmentToolkit } from "./toolkits/environment/tools.ts";
+import * as DeploymentHandlers from "./toolkits/deploy/handlers.ts";
+import { DeploymentToolkit } from "./toolkits/deploy/tools.ts";
 import { ToolsToolkit } from "./toolkits/tools/tools.ts";
 import * as EnvironmentHandlers from "./toolkits/environment/handlers.ts";
 import * as ToolsHandlers from "./toolkits/tools/handlers.ts";
@@ -846,6 +848,11 @@ export const layerEnvironmentToolkit = toolkitRegistration(
 
 const layerProjectRegistration = toolkitRegistration(ProjectToolkit, ProjectHandlers.layer);
 
+export const layerDeploymentToolkit = toolkitRegistration(
+  DeploymentToolkit,
+  DeploymentHandlers.layer,
+);
+
 const layerToolsRegistration = toolkitRegistration(ToolsToolkit, ToolsHandlers.layer).pipe(
   Layer.provide(ThreadCommandExecutor.layer),
 );
@@ -897,6 +904,7 @@ export const T3_MCP_TOOLKITS: ReadonlyArray<Toolkit.Any> = [
   AttachmentToolkit,
   ProjectToolkit,
   EnvironmentToolkit,
+  DeploymentToolkit,
   ToolsToolkit,
   PreviewControlsToolkit,
   WorktreeToolkit,
@@ -916,6 +924,7 @@ export const layer = Layer.mergeAll(
   layerAttachmentToolkit,
   layerProjectRegistration,
   layerEnvironmentToolkit,
+  layerDeploymentToolkit,
   layerToolsRegistration,
   layerPreviewControlsRegistration,
   layerWorktreeToolkitRegistration,
