@@ -311,7 +311,7 @@ it.effect("backs up and hands off once idle; a failed quit reopens the gate", ()
     assert.strictEqual(fakes.resumes, 1);
     assert.strictEqual(fakes.reservations[0], RELEASE);
     assert.isUndefined(fakes.reservations.at(-1));
-  }).pipe(Effect.provide(HostDeployment.layer), Effect.provide(makeLayer(fakes)));
+  }).pipe(Effect.provide(HostDeployment.layer.pipe(Layer.provideMerge(makeLayer(fakes)))));
 });
 
 it.effect("a backup failure never commits and reopens the gate", () => {
@@ -327,7 +327,7 @@ it.effect("a backup failure never commits and reopens the gate", () => {
     assert.include(failed.reason ?? "", "integrity check");
     assert.strictEqual(fakes.commits, 0);
     assert.isUndefined(yield* gate.closedReason);
-  }).pipe(Effect.provide(HostDeployment.layer), Effect.provide(makeLayer(fakes)));
+  }).pipe(Effect.provide(HostDeployment.layer.pipe(Layer.provideMerge(makeLayer(fakes)))));
 });
 
 it.effect("waits for active runs, then gates new admissions while installing", () => {
@@ -364,7 +364,7 @@ it.effect("waits for active runs, then gates new admissions while installing", (
       .write({ events: [runEvent(idle, "starting", now, "run.created")] })
       .pipe(Effect.flip);
     assert.isTrue(RunAdmissionGate.isRunAdmissionClosed(rejected));
-  }).pipe(Effect.provide(HostDeployment.layer), Effect.provide(makeLayer(fakes)));
+  }).pipe(Effect.provide(HostDeployment.layer.pipe(Layer.provideMerge(makeLayer(fakes)))));
 });
 
 it.effect("treats a repeated request as the same deployment and rejects a changed identity", () => {
@@ -386,7 +386,7 @@ it.effect("treats a repeated request as the same deployment and rejects a change
       .request(makeRequest({ releaseId: "0.0.46-nick.23", version: "0.0.46-nick.23" }))
       .pipe(Effect.flip);
     assert.include(other.message, `Release ${RELEASE} is already deploying`);
-  }).pipe(Effect.provide(HostDeployment.layer), Effect.provide(makeLayer(fakes)));
+  }).pipe(Effect.provide(HostDeployment.layer.pipe(Layer.provideMerge(makeLayer(fakes)))));
 });
 
 it.effect("blocks when the feed offers another version or artifact", () => {
@@ -406,7 +406,7 @@ it.effect("blocks when the feed offers another version or artifact", () => {
     );
     assert.strictEqual(mismatch.step, "download");
     assert.strictEqual(fakes.commits, 0);
-  }).pipe(Effect.provide(HostDeployment.layer), Effect.provide(makeLayer(fakes)));
+  }).pipe(Effect.provide(HostDeployment.layer.pipe(Layer.provideMerge(makeLayer(fakes)))));
 });
 
 it.effect("blocks on a failed preflight with its reason", () => {
@@ -418,7 +418,7 @@ it.effect("blocks on a failed preflight with its reason", () => {
     assert.strictEqual(blocked.step, "preflight");
     assert.strictEqual(blocked.reason, fakes.preflightBlock);
     assert.strictEqual(fakes.runs, 0);
-  }).pipe(Effect.provide(HostDeployment.layer), Effect.provide(makeLayer(fakes)));
+  }).pipe(Effect.provide(HostDeployment.layer.pipe(Layer.provideMerge(makeLayer(fakes)))));
 });
 
 it.effect("holds the local host at admission until it is admitted", () => {
@@ -445,7 +445,7 @@ it.effect("holds the local host at admission until it is admitted", () => {
     const committing = yield* awaitRecord((record) => record.step === "commit");
     assert.strictEqual(committing.admission?.mode, "local-only");
     assert.strictEqual(committing.role, "local");
-  }).pipe(Effect.provide(HostDeployment.layer), Effect.provide(makeLayer(fakes, MACBOOK)));
+  }).pipe(Effect.provide(HostDeployment.layer.pipe(Layer.provideMerge(makeLayer(fakes, MACBOOK)))));
 });
 
 it.effect("cancelling while waiting reopens the gate and releases the updater", () => {
@@ -459,7 +459,7 @@ it.effect("cancelling while waiting reopens the gate and releases the updater", 
     assert.strictEqual(cancelled.status, "cancelled");
     assert.isUndefined(yield* gate.closedReason);
     assert.deepEqual(fakes.reservations, [RELEASE, undefined]);
-  }).pipe(Effect.provide(HostDeployment.layer), Effect.provide(makeLayer(fakes, MACBOOK)));
+  }).pipe(Effect.provide(HostDeployment.layer.pipe(Layer.provideMerge(makeLayer(fakes, MACBOOK)))));
 });
 
 it.effect("verifies a committed install after the restart, then records acceptance", () => {
@@ -542,5 +542,5 @@ it.effect("verifies at once when the host already runs the release", () => {
     const verified = yield* awaitRecord((record) => record.status === "verified");
     assert.strictEqual(verified.reason, "This host already runs this release.");
     assert.strictEqual(fakes.runs, 0);
-  }).pipe(Effect.provide(HostDeployment.layer), Effect.provide(makeLayer(fakes)));
+  }).pipe(Effect.provide(HostDeployment.layer.pipe(Layer.provideMerge(makeLayer(fakes)))));
 });
