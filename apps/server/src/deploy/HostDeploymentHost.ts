@@ -104,7 +104,7 @@ export function parseSigningIdentity(output: string): string | null {
     : `${authority} (${team})`;
 }
 
-export const make = Effect.gen(function* () {
+const make = Effect.gen(function* () {
   const config = yield* ServerConfig.ServerConfig;
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;

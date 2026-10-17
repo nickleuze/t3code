@@ -848,10 +848,7 @@ export const layerEnvironmentToolkit = toolkitRegistration(
 
 const layerProjectRegistration = toolkitRegistration(ProjectToolkit, ProjectHandlers.layer);
 
-export const layerDeploymentToolkit = toolkitRegistration(
-  DeploymentToolkit,
-  DeploymentHandlers.layer,
-);
+const layerDeploymentToolkit = toolkitRegistration(DeploymentToolkit, DeploymentHandlers.layer);
 
 const layerToolsRegistration = toolkitRegistration(ToolsToolkit, ToolsHandlers.layer).pipe(
   Layer.provide(ThreadCommandExecutor.layer),

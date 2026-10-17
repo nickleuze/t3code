@@ -53,7 +53,7 @@ function isInterruption(exit: Exit.Exit<unknown, unknown>): boolean {
 }
 
 /** A short build commit matches the release's full commit by prefix. */
-export function commitMatches(runtime: string | null, release: string): boolean {
+function commitMatches(runtime: string | null, release: string): boolean {
   return (
     runtime !== null &&
     runtime.length >= 7 &&
@@ -127,7 +127,7 @@ export const bootstrapSchema = Effect.gen(function* () {
   );
 });
 
-export const make = Effect.gen(function* () {
+const make = Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient;
   const gate = yield* RunAdmissionGate;
   const eventSink = yield* EventSinkV2;

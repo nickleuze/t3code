@@ -13,7 +13,7 @@ import {
 } from "@t3tools/client-runtime/state/hostDeployments";
 import * as Schema from "effect/Schema";
 
-export const LOCAL_DEPLOYMENT_LABEL = "This Mac";
+const LOCAL_DEPLOYMENT_LABEL = "This Mac";
 /** A finished release stays visible in the update popover for a day. */
 const RECENT_RELEASE_MS = 24 * 60 * 60 * 1000;
 const STOPPED: ReadonlySet<HostDeploymentStatus> = new Set(["blocked", "failed", "cancelled"]);

@@ -31,7 +31,7 @@ export function parseFeed(raw: string): { readonly owner: string; readonly repo:
 }
 
 /** The sha512 `latest-mac.yml` lists for `zip`, which electron-updater verifies. */
-export function parseLatestMacSha512(raw: string, zip: string): string | null {
+function parseLatestMacSha512(raw: string, zip: string): string | null {
   const lines = raw.split("\n").map((line) => line.trim());
   const entry = lines.findIndex((line) => line === `- url: ${zip}` || line === `url: ${zip}`);
   if (entry === -1) return null;

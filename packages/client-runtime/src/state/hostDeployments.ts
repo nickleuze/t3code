@@ -42,7 +42,7 @@ export function hostDeploymentReached(record: HostDeployment, until: HostDeploym
 }
 
 /** A remote counts as updated once its install is verified on the approved release. */
-export function remoteDeploymentResult(record: HostDeployment): MachineUpdateResult {
+function remoteDeploymentResult(record: HostDeployment): MachineUpdateResult {
   return record.status === "verified" || record.status === "accepted"
     ? { status: "succeeded", targetVersion: record.request.version }
     : {

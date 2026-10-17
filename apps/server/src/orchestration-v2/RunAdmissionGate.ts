@@ -76,7 +76,7 @@ export class RunAdmissionGate extends Context.Service<RunAdmissionGate, RunAdmis
   "t3/orchestration-v2/RunAdmissionGate",
 ) {}
 
-export const make = Effect.gen(function* () {
+const make = Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient;
   const closed = yield* Ref.make<string | undefined>(undefined);
 
