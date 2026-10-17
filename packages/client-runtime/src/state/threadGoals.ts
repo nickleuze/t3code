@@ -77,7 +77,7 @@ export function parseComposerGoalCommand(
  */
 export function goalDraftRequestMessage(objective: string | null): string {
   const instruction =
-    "Draft it with the t3_goal_propose tool, inferring the finish line, background and any check command from our conversation and the workspace.";
+    "Draft it with the t3_goal_propose tool, inferring the finish line and background from our conversation and the workspace.";
   return objective === null
     ? `Make the current task a T3 goal. ${instruction}`
     : `Make this a T3 goal: ${objective}\n\n${instruction}`;
@@ -203,32 +203,6 @@ export const GOAL_ITERATION_OUTCOME_LABELS: Record<OrchestrationV2GoalIterationO
   usage_limited: "Usage limit",
   timed_out: "Out of time",
 };
-
-/** Token usage of a full goal, marking estimates and missing reports. */
-export function formatGoalUsage(
-  goal: Pick<OrchestrationV2ThreadGoal, "usageAccounting" | "tokensUsed" | "uncachedTokensUsed">,
-): string {
-  if (goal.usageAccounting === "unavailable") return "token usage not reported";
-  const tokens = formatGoalTokensWithUncached(goal.tokensUsed, goal.uncachedTokensUsed);
-  return `${goal.usageAccounting === "estimated" ? "~" : ""}${tokens}`;
-}
-
-/**
- * The burn guard's limit and, once it has sampled provider usage, its latest
- * reading: "burn guard 20% / 60m, now +3 (highest window 41%)".
- */
-export function formatGoalBurnGuard(
-  goal: Pick<OrchestrationV2ThreadGoal, "burnGuard" | "usageSample">,
-): string {
-  if (goal.burnGuard == null) return "no burn guard";
-  const limit = `burn guard ${goal.burnGuard.maxPercentPoints}% / ${goal.burnGuard.windowMins}m`;
-  const sample = goal.usageSample;
-  if (sample == null) return limit;
-  const reading = `${limit}, now +${Math.round(sample.risePoints)}`;
-  if (sample.windows.length === 0) return reading;
-  const highest = Math.max(...sample.windows.map((window) => window.usedPercent));
-  return `${reading} (highest window ${Math.round(highest)}%)`;
-}
 
 /** The shell-sized view of a full goal, so both render the same status text. */
 export function goalSummaryFromGoal(

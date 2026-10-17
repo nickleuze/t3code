@@ -136,7 +136,6 @@ it("edits a paused goal's brief through thread.goal.update and offers no edit wh
           doneWhen: "CI passes",
           background: null,
           permissions: "Local edits",
-          checkCommand: null,
           iterationTimeoutMins: 120,
         },
       },
@@ -152,7 +151,6 @@ it("edits a paused goal's brief through thread.goal.update and offers no edit wh
       doneWhen: "CI passes",
       background: null,
       permissions: "Local edits, merge after CI",
-      checkCommand: "ignored",
       iterationTimeoutMins: 45,
     }),
   );

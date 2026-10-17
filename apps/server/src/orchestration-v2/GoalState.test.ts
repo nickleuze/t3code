@@ -11,7 +11,6 @@ import { describe, expect, it } from "vite-plus/test";
 import {
   applyGoalCommand,
   applyGoalProposalCommand,
-  DEFAULT_GOAL_BURN_GUARD,
   type GoalCommandInput,
   goalSummary,
   MAX_GOAL_NOTES_TOTAL_CHARS,
@@ -49,14 +48,11 @@ function rejection(thread: GoalThread, command: GoalCommandInput): string {
   return result.reason;
 }
 
-function newGoal(overrides: { checkCommand?: string | null; noProgressLimit?: number } = {}) {
+function newGoal() {
   return apply(rootThread(), {
     type: "set",
     commandId: GOAL_ID,
     objective: "Make the test suite pass",
-    checkCommand: overrides.checkCommand ?? null,
-    burnGuard: undefined,
-    noProgressLimit: overrides.noProgressLimit,
     modelSelection: {
       instanceId: ProviderInstanceId.make("codex"),
       model: "gpt-5.5",
@@ -108,13 +104,12 @@ const finished = (
   type: "iteration_finished",
   childOutcome,
   tokens: 1_000,
-  accounting: "exact",
   workspaceChanged,
   resumeAt: childOutcome === "usage_limited" ? "2026-10-04T17:00:00.000Z" : null,
 });
 
 const control = (goal: OrchestrationV2ThreadGoal, action: "pause" | "resume" | "stop" | "clear") =>
-  apply(rootThread(goal), { type: "control", goalId: GOAL_ID, action, burnGuard: undefined });
+  apply(rootThread(goal), { type: "control", goalId: GOAL_ID, action });
 
 const message = (goal: OrchestrationV2ThreadGoal, text: string) =>
   apply(rootThread(goal), { type: "message", goalId: GOAL_ID, text })!;
@@ -125,8 +120,6 @@ describe("goal state", () => {
     expect(goal).toMatchObject({
       status: "active",
       iteration: 0,
-      noProgressLimit: 3,
-      burnGuard: DEFAULT_GOAL_BURN_GUARD,
       current: null,
     });
     expect(
@@ -134,9 +127,6 @@ describe("goal state", () => {
         type: "set",
         commandId: CommandId.make("command:other"),
         objective: "Something else",
-        checkCommand: null,
-        burnGuard: null,
-        noProgressLimit: undefined,
         modelSelection: goal.modelSelection,
         runtimeMode: goal.runtimeMode,
         doneWhen: null,
@@ -154,9 +144,6 @@ describe("goal state", () => {
         type: "set",
         commandId: CommandId.make("command:next"),
         objective: "Next goal",
-        checkCommand: null,
-        burnGuard: null,
-        noProgressLimit: undefined,
         modelSelection: stopping.modelSelection,
         runtimeMode: stopping.runtimeMode,
         doneWhen: null,
@@ -181,9 +168,6 @@ describe("goal state", () => {
         type: "set",
         commandId: GOAL_ID,
         objective: "Nested",
-        checkCommand: null,
-        burnGuard: null,
-        noProgressLimit: undefined,
         modelSelection: newGoal().modelSelection,
         runtimeMode: "full-access",
         doneWhen: null,
@@ -197,7 +181,7 @@ describe("goal state", () => {
   it("starts iterations in order", () => {
     const goal = started(newGoal());
     expect(goal.iteration).toBe(1);
-    expect(goal.current).toMatchObject({ iteration: 1, childThreadId: CHILD, phase: "running" });
+    expect(goal.current).toMatchObject({ iteration: 1, childThreadId: CHILD });
     expect(
       rejection(rootThread(goal), {
         type: "iteration.start",
@@ -214,7 +198,7 @@ describe("goal state", () => {
       report(started(newGoal()), { type: "note", text: "Fixed parser" }),
       finished(),
     );
-    expect(goal).toMatchObject({ status: "active", current: null, consecutiveNoProgress: 0 });
+    expect(goal).toMatchObject({ status: "active", current: null });
     expect(goal.history).toEqual([
       expect.objectContaining({ iteration: 1, outcome: "continued", tokens: 1_000 }),
     ]);
@@ -222,21 +206,7 @@ describe("goal state", () => {
     expect(goal.tokensUsed).toBe(1_000);
   });
 
-  it("pauses after consecutive iterations without notes or workspace changes", () => {
-    let goal = newGoal({ noProgressLimit: 2 });
-    goal = advance(started(goal), finished("completed", false));
-    expect(goal).toMatchObject({ status: "active", consecutiveNoProgress: 1 });
-    goal = advance(started(goal), finished("completed", false));
-    expect(goal).toMatchObject({ status: "paused", statusReason: "no_progress" });
-  });
-
-  it("counts a workspace change as progress", () => {
-    let goal = newGoal({ noProgressLimit: 1 });
-    goal = advance(started(goal), finished("completed", true));
-    expect(goal).toMatchObject({ status: "active", consecutiveNoProgress: 0 });
-  });
-
-  it("completes on a claim when there is no check command", () => {
+  it("completes on a claim", () => {
     let goal = report(started(newGoal()), {
       type: "claim",
       status: "complete",
@@ -248,47 +218,6 @@ describe("goal state", () => {
       completedSummary: "All green",
       current: null,
     });
-  });
-
-  it("runs the check before accepting a claim and continues when it fails", () => {
-    let goal = report(started(newGoal({ checkCommand: "pnpm test" })), {
-      type: "claim",
-      status: "complete",
-      summary: "Done",
-    });
-    goal = advance(goal, finished("completed", true));
-    expect(goal.current).toMatchObject({ phase: "checking", finished: { tokens: 1_000 } });
-    expect(goal.status).toBe("active");
-
-    const failed = advance(goal, {
-      type: "check_finished",
-      result: {
-        iteration: 1,
-        command: "pnpm test",
-        exitCode: 1,
-        timedOut: false,
-        passed: false,
-        outputTail: "1 failing",
-        at: NOW,
-      },
-    });
-    expect(failed).toMatchObject({ status: "active", current: null });
-    expect(failed.lastCheck).toMatchObject({ passed: false, outputTail: "1 failing" });
-    expect(failed.history.at(-1)?.outcome).toBe("check_failed");
-
-    const passed = advance(goal, {
-      type: "check_finished",
-      result: {
-        iteration: 1,
-        command: "pnpm test",
-        exitCode: 0,
-        timedOut: false,
-        passed: true,
-        outputTail: "",
-        at: NOW,
-      },
-    });
-    expect(passed).toMatchObject({ status: "complete", completedSummary: "Done" });
   });
 
   it("marks the goal blocked when the agent reports it is stuck", () => {
@@ -358,17 +287,16 @@ describe("goal state", () => {
         type: "control",
         goalId: GOAL_ID,
         action: "clear",
-        burnGuard: undefined,
       }),
     ).toMatch(/Wait for the running iteration/);
     expect(control(advance(running, finished("interrupted")), "clear")).toBeNull();
   });
 
-  it("pauses at the safety cap and grants more on resume", () => {
-    let goal = { ...newGoal(), safetyCap: 1 };
-    goal = advance(report(started(goal), { type: "note", text: "progress" }), finished());
-    expect(goal).toMatchObject({ status: "paused", statusReason: "safety_cap" });
-    expect(control(goal, "resume")!.safetyCap).toBeGreaterThan(1);
+  it("pauses every 100 iterations and runs another 100 after a resume", () => {
+    let goal = advance(started({ ...newGoal(), iteration: 99 }), finished());
+    expect(goal).toMatchObject({ iteration: 100, status: "paused", statusReason: "safety_cap" });
+    goal = advance(started(control(goal, "resume")!), finished());
+    expect(goal).toMatchObject({ iteration: 101, status: "active" });
   });
 
   it("keeps the newest notes within the size cap", () => {
@@ -460,16 +388,8 @@ describe("goal state", () => {
     });
     expect(timing.current).toMatchObject({ wrapUpSentAt: NOW, timedOutAt: NOW });
     const after = advance(timing, finished("interrupted", true));
-    expect(after).toMatchObject({ status: "active", current: null, consecutiveNoProgress: 0 });
+    expect(after).toMatchObject({ status: "active", current: null });
     expect(after.history.at(-1)?.outcome).toBe("timed_out");
-  });
-
-  it("pauses when timeouts keep coming without progress", () => {
-    let goal = newGoal({ noProgressLimit: 2 });
-    for (let index = 0; index < 2; index += 1) {
-      goal = advance(advance(started(goal), { type: "timed_out" }), finished("interrupted", false));
-    }
-    expect(goal).toMatchObject({ status: "paused", statusReason: "no_progress" });
   });
 
   it("records the handoff file from a note", () => {
@@ -538,29 +458,11 @@ describe("goal state", () => {
     expect(goalSummary(legacyAfter)).not.toHaveProperty("uncachedTokensUsed");
   });
 
-  it("stores the burn guard's reading without counting it as a goal transition", () => {
-    const goal = newGoal();
-    const sample = {
-      at: "2026-10-04T12:05:00.000Z",
-      windows: [{ id: "session", usedPercent: 12 }],
-      risePoints: 3,
-    };
-    const sampled = applyGoalCommand(
-      rootThread(goal),
-      { type: "advance", goalId: GOAL_ID, iteration: 0, step: { type: "usage_sampled", sample } },
-      "2026-10-04T12:05:00.000Z",
-    );
-    expect(sampled).toMatchObject({ ok: true, goal: { usageSample: sample, updatedAt: NOW } });
-  });
-
   it("raises a time limit below the floor", () => {
     const goal = apply(rootThread(), {
       type: "set",
       commandId: GOAL_ID,
       objective: "Make the test suite pass",
-      checkCommand: null,
-      burnGuard: undefined,
-      noProgressLimit: undefined,
       modelSelection: newGoal().modelSelection,
       runtimeMode: "full-access",
       doneWhen: null,
@@ -579,7 +481,6 @@ describe("applyGoalProposalCommand", () => {
     objective: "Ship the migration",
     doneWhen: "Every package uses the new API",
     background: null,
-    checkCommand: null,
     permissions: null,
     iterationTimeoutMins: null,
     reason: null,

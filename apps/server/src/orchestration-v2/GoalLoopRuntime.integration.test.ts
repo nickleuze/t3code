@@ -338,7 +338,6 @@ it.effect.each(outcomes)(
                 commandId: goalId,
                 threadId,
                 objective: "Exercise fake provider lifecycle",
-                burnGuard: null,
               });
             } else {
               const historical = (yield* orchestrator.getThreadRecords(threadId, [])).thread.goal!;

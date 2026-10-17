@@ -5,28 +5,15 @@ import { buildGoalIterationPrompt } from "./GoalPrompt.ts";
 describe("iteration prompt", () => {
   const goal = {
     objective: "Ship the importer",
-    checkCommand: "pnpm test",
     progressNotes: [{ iteration: 1, text: "Parser done; writer next", at: "" }],
-    lastCheck: {
-      iteration: 1,
-      command: "pnpm test",
-      exitCode: 1,
-      timedOut: false,
-      passed: false,
-      outputTail: "writer.test.ts failed",
-      at: "",
-    },
   } as unknown as OrchestrationV2ThreadGoal;
 
-  it("carries the objective, notes, failed check, and completion tools", () => {
+  it("carries the objective, notes, and completion tools", () => {
     const prompt = buildGoalIterationPrompt(goal, 2);
     expect(prompt).toContain("iteration 2");
     expect(prompt).toContain("Ship the importer");
     expect(prompt).toContain("[iteration 1] Parser done; writer next");
-    expect(prompt).toContain("failed with exit code 1");
-    expect(prompt).toContain("writer.test.ts failed");
     expect(prompt).toContain("t3_goal_update");
-    expect(prompt).toContain("`pnpm test`, and the goal only completes if it exits 0");
   });
 
   it("carries the brief, permissions, the user's reply, and the handoff file", () => {
@@ -79,13 +66,5 @@ describe("iteration prompt", () => {
 
   it("asks the first iteration to create a handoff file", () => {
     expect(buildGoalIterationPrompt(goal, 1)).toContain("There is no handoff file yet");
-  });
-
-  it("omits a passing check", () => {
-    const prompt = buildGoalIterationPrompt(
-      { ...goal, lastCheck: { ...goal.lastCheck!, passed: true } },
-      2,
-    );
-    expect(prompt).not.toContain("Last completion check");
   });
 });
