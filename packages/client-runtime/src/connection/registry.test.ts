@@ -164,6 +164,8 @@ const makeHarness = Effect.fn("TestEnvironmentRegistry.makeHarness")(function* (
       target: ConnectionTarget,
     ) => Effect.Effect<ConnectionBlockedError | undefined>;
     readonly initialDisabled?: ReadonlyArray<EnvironmentId>;
+    /** Saved connections cannot be read, as when the OS can no longer decrypt them. */
+    readonly unreadableCatalog?: boolean;
     /** Direct addresses the connected server reports. */
     readonly directEndpoints?: ServerConfig["directEndpoints"];
   },
@@ -203,9 +205,15 @@ const makeHarness = Effect.fn("TestEnvironmentRegistry.makeHarness")(function* (
   const storedDisabled = yield* Ref.make<ReadonlySet<EnvironmentId>>(
     new Set(options?.initialDisabled ?? []),
   );
+  const unreadable = (operation: "list-targets" | "list-disabled-targets") =>
+    new Persistence.ConnectionPersistenceError({ operation, message: "cannot decrypt" });
   const targetStore = Persistence.ConnectionTargetStore.of({
-    list: Ref.get(storedTargets),
-    listDisabled: Ref.get(storedDisabled).pipe(Effect.map((ids) => [...ids])),
+    list: options?.unreadableCatalog
+      ? Effect.fail(unreadable("list-targets"))
+      : Ref.get(storedTargets),
+    listDisabled: options?.unreadableCatalog
+      ? Effect.fail(unreadable("list-disabled-targets"))
+      : Ref.get(storedDisabled).pipe(Effect.map((ids) => [...ids])),
   });
   const registrationStore = Persistence.ConnectionRegistrationStore.of({
     register: (registration, routes) =>
@@ -1521,6 +1529,25 @@ describe("EnvironmentRegistry", () => {
         expect(
           (yield* SubscriptionRef.get(registry.entries)).get(TARGET.environmentId)?.target,
         ).toEqual(TARGET);
+      }).pipe(Effect.provide(harness.layer));
+    }),
+  );
+
+  it.effect("starts the local environment when saved connections cannot be read", () =>
+    Effect.gen(function* () {
+      const harness = yield* makeHarness([], [], [], { unreadableCatalog: true });
+
+      yield* Effect.gen(function* () {
+        const registry = yield* EnvironmentRegistry.EnvironmentRegistry;
+        yield* registry.registerPlatform(new PrimaryConnectionRegistration({ target: TARGET }));
+        yield* awaitConnectionState(
+          registry,
+          TARGET.environmentId,
+          (state) => state.phase === "connected",
+        );
+        expect([...(yield* SubscriptionRef.get(registry.entries)).keys()]).toEqual([
+          TARGET.environmentId,
+        ]);
       }).pipe(Effect.provide(harness.layer));
     }),
   );
