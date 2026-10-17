@@ -351,6 +351,7 @@ const stopEarlierBackgroundWork = ({
                   type: "thread.stop",
                   commandId: CommandId.make("stop-stalled-run"),
                   threadId,
+                  reason: "Goal loop stopped this iteration.",
                 },
           );
           yield* worker.drain();
@@ -381,10 +382,12 @@ const stopEarlierBackgroundWork = ({
             after.turnItems.find((candidate) => candidate.type === "assistant_message")?.status,
             interrupted ? "interrupted" : "running",
           );
-          assert.equal(
-            after.turnItems.filter((candidate) => candidate.type === "run_interrupt_result").length,
-            interrupted ? 1 : 0,
+          const results = after.turnItems.filter(
+            (candidate) => candidate.type === "run_interrupt_result",
           );
+          assert.equal(results.length, interrupted ? 1 : 0);
+          // The divider names whoever stopped the run instead of assuming the user.
+          if (interrupted) assert.equal(results[0]?.message, "Goal loop stopped this iteration.");
           assert.isEmpty(after.runs.filter((candidate) => candidate.status === "waiting"));
           return;
         }

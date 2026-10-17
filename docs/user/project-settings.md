@@ -1,5 +1,30 @@
 # Settings and project overrides
 
+## Creating a Work Model Project
+
+On web and desktop, choose **New Project** or open an Inbox Idea and choose
+**Create Project from Idea**. Pick the machine, an existing Area, a name and a
+purpose. You can add a current Goal. **Review** shows the Home path and Ticket
+key before **Create Project** creates it through that machine's `project-init`.
+It creates the standard README, STATUS, AGENTS and TOOLS files, a `.gitignore`
+and a Git repository, then registers the Home in T3.
+
+If the Home already exists, **Adopt existing Home** preserves its files,
+purpose, Goal, identity and existing Ticket key. If registration fails after
+creation, keep the same destination and review it again to adopt and resume.
+
+Creating from an Idea closes that Idea as the Project's origin and keeps its
+history. The success screen offers **Create first Ticket** as a separate step.
+Starting work is an explicit action on that Ticket.
+
+Native mobile's **New project** form also supports Area selection, Home review
+and adoption. Create its first Ticket in the web or desktop Ticket board.
+Machines without Work Model Areas keep T3's standard creation flow. When setup
+discovery fails on an older server, **Use basic creation** explicitly chooses
+its standard T3 projects folder instead.
+
+## Settings scope
+
 On web and desktop, the "Applying settings for …" sentence at the top of Settings pages picks
 the project and environment a change applies to. Pages that only hold device preferences, such as
 Appearance, don't show it. They start at **All projects** and **All environments**

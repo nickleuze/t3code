@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Fork-only: runs fork/update.sh on every machine, remote hosts first and this
 # Mac last (updating this Mac restarts the app this may be running from).
-# Each machine waits for its own running turns before it restarts.
+# Each machine waits for its own running turns before it restarts; pass
+# --stage-only to download and verify everywhere without installing.
 #
 # Usage: fork/update-all.sh [update.sh options...]
 # Hosts come from T3_FORK_HOSTS (space-separated ssh targets).
@@ -19,7 +20,7 @@ requested_commit=""
 options=("$@")
 while [ $# -gt 0 ]; do
   case "$1" in
-    --check|--force) ;;
+    --check|--stage-only|--force) ;;
     --wait-mins) [ $# -ge 2 ] && [[ "$2" =~ ^[0-9]+$ ]] || exit 64; shift ;;
     --version) [ $# -ge 2 ] || exit 64; requested_version="$2"; shift ;;
     --commit) [ $# -ge 2 ] || exit 64; requested_commit="$2"; shift ;;

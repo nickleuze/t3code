@@ -1,9 +1,10 @@
+import { readmeFrontmatter } from "../project/ProjectHome.ts";
 /**
  * Triage: decides what a new Idea becomes as soon as it is created.
  *
- * Reacts only to `created` changes for key-less inbox tickets created on this
- * machine, so its own edits (and the other Mac's synced Ideas) never retrigger
- * it. A deterministic pre-pass files Ideas that name exactly one known Project
+ * Classifies only `created` changes for key-less inbox tickets created on this
+ * machine; later changes repair an omitted decision without reclassifying.
+ * A deterministic pre-pass files Ideas that name exactly one known Project
  * or Area; anything else goes to the pluggable classifier. Confident matches
  * get a project key, status ready and a decision entry. New Projects and
  * unsure cases stay in the Inbox with a "Needs Nick" question entry. Agents
@@ -12,13 +13,12 @@
  *
  * @module TicketTriage
  */
-import { CommandId, type ThreadId, type TicketId } from "@t3tools/contracts";
+import { CommandId, type ProjectId, type ThreadId, type TicketId } from "@t3tools/contracts";
 import { makeDrainableWorker } from "@t3tools/shared/DrainableWorker";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
-import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 import * as PubSub from "effect/PubSub";
 import * as ManagedProjectFolders from "../project/ManagedProjectFolders.ts";
@@ -106,23 +106,6 @@ export function findDuplicates(
   });
 }
 
-/** Reads `area` and `goal` from a Project Home README's frontmatter. */
-export function readmeFrontmatter(readme: string): { area?: string; goal?: string } {
-  const match = /^---\r?\n([\s\S]*?)\r?\n---/.exec(readme);
-  if (!match) return {};
-  const result: { area?: string; goal?: string } = {};
-  for (const line of match[1]!.split(/\r?\n/)) {
-    const field = /^(area|goal):\s*(.*)$/.exec(line);
-    if (!field) continue;
-    const value = field[2]!
-      .replace(/\s+#.*$/, "")
-      .trim()
-      .replace(/^(["'])(.*)\1$/, "$2");
-    if (value) result[field[1] as "area" | "goal"] = value;
-  }
-  return result;
-}
-
 const ref = (ticket: TriageTicketRef) => ticket.readableId ?? ticket.id;
 const clause = (text: string) => text.trim().replace(/[.\s]+$/, "");
 
@@ -138,19 +121,104 @@ export const make = Effect.gen(function* () {
 
   const candidates = Effect.gen(function* () {
     const { projects: known } = yield* tickets.projectsList;
-    return yield* Effect.forEach(known, (project) =>
-      Effect.gen(function* () {
-        const row =
-          project.projectId === null
-            ? Option.none()
-            : yield* projects.get(project.projectId).pipe(Effect.orElseSucceed(Option.none));
-        const readme = Option.isSome(row)
-          ? yield* fs
-              .readFileString(path.join(row.value.workspaceRoot, "README.md"))
-              .pipe(Effect.orElseSucceed(() => ""))
-          : "";
-        return { key: project.key, name: project.displayName, ...readmeFrontmatter(readme) };
-      }),
+    const registered = yield* projects.list();
+    const found = new Map<string, TriageCandidate>();
+    const homes = new Set<string>();
+    const roots = new Set<string>();
+    const metadata = (file: string) =>
+      fs.readFileString(file).pipe(
+        Effect.map(readmeFrontmatter),
+        Effect.orElseSucceed(() => ({}) as ReturnType<typeof readmeFrontmatter>),
+      );
+    const addHome = Effect.fnUntraced(function* (
+      home: string,
+      projectId: ProjectId | null,
+      area?: string,
+    ) {
+      if (homes.has(home)) return;
+      homes.add(home);
+      const meta = yield* metadata(path.join(home, "README.md"));
+      if (
+        !meta.id ||
+        !/^[a-z0-9][a-z0-9-]*$/.test(meta.id) ||
+        !meta.area ||
+        meta.area_repo === "true" ||
+        (area && meta.area !== area) ||
+        !(yield* fs.exists(path.join(home, ".git")))
+      )
+        return;
+      const mapped = known.find((p) => projectId !== null && p.projectId === projectId);
+      const key = mapped?.key ?? meta.id;
+      const existing = known.find((p) => p.key === key);
+      if (found.has(key) || (existing?.projectId && existing.projectId !== projectId)) return;
+      found.set(key, {
+        key,
+        name: meta.id,
+        area: meta.area,
+        ...(meta.goal ? { goal: meta.goal } : {}),
+      });
+      if (!existing || (projectId !== null && existing.projectId === null))
+        yield* tickets.projectsMap({ key, projectId, displayName: meta.id });
+      const parent = path.dirname(home);
+      if ((yield* metadata(path.join(parent, "AREA.md"))).area === meta.area)
+        roots.add(path.dirname(parent));
+    });
+    for (const project of registered) yield* addHome(project.workspaceRoot, project.projectId);
+    // Bounded discovery: Area folders and their immediate Homes, including Homes
+    // Nick has not registered in T3. Register Ticket keys, never create Projects.
+    for (const root of roots) {
+      for (const name of yield* fs.readDirectory(root).pipe(Effect.orElseSucceed(() => []))) {
+        if (name.startsWith(".") || name === "_archive") continue;
+        const folder = path.join(root, name);
+        const meta = yield* metadata(path.join(folder, "AREA.md"));
+        if (meta.area !== name) continue;
+        if (!found.has(name)) {
+          found.set(name, { key: name, name });
+          if (!known.some((p) => p.key === name))
+            yield* tickets.projectsMap({ key: name, projectId: null });
+        }
+        for (const child of yield* fs.readDirectory(folder).pipe(Effect.orElseSucceed(() => []))) {
+          if (child.startsWith(".")) continue;
+          const home = path.join(folder, child);
+          yield* addHome(
+            home,
+            registered.find((p) => p.workspaceRoot === home)?.projectId ?? null,
+            name,
+          );
+        }
+      }
+    }
+    return [...found.values()].sort((a, b) => a.key.localeCompare(b.key));
+  });
+
+  const completeAgentMatch = Effect.fnUntraced(function* (id: TicketId) {
+    if (!(yield* settings.getSettings).ticketTriage) return;
+    const state = yield* tickets.get(id).pipe(Effect.orElseSucceed(() => null));
+    if (!state) return;
+    const { ticket } = state;
+    if (!ticket.projectKey || ticket.status !== "ready" || ticket.deletedAt !== null) return;
+    const { events } = yield* tickets.timeline({ id });
+    const created = events.find((e) => e.type === "created");
+    if (created?.by.machine !== machine || created.projectKey !== null) return;
+    const assignment = events.findLast(
+      (e) => e.type === "fields" && e.projectKey === ticket.projectKey,
+    );
+    if (!assignment || assignment.by.actor !== "agent" || !assignment.by.thread) return;
+    if (
+      events.some(
+        (e) => e.type === "entry" && e.kind === "decision" && e.by.thread === assignment.by.thread,
+      )
+    )
+      return;
+    yield* tickets.entry(
+      {
+        id,
+        kind: "decision",
+        clientRequestId: `triage-agent-match:${id}`,
+        text: `Triage: filed under ${ticket.projectName ?? ticket.projectKey} (${ticket.projectKey}) by the agent classifier.`,
+      },
+      by,
+      "triage",
     );
   });
 
@@ -212,11 +280,21 @@ export const make = Effect.gen(function* () {
     }).pipe(Effect.catchCause((cause) => Effect.logWarning("tickets.triage.failed", { cause })));
 
   const worker = yield* makeDrainableWorker(triage);
-  /** Only `created` ids are triaged, so triage's own writes never loop. */
+  /** Classify only new Ideas; later changes repair an omitted agent decision. */
   const onChange = (change: Tickets.TicketChange) =>
-    Effect.forEach(change.created, worker.enqueue, { discard: true });
+    Effect.gen(function* () {
+      yield* Effect.forEach(change.created, worker.enqueue, { discard: true });
+      yield* Effect.forEach(
+        change.ids.filter((id) => !change.created.includes(id)),
+        completeAgentMatch,
+        { discard: true },
+      );
+    });
   const start = Effect.gen(function* () {
     const subscription = yield* tickets.subscribeChanges;
+    yield* Effect.forEach((yield* tickets.list()).tickets, (t) => completeAgentMatch(t.id), {
+      discard: true,
+    });
     yield* PubSub.take(subscription).pipe(
       Effect.flatMap(onChange),
       Effect.forever,
@@ -265,9 +343,9 @@ export function triagePrompt(input: TriageInput): string {
     "",
     "Rules:",
     "1. Never create a Project or an Area. Only use a key from the list above.",
-    `2. If you are confident the Idea belongs to exactly one listed key and is not a duplicate, call t3_ticket_update with id ${input.idea.id}, that projectKey and status "ready", then t3_ticket_entry kind "decision" saying why.`,
+    `2. If you are confident the Idea belongs to exactly one listed key and is not a duplicate, first call t3_ticket_entry kind "decision" saying why, then t3_ticket_update with id ${input.idea.id}, that projectKey and status "ready".`,
     `3. Otherwise (it looks like a new Project, you are unsure, or it duplicates an open ticket) leave it in the inbox and call t3_ticket_entry kind "question" with text starting "Needs Nick:" and your best guess, reason and any duplicate ticket ID.`,
-    "4. Stop after the entry.",
+    "4. Stop after recording the verdict; do not do the Ticket's work.",
   ].join("\n");
 }
 

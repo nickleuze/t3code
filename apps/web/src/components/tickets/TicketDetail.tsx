@@ -1,3 +1,4 @@
+import { openWorkModelProject } from "../../workModelProject";
 import { useTicketWriteAllowed } from "../../state/tickets";
 import { ProjectId, type TicketStatus } from "@t3tools/contracts";
 import type { EnvironmentTicket } from "@t3tools/client-runtime/state/ticket-board";
@@ -123,7 +124,27 @@ export function TicketDetail({
               {activity}
             </Badge>
           </div>
-          <TicketStartWork entry={entry} />
+          {ticket.status === "inbox" && ticket.deletedAt === null ? (
+            <Button
+              variant="outline"
+              disabled={
+                !canWrite || busy || Object.values(edited).some(Boolean) || pickedStatus !== null
+              }
+              title="Save any edits before creating a Project from this Idea"
+              onClick={() => {
+                onClose();
+                openWorkModelProject({
+                  environmentId,
+                  sourceIdeaId: ticket.id,
+                  name: ticket.title,
+                  purpose: ticket.body || ticket.title,
+                });
+              }}
+            >
+              Create Project from Idea
+            </Button>
+          ) : null}
+          {activity !== "Project origin" ? <TicketStartWork entry={entry} /> : null}
         </SheetHeader>
         <div className="min-h-0 flex-1 overflow-auto px-6 py-3">
           <div className="flex flex-col gap-4">

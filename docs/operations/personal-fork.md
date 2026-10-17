@@ -188,3 +188,6 @@ introduces it, install through the earlier Update all path; verify T3 Connect
 client configuration, signing identity, the updater feed (`app-update.yml`
 points at the fork) and each host's reconnection by hand there, and wait for
 active turns to finish before restarting either host.
+The recovery updater (`fork/update*.sh`) moves removals to the Trash, keeps
+every app backup and stops instead of force-quitting when a normal Quit fails;
+`--stage-only` lets signing and feed checks run on the staged app first.

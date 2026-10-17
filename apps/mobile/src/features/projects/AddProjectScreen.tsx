@@ -47,8 +47,11 @@ import {
   type EnvironmentId,
   type EnvironmentMachineKind,
   ProjectId,
+  type WorkModelProjectPreview,
+  type ProjectCreateNewResult,
   resolveEnvironmentMachineKind,
 } from "@t3tools/contracts";
+import { newProjectFolderName } from "@t3tools/shared/path";
 import { CommonActions, StackActions, useNavigation } from "@react-navigation/native";
 import { SymbolView } from "../../components/AppSymbol";
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
@@ -992,6 +995,20 @@ export function AddProjectNewScreen(props: { readonly environmentId?: string | s
   );
   const environment = resolveAddProjectEnvironment(environmentOptions, selectedEnvironmentId);
   const createNew = useAtomCommand(projectEnvironment.createNew, { reportFailure: false });
+  const reviewHome = useAtomCommand(projectEnvironment.workModelPreview, { reportFailure: false });
+  const optionsState = useEnvironmentQuery(
+    environment === null
+      ? null
+      : projectEnvironment.workModelOptions({
+          environmentId: environment.environmentId,
+          input: {},
+        }),
+  );
+  const inArea = (optionsState.data?.areas.length ?? 0) > 0;
+  const canCreate = useEnvironmentScope(
+    environment?.environmentId ?? null,
+    AuthOrchestrationOperateScope,
+  );
   const publishRepository = useAtomCommand(sourceControlEnvironment.publishRepository, {
     reportFailure: false,
   });
@@ -1005,10 +1022,29 @@ export function AddProjectNewScreen(props: { readonly environmentId?: string | s
   );
   const githubTarget = getNewProjectGitHubTarget(discoveryState.data);
   const [name, setName] = useState("");
+  const [area, setArea] = useState("");
+  const [slug, setSlug] = useState<string | null>(null);
+  const [purpose, setPurpose] = useState("");
+  const [goal, setGoal] = useState("");
+  const [preview, setPreview] = useState<WorkModelProjectPreview | null>(null);
+  const [created, setCreated] = useState<ProjectCreateNewResult | null>(null);
+  const [basicCreation, setBasicCreation] = useState(false);
   const [publishesToGitHub, setPublishesToGitHub] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const trimmedName = name.trim();
+  const details = {
+    area,
+    slug: slug ?? newProjectFolderName(trimmedName),
+    purpose: purpose.trim(),
+    ...(goal.trim() ? { goal: goal.trim() } : {}),
+    adoptExisting: preview?.existingHome ?? false,
+  };
+  const valid =
+    canCreate &&
+    trimmedName.length > 0 &&
+    (optionsState.data !== null || basicCreation) &&
+    (!inArea || (!!area && !!purpose.trim()));
   const pathPreview =
     environment?.newProjectsRoot != null
       ? getNewProjectPathPreview(environment.newProjectsRoot, trimmedName)
@@ -1047,7 +1083,12 @@ export function AddProjectNewScreen(props: { readonly environmentId?: string | s
                 />
               ) : null
             }
-            onPress={() => setSelectedEnvironmentId(option.environmentId)}
+            onPress={() => {
+              setSelectedEnvironmentId(option.environmentId);
+              setArea("");
+              setPreview(null);
+              setBasicCreation(false);
+            }}
           />
         );
       })}
@@ -1057,17 +1098,27 @@ export function AddProjectNewScreen(props: { readonly environmentId?: string | s
   // State lags a render behind, so a double tap could start a second create.
   const submittingRef = useRef(false);
   const submit = async () => {
-    if (!environment || trimmedName.length === 0 || submittingRef.current) return;
+    if (!environment || !valid || submittingRef.current) return;
     submittingRef.current = true;
     setError(null);
     setIsSubmitting(true);
     try {
+      if (inArea && preview === null) {
+        const reviewed = await reviewHome({
+          environmentId: environment.environmentId,
+          input: { name: trimmedName, ...details },
+        });
+        if (AsyncResult.isFailure(reviewed)) setError(errorMessage(Cause.squash(reviewed.cause)));
+        else setPreview(reviewed.value);
+        return;
+      }
       const result = await createNew({
         environmentId: environment.environmentId,
-        input: { name: trimmedName },
+        input: { name: trimmedName, ...(inArea ? { workModel: details } : {}) },
       });
       if (AsyncResult.isFailure(result)) {
         setError(errorMessage(Cause.squash(result.cause)));
+        setPreview(null);
         return;
       }
       const { projectId, workspaceRoot, commitError } = result.value;
@@ -1091,6 +1142,10 @@ export function AddProjectNewScreen(props: { readonly environmentId?: string | s
             );
           }
         });
+      }
+      if (inArea) {
+        setCreated(result.value);
+        return;
       }
       // The draft screen resolves its project from the client store, so it
       // must not open before the create event has arrived.
@@ -1117,30 +1172,131 @@ export function AddProjectNewScreen(props: { readonly environmentId?: string | s
     }
   };
 
+  if (created)
+    return (
+      <AddProjectShell title="Project ready">
+        <Text className="text-lg font-t3-bold">{trimmedName}</Text>
+        <Text selectable className="text-sm text-foreground-muted">
+          {created.workspaceRoot}
+        </Text>
+        <Text>Create the first Ticket in T3’s web or desktop Ticket board when you are ready.</Text>
+        <PrimaryActionButton
+          label="Done"
+          onPress={() =>
+            navigation.canGoBack()
+              ? navigation.goBack()
+              : navigation.dispatch(StackActions.replace("AddProject"))
+          }
+        />
+      </AddProjectShell>
+    );
+
   return (
     <AddProjectShell title="New project">
       {error ? <ErrorBanner message={error} /> : null}
       {environment ? (
         <>
-          <TextInput
-            className="h-12 min-h-12 rounded-[24px] px-4 py-0 text-base leading-snug"
-            value={name}
-            onChangeText={setName}
-            autoCorrect={false}
-            autoFocus
-            placeholder="Project name"
-            returnKeyType="done"
-            onSubmitEditing={() => void submit()}
-          />
-          {pathPreview !== null ? (
-            <Text className="px-1 text-sm leading-snug text-foreground-muted" numberOfLines={2}>
-              {trimmedName.length > 0
-                ? `Creates ${pathPreview}`
-                : `Goes in ${environment.newProjectsRoot}`}
-              {showMachines ? ` on ${environment.label}` : null}
-            </Text>
-          ) : null}
-          {machineRows}
+          {preview ? (
+            <>
+              <Text className="text-lg font-t3-bold">Review Project Home</Text>
+              <Text>
+                {trimmedName} · {area} · {preview.scope}
+              </Text>
+              <Text selectable>{preview.workspaceRoot}</Text>
+              <Text>Ticket key: {preview.projectKey}</Text>
+              {preview.existingHome ? (
+                <Text>Adopt this Home. Its files, purpose, Goal and identity are preserved.</Text>
+              ) : (
+                <Text>
+                  {purpose}
+                  {goal ? `\nGoal: ${goal}` : ""}
+                  {"\nCreates README, STATUS, AGENTS, TOOLS and a Git repository."}
+                </Text>
+              )}
+              <PrimaryActionButton
+                label="Back"
+                disabled={isSubmitting}
+                onPress={() => setPreview(null)}
+              />
+            </>
+          ) : (
+            <>
+              <TextInput
+                className="h-12 min-h-12 rounded-[24px] px-4 py-0 text-base leading-snug"
+                value={name}
+                onChangeText={setName}
+                autoCorrect={false}
+                autoFocus
+                placeholder="Project name"
+                accessibilityLabel="Project name"
+                editable={!isSubmitting}
+                returnKeyType="done"
+                onSubmitEditing={() => void submit()}
+              />
+              {optionsState.data === null ? (
+                <Text>
+                  {optionsState.error
+                    ? "Project setup could not be loaded from this machine."
+                    : "Loading project setup…"}
+                </Text>
+              ) : null}
+              {optionsState.error && !basicCreation ? (
+                <PrimaryActionButton
+                  label="Use basic creation"
+                  onPress={() => setBasicCreation(true)}
+                />
+              ) : null}
+              {inArea ? (
+                <>
+                  <Text className="font-t3-bold">Choose an Area</Text>
+                  <ListSection>
+                    {optionsState.data!.areas.map((option, index) => (
+                      <ListRow
+                        key={option.name}
+                        title={option.name}
+                        subtitle={option.scope}
+                        icon={null}
+                        isFirst={index === 0}
+                        selected={area === option.name}
+                        disabled={isSubmitting}
+                        onPress={() => setArea(option.name)}
+                      />
+                    ))}
+                  </ListSection>
+                  {(
+                    [
+                      ["Folder name", details.slug, setSlug],
+                      ["Purpose", purpose, setPurpose],
+                      ["Current Goal (optional)", goal, setGoal],
+                    ] as const
+                  ).map(([label, value, change]) => (
+                    <TextInput
+                      key={label}
+                      accessibilityLabel={label}
+                      placeholder={label}
+                      value={value}
+                      onChangeText={change}
+                      editable={!isSubmitting}
+                      autoCorrect={false}
+                      className="min-h-12 rounded-[24px] px-4 py-2 text-base"
+                    />
+                  ))}
+                  <Text className="text-sm text-foreground-muted">
+                    {optionsState.data!.projectsRoot}/{area}/{details.slug}
+                  </Text>
+                </>
+              ) : null}
+              {!inArea && pathPreview !== null ? (
+                <Text className="px-1 text-sm leading-snug text-foreground-muted" numberOfLines={2}>
+                  {trimmedName.length > 0
+                    ? `Creates ${pathPreview}`
+                    : `Goes in ${environment.newProjectsRoot}`}
+                  {showMachines ? ` on ${environment.label}` : null}
+                </Text>
+              ) : null}
+              {machineRows}
+            </>
+          )}
           {githubTarget !== null ? (
             <ListSection>
               <ListRow
@@ -1170,8 +1326,16 @@ export function AddProjectNewScreen(props: { readonly environmentId?: string | s
             </ListSection>
           ) : null}
           <PrimaryActionButton
-            label="Create project"
-            disabled={isSubmitting || trimmedName.length === 0}
+            label={
+              preview
+                ? preview.existingHome
+                  ? "Adopt existing Home"
+                  : "Create project"
+                : inArea
+                  ? "Review Home"
+                  : "Create project"
+            }
+            disabled={isSubmitting || !valid}
             onPress={() => void submit()}
             loading={isSubmitting}
           />

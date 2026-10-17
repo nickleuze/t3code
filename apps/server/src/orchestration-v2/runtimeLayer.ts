@@ -16,6 +16,7 @@ import * as AgentSessionScanner from "../project/AgentSessionScanner.ts";
 import * as ProjectService from "../project/ProjectService.ts";
 import * as ProjectSetupScriptRunner from "../project/ProjectSetupScriptRunner.ts";
 import * as ManagedProjectFolders from "../project/ManagedProjectFolders.ts";
+import * as WorkModelProjects from "../project/WorkModelProjects.ts";
 import * as CheckpointCaptureService from "./CheckpointCaptureService.ts";
 import * as CheckpointService from "./CheckpointService.ts";
 import * as CheckpointRollbackService from "./CheckpointRollbackService.ts";
@@ -362,6 +363,9 @@ const layerTickets = TicketService.layer.pipe(
 );
 
 export const layerProduction = Layer.mergeAll(
+  WorkModelProjects.layer().pipe(
+    Layer.provide(Layer.mergeAll(layerProjectService, layerTickets, ProcessRunner.layer)),
+  ),
   layer.pipe(Layer.provide(layerProjectService)),
   // Same layer references as layerStores, so release deployment shares the
   // event sink and its admission gate.

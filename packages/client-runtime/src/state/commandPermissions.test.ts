@@ -59,6 +59,22 @@ const setup = Effect.gen(function* () {
 });
 
 describe("command permissions", () => {
+  it.effect("checks the destination grant before creating a Project", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const registry = yield* setup;
+        const create = createCommandPermissions(runtime, WS_METHODS.projectsCreateNew);
+        registry.set(sessions(env), AsyncResult.success(grant(true)));
+        registry.set(sessions(other), AsyncResult.success(grant(false)));
+        expect(registry.get(create.permissionAtom(env))).toBe(true);
+        yield* create.authorize(registry, env);
+        expect(registry.get(create.permissionAtom(other))).toBe(false);
+        expect((yield* create.authorize(registry, other).pipe(Effect.flip))._tag).toBe(
+          "EnvironmentAuthorizationError",
+        );
+      }),
+    ),
+  );
   it.effect("requires the destination settings grant to run storage cleanup", () =>
     Effect.scoped(
       Effect.gen(function* () {

@@ -122,7 +122,9 @@ export function projectTicket(events: readonly TicketEvent[]): TicketRecordState
   const decisions = entries.filter((e) => e.kind === "decision" && !superseded.has(e.eventId));
   const questions = entries.filter((e) => e.kind === "question" && !resolved.has(e.eventId));
   const lastHandoff = entries.findLast((e) => e.kind === "handoff") ?? null;
-  const blocked = [...latestByThread.values()].some((e) => e.kind === "blocker");
+  const blocked = [...latestByThread.values()].some(
+    (e) => e.kind === "blocker" && !resolved.has(e.eventId) && !superseded.has(e.eventId),
+  );
   Object.assign(ticket, {
     workState: {
       decisions: decisions.map((e) => ({ eventId: e.eventId, text: e.text })),

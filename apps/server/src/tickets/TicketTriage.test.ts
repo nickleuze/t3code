@@ -1,3 +1,4 @@
+import { readmeFrontmatter } from "../project/ProjectHome.ts";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, it } from "@effect/vitest";
 import { ProjectId, ThreadId, TicketId, type TicketEvent } from "@t3tools/contracts";
@@ -14,7 +15,7 @@ import * as Tickets from "./TicketService.ts";
 import * as Triage from "./TicketTriage.ts";
 import { ticketIds } from "./TicketRecord.ts";
 
-const setup = (options: { ticketTriage?: boolean } = {}) =>
+const setup = (options: { ticketTriage?: boolean; mapProject?: boolean } = {}) =>
   Effect.gen(function* () {
     const calls: Triage.TriageInput[] = [];
     let verdict: Triage.TriageVerdict | null = null;
@@ -37,7 +38,18 @@ const setup = (options: { ticketTriage?: boolean } = {}) =>
     const sql = yield* SqlClient.SqlClient.pipe(provide);
     const fs = yield* FileSystem.FileSystem.pipe(provide);
     const path = yield* Path.Path.pipe(provide);
-    const home = yield* fs.makeTempDirectoryScoped({ prefix: "ticket-triage-test-" });
+    const root = yield* fs.makeTempDirectoryScoped({ prefix: "ticket-triage-test-" });
+    const home = path.join(root, "photography", "lighting-director");
+    yield* fs.makeDirectory(path.join(home, ".git"), { recursive: true });
+    yield* fs.writeFileString(
+      path.join(root, "photography", "AREA.md"),
+      "---\narea: photography\nscope: personal\n---\n",
+    );
+    yield* fs.makeDirectory(path.join(root, "systems"));
+    yield* fs.writeFileString(
+      path.join(root, "systems", "AREA.md"),
+      "---\narea: systems\nscope: personal\n---\n",
+    );
     yield* fs.writeFileString(
       path.join(home, "README.md"),
       '---\nid: lighting-director\narea: photography\ngoal: "UE5 sim matches a 3-light set" # focus\n---\n# Lighting director\n',
@@ -45,7 +57,8 @@ const setup = (options: { ticketTriage?: boolean } = {}) =>
     const projectId = ProjectId.make("project:lighting");
     yield* sql`INSERT INTO projection_projects (project_id, title, workspace_root, scripts_json, created_at, updated_at)
       VALUES (${projectId}, 'Lighting director', ${home}, '[]', '2026-10-11T00:00:00.000Z', '2026-10-11T00:00:00.000Z')`;
-    yield* tickets.projectsMap({ key: "lighting-director", projectId });
+    if (options.mapProject !== false)
+      yield* tickets.projectsMap({ key: "lighting-director", projectId });
     yield* tickets.projectsMap({ key: "systems", projectId: null });
     const worker = yield* Triage.make.pipe(provide);
     const triage = (title: string, body = "") =>
@@ -61,6 +74,12 @@ const setup = (options: { ticketTriage?: boolean } = {}) =>
         };
       });
     return {
+      fs,
+      path,
+      home,
+      root,
+      sql,
+      projectId,
       tickets,
       worker,
       calls,
@@ -70,6 +89,70 @@ const setup = (options: { ticketTriage?: boolean } = {}) =>
       },
     };
   });
+
+it.effect("finds a registered Project Home before its first Ticket creates a key", () =>
+  Effect.gen(function* () {
+    const { triage } = yield* setup({ mapProject: false });
+    const { ticket, entries } = yield* triage("Fix lighting-director rim falloff");
+    assert.equal(ticket.projectKey, "lighting-director");
+    assert.equal(ticket.status, "ready");
+    assert.equal(entries[0]?.kind, "decision");
+  }).pipe(Effect.scoped),
+);
+
+it.effect("discovers an unregistered Home while excluding Area repos and non-Homes", () =>
+  Effect.gen(function* () {
+    const { fs, path, root, tickets, triage, calls, setVerdict } = yield* setup();
+    const home = path.join(root, "life", "personal");
+    yield* fs.makeDirectory(path.join(home, ".git"), { recursive: true });
+    yield* fs.writeFileString(
+      path.join(root, "life", "AREA.md"),
+      "---\narea: life\nscope: personal\n---\n",
+    );
+    yield* fs.writeFileString(path.join(home, "README.md"), "---\nid: personal\narea: life\n---\n");
+    const plumbing = path.join(root, "photography", "backlog");
+    yield* fs.makeDirectory(path.join(plumbing, ".git"), { recursive: true });
+    yield* fs.writeFileString(
+      path.join(plumbing, "README.md"),
+      "---\nid: backlog\narea: photography\narea_repo: true\n---\n",
+    );
+    yield* tickets.projectsMap({ key: "backlog", projectId: null });
+    setVerdict({ kind: "match", projectKey: "personal", reason: "household work" });
+    const { ticket } = yield* triage("Sort the grocery list");
+    assert.equal(ticket.projectKey, "personal");
+    assert.equal(ticket.status, "ready");
+    assert.isFalse(calls[0]!.candidates.some((c) => c.key === "backlog"));
+  }).pipe(Effect.scoped),
+);
+
+it.effect("records a delegated match even if the agent omits its decision entry", () =>
+  Effect.gen(function* () {
+    const { tickets, worker, triage, setVerdict } = yield* setup();
+    const thread = ThreadId.make("triage-thread");
+    setVerdict({ kind: "delegated", threadId: thread });
+    const { ticket } = yield* triage("Calibrate a softbox");
+    const subscription = yield* tickets.subscribeChanges;
+    yield* tickets.upsert(
+      { id: ticket.id, projectKey: "lighting-director", status: "ready" },
+      tickets.author({ actor: "agent", thread }),
+    );
+    yield* worker.onChange(yield* PubSub.take(subscription));
+    yield* worker.drain;
+    const entries = (yield* tickets.timeline({ id: ticket.id })).events.filter(
+      (e) => e.type === "entry",
+    );
+    assert.equal(entries.length, 1);
+    assert.equal(entries[0]?.kind, "decision");
+    assert.include(entries[0]?.text ?? "", "lighting-director");
+    const repeated = yield* PubSub.takeAll(subscription);
+    for (const change of repeated) yield* worker.onChange(change);
+    yield* worker.drain;
+    assert.equal(
+      (yield* tickets.timeline({ id: ticket.id })).events.filter((e) => e.type === "entry").length,
+      1,
+    );
+  }).pipe(Effect.scoped),
+);
 
 it.effect("files an Idea that names one Project without asking the classifier", () =>
   Effect.gen(function* () {
@@ -83,6 +166,56 @@ it.effect("files an Idea that names one Project without asking the classifier", 
     assert.equal(entries[0]!.kind, "decision");
     assert.equal(entries[0]!.by.actor, "agent");
     assert.match(entries[0]!.text, /^Triage: filed under lighting-director/);
+  }).pipe(Effect.scoped),
+);
+
+it.effect("keeps a moved Home's existing Ticket key and readable IDs", () =>
+  Effect.gen(function* () {
+    const { fs, path, home, root, sql, projectId, tickets, triage } = yield* setup();
+    const existing = (yield* tickets.upsert({ title: "Existing", projectKey: "lighting-director" }))
+      .ticket;
+    const moved = path.join(root, "photography", "renamed-home");
+    yield* fs.rename(home, moved);
+    yield* fs.writeFileString(
+      path.join(moved, "README.md"),
+      "---\nid: renamed-home\narea: photography\n---\n",
+    );
+    yield* sql`UPDATE projection_projects SET workspace_root = ${moved} WHERE project_id = ${projectId}`;
+    const { ticket } = yield* triage("Fix renamed-home migration");
+    assert.equal(ticket.projectKey, "lighting-director");
+    assert.equal((yield* tickets.get(existing.id)).ticket.readableId, existing.readableId);
+    assert.equal(ticket.readableId, `lighting-director-${ticket.id.slice(-6)}`);
+  }).pipe(Effect.scoped),
+);
+
+it.effect("repairs missing decisions on startup and preserves explicit classifier decisions", () =>
+  Effect.gen(function* () {
+    const { tickets, worker, calls } = yield* setup();
+    const author = tickets.author({ actor: "agent", thread: ThreadId.make("classifier") });
+    const missing = (yield* tickets.upsert({ title: "Missing verdict" })).ticket;
+    const explicit = (yield* tickets.upsert({ title: "Explicit verdict" })).ticket;
+    yield* tickets.upsert(
+      { id: missing.id, projectKey: "lighting-director", status: "ready" },
+      author,
+    );
+    yield* tickets.entry(
+      { id: explicit.id, kind: "decision", text: "Lighting because softboxes." },
+      author,
+    );
+    yield* tickets.upsert(
+      { id: explicit.id, projectKey: "lighting-director", status: "ready" },
+      author,
+    );
+    yield* worker.start;
+    yield* worker.onChange({ ids: [missing.id, explicit.id], created: [] });
+    for (const ticket of [missing, explicit]) {
+      const entries = (yield* tickets.timeline({ id: ticket.id })).events.filter(
+        (e) => e.type === "entry",
+      );
+      assert.equal(entries.length, 1);
+      assert.equal(entries[0]?.kind, "decision");
+    }
+    assert.equal(calls.length, 0);
   }).pipe(Effect.scoped),
 );
 
@@ -238,11 +371,11 @@ it("the agent prompt carries the Idea, candidates and the no-new-Projects rule",
 });
 
 it("parses README frontmatter and finds title duplicates", () => {
-  assert.deepStrictEqual(Triage.readmeFrontmatter("---\narea: life\ngoal: 'Ship it'\n---\n"), {
+  assert.deepStrictEqual(readmeFrontmatter("---\narea: life\ngoal: 'Ship it'\n---\n"), {
     area: "life",
     goal: "Ship it",
   });
-  assert.deepStrictEqual(Triage.readmeFrontmatter("# No frontmatter"), {});
+  assert.deepStrictEqual(readmeFrontmatter("# No frontmatter"), {});
   const open = [
     {
       id: TicketId.make("a"),

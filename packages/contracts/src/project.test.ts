@@ -19,6 +19,8 @@ import {
   ProjectSearchEntriesError,
   ProjectSearchEntriesInput,
   ProjectWriteFileError,
+  ProjectCreateNewInput,
+  WorkModelProjectDraft,
 } from "./project.ts";
 
 const decodeProjectCreatePayload = Schema.decodeUnknownSync(ProjectCreatePayload);
@@ -26,6 +28,24 @@ const decodeProjectUpdatePayload = Schema.decodeUnknownSync(ProjectUpdatePayload
 const decodeProjectMutation = Schema.decodeUnknownSync(ProjectMutation);
 const decodeSearchEntriesInput = Schema.decodeUnknownSync(ProjectSearchEntriesInput);
 const decodeSearchContentsInput = Schema.decodeUnknownSync(ProjectSearchContentsInput);
+
+it("preserves name-only creation and validates optional Work Model destinations", () => {
+  expect(Schema.decodeUnknownSync(ProjectCreateNewInput)({ name: "Existing client" })).toEqual({
+    name: "Existing client",
+  });
+  const draft = {
+    name: "New Home",
+    area: "systems",
+    slug: "new-home",
+    purpose: "A concrete purpose",
+    adoptExisting: false,
+  };
+  const valid = Schema.is(WorkModelProjectDraft);
+  expect(valid(draft)).toBe(true);
+  expect(valid({ ...draft, slug: "../escape" })).toBe(false);
+  expect(valid({ ...draft, area: "systems/other" })).toBe(false);
+  expect(valid({ ...draft, purpose: "" })).toBe(false);
+});
 
 describe("project search inputs", () => {
   it("allows an empty entries query for bounded frecency browsing", () => {

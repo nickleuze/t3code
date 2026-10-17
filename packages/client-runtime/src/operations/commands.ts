@@ -827,6 +827,7 @@ export const interruptThreadTurn = Effect.fn("EnvironmentCommands.interruptThrea
     commandId: yield* allocateCommandId(input),
     threadId: input.threadId,
     runId,
+    reason: "Stopped by user",
     holdQueue: true,
   });
 });

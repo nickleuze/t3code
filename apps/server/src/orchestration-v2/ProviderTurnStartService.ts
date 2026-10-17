@@ -175,6 +175,19 @@ export const layer: Layer.Layer<
               }),
             )
             .pipe(Effect.catchCause(() => Effect.succeed(false))),
+        interruptReason: () =>
+          projectionStore
+            .getTurnItem({
+              threadId: input.threadId,
+              itemId: idAllocator.derive.runSignalTurnItem({
+                runId: input.runId,
+                signal: "interrupt-request",
+              }),
+            })
+            .pipe(
+              Effect.map(RunExecutionService.interruptRequestReason),
+              Effect.catchCause(() => Effect.succeed(null)),
+            ),
       };
     };
 
@@ -1259,6 +1272,7 @@ export const layer: Layer.Layer<
         shouldStartProviderTurn: runControls.shouldStartProviderTurn,
         shouldFinalizeRun: runControls.shouldFinalizeRun,
         hasUnpairedRunInterruptRequest: runControls.hasUnpairedRunInterruptRequest,
+        interruptReason: runControls.interruptReason,
         message: {
           messageId: message.id,
           text: userText,
