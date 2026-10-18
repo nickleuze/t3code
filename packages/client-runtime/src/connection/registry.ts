@@ -217,8 +217,17 @@ export const make = Effect.gen(function* () {
   const driver = yield* ConnectionDriver.ConnectionDriver;
   const wakeups = yield* ConnectionWakeups.ConnectionWakeups;
   const ssh = yield* ClientCapabilities.SshEnvironmentGateway;
-  const persistedTargets = yield* storage.list;
-  const disabledEnvironmentIds = new Set(yield* storage.listDisabled);
+  // Unreadable saved connections (say, the OS can no longer decrypt them) must
+  // not take the local environment down with them. Start without them and
+  // leave the stored catalog untouched, so it loads again if it recovers.
+  const withoutSavedConnections = (error: Persistence.ConnectionPersistenceError) =>
+    Effect.logWarning("Starting without saved connections that could not be read.", {
+      error,
+    }).pipe(Effect.as([]));
+  const persistedTargets = yield* storage.list.pipe(Effect.catch(withoutSavedConnections));
+  const disabledEnvironmentIds = new Set(
+    yield* storage.listDisabled.pipe(Effect.catch(withoutSavedConnections)),
+  );
   const loadRoute = Effect.fn("EnvironmentRegistry.loadRoute")(function* (
     target: ConnectionTarget,
   ) {
