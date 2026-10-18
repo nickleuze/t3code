@@ -382,6 +382,7 @@ it.layer(NodeServices.layer)("server self update", (it) => {
               Effect.as({ targetVersion: "1.2.0", method: "desktop-app" as const }),
             ),
           commit: () => Effect.never,
+          reserve: () => Effect.void,
         },
       });
       const result = yield* selfUpdate.update({ targetVersion: "1.1.0" }, (stage) =>

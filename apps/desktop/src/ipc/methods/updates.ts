@@ -1,4 +1,5 @@
 import {
+  DesktopReleaseManifestResultSchema,
   DesktopUpdateActionResultSchema,
   DesktopUpdateChannelSchema,
   DesktopUpdateCheckResultSchema,
@@ -8,6 +9,7 @@ import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 
 import * as DesktopUpdates from "../../updates/DesktopUpdates.ts";
+import { fetchReleaseManifest } from "../../updates/forkReleaseManifest.ts";
 import * as IpcChannels from "../channels.ts";
 import * as DesktopIpc from "../DesktopIpc.ts";
 
@@ -59,4 +61,11 @@ export const checkForUpdate = DesktopIpc.makeIpcMethod({
     const updates = yield* DesktopUpdates.DesktopUpdates;
     return yield* updates.check("web-ui");
   }),
+});
+
+export const getReleaseManifest = DesktopIpc.makeIpcMethod({
+  channel: IpcChannels.UPDATE_RELEASE_MANIFEST_CHANNEL,
+  payload: Schema.String,
+  result: DesktopReleaseManifestResultSchema,
+  handler: fetchReleaseManifest,
 });

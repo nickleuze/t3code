@@ -1,6 +1,7 @@
 import * as Schema from "effect/Schema";
 import { GitPreparePullRequestThreadInput } from "./git.ts";
 import {
+  AuthEnvironmentMaintainScope,
   AuthOrchestrationOperateScope,
   AuthSettingsWriteScope,
   AuthProvidersManageScope,
@@ -56,6 +57,13 @@ export const CLIENT_GUARDED_RPC_SCOPES = {
   [WS_METHODS.skillsUpdate]: AuthProvidersManageScope,
   [WS_METHODS.skillsRemove]: AuthProvidersManageScope,
   [WS_METHODS.skillsImport]: AuthProvidersManageScope,
+
+  // Release deployment restarts the host, like server.updateServer.
+  [WS_METHODS.deploymentsRequest]: AuthEnvironmentMaintainScope,
+  [WS_METHODS.deploymentsAdmit]: AuthEnvironmentMaintainScope,
+  [WS_METHODS.deploymentsRetry]: AuthEnvironmentMaintainScope,
+  [WS_METHODS.deploymentsCancel]: AuthEnvironmentMaintainScope,
+  [WS_METHODS.deploymentsRecordAcceptance]: AuthEnvironmentMaintainScope,
 
   [WS_METHODS.scheduledTasksUpsert]: AuthOrchestrationOperateScope,
   [WS_METHODS.scheduledTasksSetEnabled]: AuthOrchestrationOperateScope,
