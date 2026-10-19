@@ -1,55 +1,11 @@
 import { describe, expect, it } from "vite-plus/test";
 
 import {
-  burnGuardTripped,
   childContextFraction,
   childIterationTokens,
   childOutcome,
   iterationDeadlines,
-  largestUsageRise,
 } from "./GoalLoopWorker.ts";
-
-const guard = { maxPercentPoints: 20, windowMins: 60 };
-const sample = (atMs: number, usedPercent: number) => ({
-  atMs,
-  windows: [{ id: "session", usedPercent }],
-});
-
-describe("burn guard", () => {
-  it("trips when a window rises past the allowed points", () => {
-    expect(burnGuardTripped([sample(0, 10), sample(1, 25)], guard)).toBeNull();
-    expect(burnGuardTripped([sample(0, 10), sample(1, 25), sample(2, 31)], guard)).toEqual({
-      windowId: "session",
-      risePoints: 21,
-    });
-  });
-
-  it("measures from the reset after a provider window resets", () => {
-    expect(burnGuardTripped([sample(0, 80), sample(1, 2), sample(2, 15)], guard)).toBeNull();
-  });
-
-  it("reports the largest rise even while it stays under the limit", () => {
-    expect(
-      largestUsageRise([
-        {
-          atMs: 0,
-          windows: [
-            { id: "session", usedPercent: 10 },
-            { id: "weekly", usedPercent: 40 },
-          ],
-        },
-        {
-          atMs: 1,
-          windows: [
-            { id: "session", usedPercent: 14 },
-            { id: "weekly", usedPercent: 41 },
-          ],
-        },
-      ]),
-    ).toEqual({ windowId: "session", risePoints: 4 });
-    expect(largestUsageRise([])).toBeNull();
-  });
-});
 
 describe("iteration accounting", () => {
   it("sums context tokens and, separately, tokens not served from cache", () => {
@@ -65,21 +21,7 @@ describe("iteration accounting", () => {
         },
         { turnTokenUsage: { usageStatus: "complete", inputTokens: 1_500, outputTokens: 500 } },
       ] as never),
-    ).toEqual({ tokens: 3_000, uncachedTokens: 2_200, accounting: "exact" });
-  });
-
-  it("marks partial reports as estimates and missing reports as unavailable", () => {
-    expect(
-      childIterationTokens([
-        { turnTokenUsage: { usageStatus: "complete", inputTokens: 10, outputTokens: 5 } },
-        {},
-      ] as never),
-    ).toEqual({ tokens: 15, uncachedTokens: 15, accounting: "estimated" });
-    expect(childIterationTokens([{}] as never)).toEqual({
-      tokens: 0,
-      uncachedTokens: 0,
-      accounting: "unavailable",
-    });
+    ).toEqual({ tokens: 3_000, uncachedTokens: 2_200 });
   });
 
   it("classifies how a child ended", () => {

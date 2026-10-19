@@ -2,8 +2,7 @@ import { useNavigation } from "@react-navigation/native";
 import { squashAtomCommandFailure } from "@t3tools/client-runtime/state/runtime";
 import type { EnvironmentThreadShell } from "@t3tools/client-runtime/state/shell";
 import {
-  formatGoalBurnGuard,
-  formatGoalUsage,
+  formatGoalTokensWithUncached,
   GOAL_ITERATION_OUTCOME_LABELS,
   goalControlActions,
   goalIsEditable,
@@ -39,7 +38,7 @@ import { RequestActionButton } from "./RequestActionButton";
 
 type GoalFields = Pick<
   Extract<OrchestrationV2Command, { type: "thread.goal.set" }>,
-  "objective" | "doneWhen" | "background" | "permissions" | "checkCommand" | "iterationTimeoutMins"
+  "objective" | "doneWhen" | "background" | "permissions" | "iterationTimeoutMins"
 >;
 
 /** T3-owned goals stay independent from the provider-native goal banner. */
@@ -189,11 +188,6 @@ export function T3GoalCard(props: {
           <Text numberOfLines={3} className="text-sm text-foreground-secondary">
             Done when: {proposal.doneWhen}
           </Text>
-          {proposal.checkCommand ? (
-            <Text className="text-xs text-foreground-secondary">
-              Check: {proposal.checkCommand}
-            </Text>
-          ) : null}
           <View className="flex-row flex-wrap gap-2">
             <RequestActionButton
               label={pending === "start" ? "Starting…" : "Start goal"}
@@ -302,7 +296,6 @@ function proposalFields(proposal: OrchestrationV2GoalProposal): GoalFields {
     doneWhen: proposal.doneWhen,
     background: proposal.background,
     permissions: proposal.permissions,
-    checkCommand: proposal.checkCommand,
     ...(proposal.iterationTimeoutMins === null
       ? {}
       : { iterationTimeoutMins: proposal.iterationTimeoutMins }),
@@ -334,14 +327,8 @@ const BRIEF_LABELS = {
   permissions: "Pre-approved actions",
   background: "Background",
   iterationTimeoutMins: `Minutes per iteration (${MIN_GOAL_ITERATION_TIMEOUT_MINS}–480)`,
-  checkCommand: "Completion check",
 };
-const ADVANCED_FIELDS = [
-  "permissions",
-  "background",
-  "iterationTimeoutMins",
-  "checkCommand",
-] as const;
+const ADVANCED_FIELDS = ["permissions", "background", "iterationTimeoutMins"] as const;
 
 /** Edits a goal's brief: objective and done-when, with the rest under Advanced. */
 function GoalBriefEditor(props: {
@@ -352,7 +339,6 @@ function GoalBriefEditor(props: {
     readonly doneWhen?: string | null | undefined;
     readonly background?: string | null | undefined;
     readonly permissions?: string | null | undefined;
-    readonly checkCommand?: string | null | undefined;
     readonly iterationTimeoutMins?: number | null | undefined;
   };
   readonly pending: boolean;
@@ -369,7 +355,6 @@ function GoalBriefEditor(props: {
     permissions: props.initial.permissions ?? "",
     background: props.initial.background ?? "",
     iterationTimeoutMins: String(goalIterationTimeoutMins(props.initial)),
-    checkCommand: props.initial.checkCommand ?? "",
   }));
   const timeout = Number(fields.iterationTimeoutMins);
   const valid =
@@ -385,7 +370,7 @@ function GoalBriefEditor(props: {
         accessibilityLabel={BRIEF_LABELS[key]}
         value={fields[key]}
         editable={!props.pending}
-        multiline={key !== "iterationTimeoutMins" && key !== "checkCommand"}
+        multiline={key !== "iterationTimeoutMins"}
         keyboardType={key === "iterationTimeoutMins" ? "number-pad" : "default"}
         className="rounded-xl bg-subtle p-3 text-foreground"
         onChangeText={(value) => setFields((current) => ({ ...current, [key]: value }))}
@@ -410,11 +395,10 @@ function GoalBriefEditor(props: {
         disabled={props.pending}
         onPress={() => setAdvanced((value) => !value)}
       />
-      {/* thread.goal.update edits the brief only; the time limit and check stay as started. */}
+      {/* thread.goal.update edits the brief only; the time limit stays as started. */}
       {advanced
         ? ADVANCED_FIELDS.filter(
-            (key) =>
-              props.mode === "start" || (key !== "iterationTimeoutMins" && key !== "checkCommand"),
+            (key) => props.mode === "start" || key !== "iterationTimeoutMins",
           ).map(field)
         : null}
       {props.error ? (
@@ -431,7 +415,6 @@ function GoalBriefEditor(props: {
             doneWhen: fields.doneWhen.trim(),
             background: fields.background.trim() || null,
             permissions: fields.permissions.trim() || null,
-            checkCommand: fields.checkCommand.trim() || null,
             iterationTimeoutMins: timeout,
           })
         }
@@ -461,22 +444,14 @@ function GoalDetails(props: {
       </Text>
       <Text>{goal.objective}</Text>
       <Text>
-        {goal.iteration} iterations · {formatGoalUsage(goal)}
+        {goal.iteration} iterations ·{" "}
+        {formatGoalTokensWithUncached(goal.tokensUsed, goal.uncachedTokensUsed)}
       </Text>
-      <Text>
-        {goalIterationTimeoutMins(goal)} min per iteration · {formatGoalBurnGuard(goal)}
-      </Text>
+      <Text>{goalIterationTimeoutMins(goal)} min per iteration</Text>
       {goal.doneWhen ? <Text>Done when: {goal.doneWhen}</Text> : null}
       {goal.permissions ? <Text>Pre-approved: {goal.permissions}</Text> : null}
       {goal.handoffPath ? <Text>Handoff: {goal.handoffPath}</Text> : null}
       {goal.completedSummary ? <Text>{goal.completedSummary}</Text> : null}
-      {goal.lastCheck ? (
-        <Text>
-          Check {goal.lastCheck.passed ? "passed" : "failed"}: {goal.lastCheck.command}
-          {"\n"}
-          {goal.lastCheck.outputTail}
-        </Text>
-      ) : null}
       {goal.progressNotes.slice(-5).map((note) => (
         <Text key={`${note.iteration}:${note.at}`}>
           #{note.iteration}: {note.text}
