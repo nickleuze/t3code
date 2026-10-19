@@ -119,6 +119,26 @@ export function parseSigningIdentity(output: string): string | null {
     : `${authority} (${team})`;
 }
 
+/**
+ * Copies a consistent snapshot of a live database into one self-contained
+ * file. The backup API keeps the source's WAL mode, which a read-only open
+ * (the integrity check) cannot read without a -shm file beside it.
+ */
+export async function snapshotDatabase(source: string, destination: string): Promise<void> {
+  const live = new NodeSqlite.DatabaseSync(source, { readOnly: true });
+  try {
+    await NodeSqlite.backup(live, destination);
+  } finally {
+    live.close();
+  }
+  const copy = new NodeSqlite.DatabaseSync(destination);
+  try {
+    copy.exec("PRAGMA journal_mode = DELETE");
+  } finally {
+    copy.close();
+  }
+}
+
 const make = Effect.gen(function* () {
   const config = yield* ServerConfig.ServerConfig;
   const fs = yield* FileSystem.FileSystem;
@@ -257,7 +277,7 @@ const make = Effect.gen(function* () {
         const [check, threads, projects] = result.stdout.trim().split("\n");
         return {
           ok: result.code === 0,
-          check: check ?? result.stderr.trim(),
+          check: check || result.stderr.trim(),
           threads: Number(threads),
           projects: Number(projects),
         };
@@ -309,14 +329,9 @@ const make = Effect.gen(function* () {
 
       // The backup API reads a consistent snapshot through its own connection.
       const databaseCopy = path.join(directory, path.basename(config.dbPath));
-      yield* Effect.tryPromise(async () => {
-        const source = new NodeSqlite.DatabaseSync(config.dbPath, { readOnly: true });
-        try {
-          await NodeSqlite.backup(source, databaseCopy);
-        } finally {
-          source.close();
-        }
-      }).pipe(Effect.mapError(blocked("Could not take a consistent state backup.")));
+      yield* Effect.tryPromise(() => snapshotDatabase(config.dbPath, databaseCopy)).pipe(
+        Effect.mapError(blocked("Could not take a consistent state backup.")),
+      );
 
       for (const file of [
         config.settingsPath,
