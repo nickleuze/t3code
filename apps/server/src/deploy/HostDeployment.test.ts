@@ -593,6 +593,22 @@ it.effect("fails an install interrupted before the hand-off instead of replaying
   }).pipe(Effect.provide(makeLayer(fakes)));
 });
 
+it.effect("verifies a stopped release after it was installed another way", () => {
+  const fakes = makeFakes({ runtime: TARGET });
+  return Effect.gen(function* () {
+    yield* seed({
+      status: "blocked",
+      step: "backup",
+      reason: "A prepared desktop update is already in progress.",
+    });
+    yield* Effect.gen(function* () {
+      const verified = yield* awaitRecord((record) => record.status === "verified");
+      assert.strictEqual(verified.reason, "This host already runs this release.");
+      assert.strictEqual(fakes.runs, 0);
+    }).pipe(Effect.provide(HostDeployment.layer));
+  }).pipe(Effect.provide(makeLayer(fakes)));
+});
+
 it.effect("verifies at once when the host already runs the release", () => {
   const fakes = makeFakes({ runtime: TARGET });
   return Effect.gen(function* () {

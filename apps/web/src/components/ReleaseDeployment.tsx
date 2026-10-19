@@ -261,7 +261,6 @@ export function ReleaseDeploymentDetails({
           Install on this machine only
         </Button>
       ) : null}
-      {deployment.done ? <p className="font-medium">Update complete on every machine.</p> : null}
     </div>
   );
 }

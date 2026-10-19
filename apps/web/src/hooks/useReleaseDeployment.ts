@@ -103,9 +103,14 @@ export function useReleaseDeployment(
     .join(",");
   const recordsAtom = useMemo(() => deploymentRecordsAtom(capableIdsKey), [capableIdsKey]);
   const { records: recordsByEnvironment, request: latestRequest } = useAtomValue(recordsAtom);
+  // A release every target finished, or a newer one replaced, no longer holds the update control.
+  const latestRecords =
+    latestRequest === null ? null : releaseRecords(latestRequest, recordsByEnvironment);
   const request =
-    latestRequest !== null &&
-    releaseSuperseded(latestRequest, releaseRecords(latestRequest, recordsByEnvironment), version)
+    latestRequest === null ||
+    latestRecords === null ||
+    releaseDeploymentDone(latestRequest, latestRecords) ||
+    releaseSuperseded(latestRequest, latestRecords, version)
       ? null
       : latestRequest;
 
@@ -213,7 +218,6 @@ export function useReleaseDeployment(
   }, [request, run]);
   const rows =
     request === null ? [] : deploymentRows({ request, records, connectedIds, runErrors });
-  const done = request !== null && releaseDeploymentDone(request, records);
   const override = request === null ? null : localOnlyOverride({ request, records, connectedIds });
 
   // Resume once per release: the sequence settles by itself when a remote
@@ -348,9 +352,8 @@ export function useReleaseDeployment(
     running,
     request,
     rows,
-    done,
     override,
-    summary: request === null ? null : releaseDeploymentSummary(request, rows, done),
+    summary: request === null ? null : releaseDeploymentSummary(request, rows),
     localEnvironmentId:
       request?.targets.find((target) => target.role === "local")?.environmentId ?? null,
     approval,

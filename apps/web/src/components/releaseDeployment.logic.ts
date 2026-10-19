@@ -16,7 +16,7 @@ import * as Schema from "effect/Schema";
 import { compareUpdateVersions } from "../versionSkew";
 
 const LOCAL_DEPLOYMENT_LABEL = "This machine";
-/** A finished release stays visible in the update popover for a day. */
+/** A release that ended without finishing everywhere stays visible for a day. */
 const RECENT_RELEASE_MS = 24 * 60 * 60 * 1000;
 const STOPPED: ReadonlySet<HostDeploymentStatus> = new Set(["blocked", "failed", "cancelled"]);
 const MOVING: ReadonlySet<HostDeploymentStatus> = new Set(["preparing", "waiting", "installing"]);
@@ -113,7 +113,7 @@ export type DeploymentRecordsByEnvironment = ReadonlyMap<
   ReadonlyArray<HostDeployment>
 >;
 
-/** The newest release any host knows, while it is unfinished or finished recently. */
+/** The newest release any host knows, while it is unfinished or ended recently. */
 export function currentReleaseRequest(
   records: DeploymentRecordsByEnvironment,
   now: number,
@@ -262,9 +262,7 @@ export function localOnlyOverride(input: {
 export function releaseDeploymentSummary(
   request: HostDeploymentRequest,
   rows: ReadonlyArray<DeploymentRow>,
-  done: boolean,
 ): string {
-  if (done) return `${request.version} deployed`;
   if (rows.some((row) => row.record !== null && STOPPED.has(row.record.status))) {
     return `${request.version} needs attention`;
   }

@@ -556,6 +556,15 @@ const make = Effect.gen(function* () {
           );
         } else if (record.status === "preparing" || record.status === "waiting") {
           yield* startDriver(releaseId);
+        } else if (record.status === "blocked" || record.status === "failed") {
+          // Installed another way after it stopped, e.g. by hand: the release is satisfied.
+          const runtime = yield* host.runtimeIdentity;
+          if (
+            runtime.version === record.request.version &&
+            commitMatches(runtime.commit, record.request.commit)
+          ) {
+            yield* markVerified(releaseId, runtime, "This host already runs this release.");
+          }
         }
       }
     });
