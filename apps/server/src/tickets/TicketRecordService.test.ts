@@ -1,3 +1,4 @@
+import { deriveTicketWorkState } from "@t3tools/shared/ticket";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import { assert, it } from "@effect/vitest";
 import { EventId, ProjectId, ThreadId } from "@t3tools/contracts";
@@ -279,7 +280,7 @@ it.effect("link snapshots retain title and machine label and refresh on rename",
 );
 
 it.effect(
-  "PR on Inbox records only; started work moves to review, merge after manual review moves done",
+  "PR on Inbox records only; started work and a merge leave the result awaiting acceptance",
   () =>
     Effect.gen(function* () {
       const tickets = yield* Tickets.TicketService;
@@ -319,6 +320,11 @@ it.effect(
         ref: "https://fixture.local/pr/2",
       };
       yield* tickets.observe(merged);
+      assert.equal((yield* tickets.get(ticket.id)).ticket.status, "in_review");
+      assert.isFalse((yield* tickets.get(ticket.id)).ticket.workState?.resultReady);
+      yield* tickets.action({ id: ticket.id, action: "accept" }).pipe(Effect.flip);
+      yield* tickets.entry({ id: ticket.id, kind: "result", text: "Finish condition verified" });
+      yield* tickets.action({ id: ticket.id, action: "accept" });
       assert.equal((yield* tickets.get(ticket.id)).ticket.status, "done");
       yield* tickets.action({ id: ticket.id, action: "reopen" });
       assert.equal((yield* tickets.get(ticket.id)).ticket.status, "ready");
@@ -328,6 +334,69 @@ it.effect(
       const events = (yield* tickets.timeline({ id: ticket.id })).events;
       assert.equal(events.filter((e) => e.type === "auto" && e.kind === "pr_merged").length, 1);
       assert.equal(events.filter((e) => e.type === "stage" && e.reason === "pr_linked").length, 1);
+      assert.deepStrictEqual(
+        events.flatMap((e) => (e.type === "stage" && e.reason === "pr_merged" ? [e.stage] : [])),
+        [],
+      );
+    }).pipe(Effect.provide(layer)),
+);
+
+it.effect.each(["inbox", "ready", "in_progress", "in_review", "done", "dropped"] as const)(
+  "merge evidence preserves explicit $0 intent and only moves active work to review",
+  (status) =>
+    Effect.gen(function* () {
+      const tickets = yield* Tickets.TicketService;
+      const { ticket } = yield* tickets.upsert({ title: "Manual intent" });
+      const threadId = ThreadId.make("work");
+      yield* tickets.link({ id: ticket.id, threadId, role: "work", startWork: true });
+      yield* tickets.observe({ threadId, key: "linked", kind: "pr_linked", ref: "pr" });
+      yield* tickets.upsert({ id: ticket.id, status });
+      const manual = yield* tickets.get(ticket.id);
+      yield* TestClock.adjust("1 second");
+      const merged = { threadId, key: "merged", kind: "pr_merged" as const, ref: "pr" };
+      yield* tickets.observe(merged);
+      const before = yield* tickets.get(ticket.id);
+      assert.equal(before.ticket.status, status === "in_progress" ? "in_review" : status);
+      if (status !== "in_progress") {
+        assert.equal(before.ticket.statusSetAt, manual.ticket.statusSetAt);
+        assert.deepStrictEqual(before.stageBy, manual.stageBy);
+      }
+      const events = (yield* tickets.timeline({ id: ticket.id })).events;
+      assert.equal(events.filter((e) => e.type === "auto" && e.kind === "pr_merged").length, 1);
+      assert.deepStrictEqual(
+        events.flatMap((e) => (e.type === "stage" && e.reason === "pr_merged" ? [e.stage] : [])),
+        status === "in_progress" ? ["in_review"] : [],
+      );
+      yield* tickets.rebuild;
+      yield* tickets.observe(merged);
+      assert.deepStrictEqual(yield* tickets.get(ticket.id), before);
+      assert.deepStrictEqual((yield* tickets.timeline({ id: ticket.id })).events, events);
+    }).pipe(Effect.provide(layer)),
+);
+
+it.effect(
+  "historical merge-driven Done events retain their meaning through import and rebuild",
+  () =>
+    Effect.gen(function* () {
+      const tickets = yield* Tickets.TicketService;
+      const { ticket } = yield* tickets.upsert({ title: "Historical completion" });
+      const historical: TicketEvent = {
+        eventId: "01K79000000000000000000001-old",
+        ticketId: ticket.id,
+        at: "2026-10-12T00:00:00.000Z",
+        by: { actor: "agent", machine: "old", thread: ThreadId.make("old-work") },
+        type: "stage",
+        stage: "done",
+        reason: "pr_merged",
+      };
+      yield* tickets.importEvents([historical]);
+      const before = yield* tickets.get(ticket.id);
+      assert.equal(before.ticket.status, "done");
+      const events = (yield* tickets.timeline({ id: ticket.id })).events;
+      yield* tickets.importEvents(events.toReversed());
+      yield* tickets.rebuild;
+      assert.deepStrictEqual(yield* tickets.get(ticket.id), before);
+      assert.deepStrictEqual((yield* tickets.timeline({ id: ticket.id })).events, events);
     }).pipe(Effect.provide(layer)),
 );
 
@@ -413,6 +482,7 @@ it.effect("a superseded work thread and a closed PR do not change manual stages"
     yield* TestClock.adjust("1 second");
     yield* tickets.link({ id: ticket.id, threadId: current, role: "work", startWork: true });
     yield* tickets.observe({ threadId: old, key: "old-pr", kind: "pr_linked", ref: "old-pr" });
+    yield* tickets.observe({ threadId: old, key: "old-merged", kind: "pr_merged", ref: "old-pr" });
     assert.equal((yield* tickets.get(ticket.id)).ticket.status, "in_progress");
     yield* tickets.observe({
       threadId: current,
@@ -490,5 +560,96 @@ it.effect(
       yield* tickets.importEvents((yield* tickets.timeline({ id: ticket.id })).events);
       yield* tickets.rebuild;
       assert.equal((yield* tickets.ticketsLinkedToThread(threadId, "test")).length, 0);
+    }).pipe(Effect.provide(layer)),
+);
+
+it.effect(
+  "question answers and dismissals are durable, retry-safe and agree with shared detail state",
+  () =>
+    Effect.gen(function* () {
+      const tickets = yield* Tickets.TicketService;
+      const { ticket } = yield* tickets.upsert({
+        title: "Question resolution",
+        status: "in_progress",
+      });
+      for (const answer of [
+        "Answer: Use the existing Home.",
+        "Dismissed: No longer required after the scope decision.",
+      ]) {
+        yield* TestClock.adjust("1 second");
+        yield* tickets.entry({ id: ticket.id, kind: "question", text: "Which Home?" });
+        const question = (yield* tickets.get(ticket.id)).questions[0]!;
+        yield* TestClock.adjust("1 second");
+        const input = {
+          id: ticket.id,
+          kind: "note" as const,
+          resolves: question.eventId,
+          text: answer,
+          clientRequestId: `answer-${question.eventId}`,
+        };
+        yield* tickets.entry(input);
+        yield* tickets.entry(input);
+        yield* tickets.rebuild;
+        yield* tickets.entry(input);
+        const state = yield* tickets.get(ticket.id);
+        const events = (yield* tickets.timeline({ id: ticket.id })).events;
+        assert.deepStrictEqual(state.questions, []);
+        assert.equal(state.ticket.workState?.currentEvidence?.text, answer);
+        assert.equal(
+          events.filter((e) => e.type === "entry" && e.resolves === question.eventId).length,
+          1,
+        );
+        assert.equal(events.find((e) => e.eventId === question.eventId)?.type, "entry");
+        assert.equal(state.ticket.status, "in_progress");
+      }
+    }).pipe(Effect.provide(layer)),
+);
+it.effect(
+  "board, detail and agent reads agree after cross-Run blocker resolution and reopening",
+  () =>
+    Effect.gen(function* () {
+      const tickets = yield* Tickets.TicketService;
+      const { ticket } = yield* tickets.upsert({ title: "Shared evidence", status: "in_progress" });
+      const by = { actor: "agent" as const, machine: "A", thread: ThreadId.make("old") };
+      yield* tickets.entry({ id: ticket.id, kind: "blocker", text: "Volume blocked" }, by);
+      const blocker = (yield* tickets.timeline({ id: ticket.id })).events.find(
+        (e) => e.type === "entry",
+      )!;
+      yield* tickets.entry(
+        {
+          id: ticket.id,
+          kind: "result",
+          text: "Verified mounted volume",
+          next: "Nick reviews",
+          resolves: blocker.eventId,
+        },
+        { ...by, machine: "B", thread: ThreadId.make("new") },
+      );
+      yield* tickets.rebuild;
+      const state = yield* tickets.get(ticket.id);
+      const board = (yield* tickets.list()).tickets[0]!;
+      const events = (yield* tickets.timeline({ id: ticket.id })).events;
+      const detail = deriveTicketWorkState(events, board.status);
+      assert.isFalse(state.blocked);
+      assert.isFalse(board.workState!.blocked);
+      assert.deepStrictEqual(detail.blockers, []);
+      assert.deepStrictEqual(
+        board.workState?.currentEvidence,
+        state.ticket.workState?.currentEvidence,
+      );
+      assert.equal(detail.currentEvidence?.text, board.workState?.currentEvidence?.text);
+      yield* tickets.action({ id: ticket.id, action: "accept" });
+      yield* tickets.action({ id: ticket.id, action: "reopen" });
+      yield* tickets.rebuild;
+      const reopened = yield* tickets.get(ticket.id);
+      assert.equal(reopened.ticket.status, "ready");
+      assert.isNull(reopened.ticket.workState?.currentEvidence);
+      assert.isNull(reopened.ticket.workState?.lastHandoff);
+      assert.isFalse(reopened.ticket.workState?.resultReady);
+      assert.equal(
+        (yield* tickets.timeline({ id: ticket.id })).events.filter((e) => e.type === "entry")
+          .length,
+        2,
+      );
     }).pipe(Effect.provide(layer)),
 );

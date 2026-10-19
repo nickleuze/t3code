@@ -24,7 +24,7 @@ import {
 import { SortableContext, useSortable, verticalListSortingStrategy } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
 import { ArrowUpRightIcon, GripVerticalIcon } from "lucide-react";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { TicketSyncStatus } from "../components/tickets/TicketSyncStatus";
 import { WorkspacePageHeader } from "../components/WorkspacePageHeader";
 import { WorkspacePageContainer } from "../components/WorkspacePageContainer";
@@ -48,6 +48,7 @@ import { useEnvironmentQuery } from "../state/query";
 import { useMediaQuery } from "../hooks/useMediaQuery";
 import { scopeProjectRef } from "@t3tools/client-runtime/environment";
 import { parseTicketsSearch, ticketBoardColumns, type TicketsSearch } from "../ticketsSearch";
+import { observeResize } from "../lib/observeResize";
 import { isElectron } from "../env";
 
 export const Route = createFileRoute("/_chat/tickets")({
@@ -57,6 +58,17 @@ export const Route = createFileRoute("/_chat/tickets")({
 function TicketsPage() {
   const search = Route.useSearch();
   const narrow = useMediaQuery("(max-width: 480px)");
+  const boardRef = useRef<HTMLDivElement>(null);
+  const [boardWidth, setBoardWidth] = useState(0);
+  useLayoutEffect(() => {
+    const node = boardRef.current;
+    if (!node) return;
+    setBoardWidth(node.getBoundingClientRect().width);
+    return observeResize(node, ([entry]) => {
+      if (entry) setBoardWidth(entry.contentRect.width);
+    });
+  }, []);
+  const [chosenSearch, setChosenSearch] = useState<string | null>(null);
   const [activeStatus, setActiveStatus] = useState<TicketStatus>("inbox");
   const [filtersOpen, setFiltersOpen] = useState(false);
   const captureOpened = useRef(false);
@@ -112,6 +124,13 @@ function TicketsPage() {
     now,
     threadById: (env, id) => shells.find((s) => s.environmentId === env && s.id === id)?.source,
   });
+  const showDropped = !!search.showDropped || groups.dropped.length > 0;
+  const compact = narrow || boardWidth < (showDropped ? 1090 : 900);
+  const visibleStatus =
+    search.search?.trim() && chosenSearch !== search.search && groups[activeStatus].length === 0
+      ? (([...TICKET_COLUMNS, "dropped"] as const).find((status) => groups[status].length > 0) ??
+        activeStatus)
+      : activeStatus;
   const selected = entries.find(
     (e) => e.ticket.id === search.ticketId && e.environmentId === search.ticketEnvironmentId,
   );
@@ -180,27 +199,53 @@ function TicketsPage() {
       </WorkspacePageHeader>
       <div className="min-h-0 flex-1 overflow-auto">
         <WorkspacePageContainer width="expanded">
-          {ids.length === 0 ? (
-            <div className="py-12 text-center">
-              <h2 className="text-lg font-medium">Tickets are unavailable</h2>
-              <p className="mt-2 text-sm text-muted-foreground">
-                Update a connected T3 server to use tickets.
-              </p>
-            </div>
-          ) : (
-            <>
-              {narrow ? (
-                <div className="flex flex-wrap items-center gap-3">
-                  {ids.map((id) => (
-                    <TicketSyncStatus key={id} environmentId={id} />
-                  ))}
-                </div>
-              ) : null}
-              {narrow ? (
-                <div className="flex items-center gap-2">
-                  <div className="min-w-0 flex-1">
-                    <Input
+          <div ref={boardRef} className="flex min-w-0 flex-col gap-6">
+            {ids.length === 0 ? (
+              <div className="py-12 text-center">
+                <h2 className="text-lg font-medium">Tickets are unavailable</h2>
+                <p className="mt-2 text-sm text-muted-foreground">
+                  Update a connected T3 server to use tickets.
+                </p>
+              </div>
+            ) : (
+              <>
+                {narrow ? (
+                  <div className="flex flex-wrap items-center gap-3">
+                    {ids.map((id) => (
+                      <TicketSyncStatus key={id} environmentId={id} />
+                    ))}
+                  </div>
+                ) : null}
+                {narrow ? (
+                  <div className="flex items-center gap-2">
+                    <div className="min-w-0 flex-1">
+                      <Input
+                        size="touch"
+                        aria-label="Search tickets"
+                        type="search"
+                        placeholder="Search tickets…"
+                        value={search.search ?? ""}
+                        onChange={(event) => setFilters({ search: event.target.value })}
+                      />
+                    </div>
+                    <Button
                       size="touch"
+                      variant="outline"
+                      aria-expanded={filtersOpen}
+                      aria-controls="ticket-filters"
+                      onClick={() => setFiltersOpen(!filtersOpen)}
+                    >
+                      Filters
+                    </Button>
+                  </div>
+                ) : null}
+                <div
+                  id="ticket-filters"
+                  hidden={narrow && !filtersOpen}
+                  className="flex flex-wrap items-end gap-3 max-[480px]:flex-col max-[480px]:items-stretch"
+                >
+                  <div hidden={narrow} className="min-w-48 flex-1">
+                    <Input
                       aria-label="Search tickets"
                       type="search"
                       placeholder="Search tickets…"
@@ -208,185 +253,160 @@ function TicketsPage() {
                       onChange={(event) => setFilters({ search: event.target.value })}
                     />
                   </div>
+                  <TicketPicker
+                    label="Environment"
+                    value={search.environmentId ?? "all"}
+                    options={[
+                      { value: "all", label: "All environments" },
+                      ...ids.map((id) => ({
+                        value: id,
+                        label: environments.find((e) => e.environmentId === id)?.label ?? id,
+                      })),
+                    ]}
+                    onChange={(value) =>
+                      setFilters({
+                        environmentId: value === "all" ? undefined : EnvironmentId.make(value),
+                        projectId: undefined,
+                        projectEnvironmentId: undefined,
+                        unassigned: undefined,
+                      })
+                    }
+                  />
+                  <TicketPicker
+                    label="Project"
+                    value={
+                      search.unassigned
+                        ? "none"
+                        : search.projectId
+                          ? JSON.stringify([
+                              search.projectEnvironmentId ?? search.environmentId,
+                              search.projectId,
+                            ])
+                          : "all"
+                    }
+                    options={[
+                      { value: "all", label: "All projects" },
+                      { value: "none", label: "No project" },
+                      ...projects
+                        .filter(
+                          (p) =>
+                            ids.includes(p.environmentId) &&
+                            (!search.environmentId || p.environmentId === search.environmentId),
+                        )
+                        .map((p) => ({
+                          value: JSON.stringify([p.environmentId, p.id]),
+                          label: `${p.title}${ids.length > 1 ? ` · ${environments.find((e) => e.environmentId === p.environmentId)?.label ?? p.environmentId}` : ""}`,
+                        })),
+                    ]}
+                    onChange={(value) => {
+                      const scope =
+                        value === "none" || value === "all"
+                          ? null
+                          : (JSON.parse(value) as [string, string]);
+                      setFilters({
+                        projectId: scope ? ProjectId.make(scope[1]) : undefined,
+                        projectEnvironmentId: scope ? EnvironmentId.make(scope[0]) : undefined,
+                        unassigned: value === "none" ? true : undefined,
+                      });
+                    }}
+                  />
                   <Button
-                    size="touch"
                     variant="outline"
-                    aria-expanded={filtersOpen}
-                    aria-controls="ticket-filters"
-                    onClick={() => setFiltersOpen(!filtersOpen)}
+                    size={narrow ? "touch" : "sm"}
+                    onClick={() => setFilters({ showDropped: !search.showDropped })}
                   >
-                    Filters
+                    {search.showDropped ? "Hide dropped" : "Show dropped"}
+                  </Button>
+                  <Button
+                    variant="outline"
+                    size={narrow ? "touch" : "sm"}
+                    onClick={() => setFilters({ deleted: !search.deleted })}
+                  >
+                    {search.deleted ? "Back to board" : "Recently deleted"}
                   </Button>
                 </div>
-              ) : null}
-              <div
-                id="ticket-filters"
-                hidden={narrow && !filtersOpen}
-                className="flex flex-wrap items-end gap-3 max-[480px]:flex-col max-[480px]:items-stretch"
-              >
-                <div hidden={narrow} className="min-w-48 flex-1">
-                  <Input
-                    aria-label="Search tickets"
-                    type="search"
-                    placeholder="Search tickets…"
-                    value={search.search ?? ""}
-                    onChange={(event) => setFilters({ search: event.target.value })}
-                  />
-                </div>
-                <TicketPicker
-                  label="Environment"
-                  value={search.environmentId ?? "all"}
-                  options={[
-                    { value: "all", label: "All environments" },
-                    ...ids.map((id) => ({
-                      value: id,
-                      label: environments.find((e) => e.environmentId === id)?.label ?? id,
-                    })),
-                  ]}
-                  onChange={(value) =>
-                    setFilters({
-                      environmentId: value === "all" ? undefined : EnvironmentId.make(value),
-                      projectId: undefined,
-                      projectEnvironmentId: undefined,
-                      unassigned: undefined,
-                    })
-                  }
-                />
-                <TicketPicker
-                  label="Project"
-                  value={
-                    search.unassigned
-                      ? "none"
-                      : search.projectId
-                        ? JSON.stringify([
-                            search.projectEnvironmentId ?? search.environmentId,
-                            search.projectId,
-                          ])
-                        : "all"
-                  }
-                  options={[
-                    { value: "all", label: "All projects" },
-                    { value: "none", label: "No project" },
-                    ...projects
-                      .filter(
-                        (p) =>
-                          ids.includes(p.environmentId) &&
-                          (!search.environmentId || p.environmentId === search.environmentId),
-                      )
-                      .map((p) => ({
-                        value: JSON.stringify([p.environmentId, p.id]),
-                        label: `${p.title}${ids.length > 1 ? ` · ${environments.find((e) => e.environmentId === p.environmentId)?.label ?? p.environmentId}` : ""}`,
-                      })),
-                  ]}
-                  onChange={(value) => {
-                    const scope =
-                      value === "none" || value === "all"
-                        ? null
-                        : (JSON.parse(value) as [string, string]);
-                    setFilters({
-                      projectId: scope ? ProjectId.make(scope[1]) : undefined,
-                      projectEnvironmentId: scope ? EnvironmentId.make(scope[0]) : undefined,
-                      unassigned: value === "none" ? true : undefined,
-                    });
-                  }}
-                />
-                <Button
-                  variant="outline"
-                  size={narrow ? "touch" : "sm"}
-                  onClick={() => setFilters({ showDropped: !search.showDropped })}
-                >
-                  {search.showDropped ? "Hide dropped" : "Show dropped"}
-                </Button>
-                <Button
-                  variant="outline"
-                  size={narrow ? "touch" : "sm"}
-                  onClick={() => setFilters({ deleted: !search.deleted })}
-                >
-                  {search.deleted ? "Back to board" : "Recently deleted"}
-                </Button>
-              </div>
-              {errors.map((error) => (
-                <p key={error} role="alert" className="text-sm text-destructive">
-                  {error}
-                </p>
-              ))}
-              {loading ? <p className="text-sm text-muted-foreground">Loading tickets…</p> : null}
-              {search.deleted ? (
-                ids
-                  .filter((id) => !search.environmentId || id === search.environmentId)
-                  .map((id) => <DeletedTickets key={id} environmentId={id} search={search} />)
-              ) : (
-                <DndContext
-                  sensors={narrow ? [] : sensors}
-                  collisionDetection={(args) => {
-                    const hits = pointerWithin(args);
-                    const cards = hits.filter(
-                      (hit) =>
-                        args.droppableContainers.find((container) => container.id === hit.id)?.data
-                          .current?.kind === "ticket",
-                    );
-                    return cards.length ? cards : hits.length ? hits : closestCenter(args);
-                  }}
-                  onDragEnd={(event) => {
-                    void drop(event);
-                  }}
-                >
-                  {narrow ? (
-                    <div
-                      role="group"
-                      aria-label="Ticket status"
-                      className="flex gap-0.5 overflow-x-auto pb-1"
-                    >
-                      {[...TICKET_COLUMNS, ...(search.showDropped ? ["dropped" as const] : [])].map(
-                        (status) => (
-                          <Button
-                            key={status}
-                            size="touch-sm"
-                            variant={
-                              ticketBoardColumns(!!search.showDropped, true, activeStatus)[0] ===
-                              status
-                                ? "default"
-                                : "ghost"
-                            }
-                            aria-pressed={
-                              ticketBoardColumns(!!search.showDropped, true, activeStatus)[0] ===
-                              status
-                            }
-                            onClick={() => setActiveStatus(status)}
-                          >
-                            {TICKET_STATUS_LABELS[status]}
-                          </Button>
-                        ),
-                      )}
-                    </div>
-                  ) : null}
-                  <div
-                    className="grid gap-3"
-                    style={{
-                      gridTemplateColumns: narrow
-                        ? "minmax(0, 1fr)"
-                        : `repeat(${search.showDropped ? 6 : 5}, minmax(170px, 1fr))`,
+                {errors.map((error) => (
+                  <p key={error} role="alert" className="text-sm text-destructive">
+                    {error}
+                  </p>
+                ))}
+                {loading ? <p className="text-sm text-muted-foreground">Loading tickets…</p> : null}
+                {search.deleted ? (
+                  ids
+                    .filter((id) => !search.environmentId || id === search.environmentId)
+                    .map((id) => <DeletedTickets key={id} environmentId={id} search={search} />)
+                ) : (
+                  <DndContext
+                    sensors={sensors}
+                    collisionDetection={(args) => {
+                      const hits = pointerWithin(args);
+                      const cards = hits.filter(
+                        (hit) =>
+                          args.droppableContainers.find((container) => container.id === hit.id)
+                            ?.data.current?.kind === "ticket",
+                      );
+                      return cards.length ? cards : hits.length ? hits : closestCenter(args);
+                    }}
+                    onDragEnd={(event) => {
+                      void drop(event);
                     }}
                   >
-                    {ticketBoardColumns(!!search.showDropped, narrow, activeStatus).map(
-                      (status) => (
+                    {compact ? (
+                      <div
+                        role="group"
+                        aria-label="Ticket status"
+                        className="flex gap-0.5 overflow-x-auto pb-1"
+                      >
+                        {[...TICKET_COLUMNS, ...(showDropped ? ["dropped" as const] : [])].map(
+                          (status) => (
+                            <Button
+                              key={status}
+                              size="touch-sm"
+                              variant={
+                                ticketBoardColumns(showDropped, true, visibleStatus)[0] === status
+                                  ? "default"
+                                  : "ghost"
+                              }
+                              aria-pressed={
+                                ticketBoardColumns(showDropped, true, visibleStatus)[0] === status
+                              }
+                              onClick={() => {
+                                setActiveStatus(status);
+                                setChosenSearch(search.search ?? "");
+                              }}
+                            >
+                              {TICKET_STATUS_LABELS[status]}
+                            </Button>
+                          ),
+                        )}
+                      </div>
+                    ) : null}
+                    <div
+                      className="grid gap-3"
+                      style={{
+                        gridTemplateColumns: compact
+                          ? "minmax(0, 1fr)"
+                          : `repeat(${showDropped ? 6 : 5}, minmax(170px, 1fr))`,
+                      }}
+                    >
+                      {ticketBoardColumns(showDropped, compact, visibleStatus).map((status) => (
                         <TicketColumn
                           key={status}
                           status={status}
-                          narrow={narrow}
+                          narrow={compact}
                           entries={groups[status]}
                           showAllDone={search.showAllDone === true}
                           onShowAll={() => setFilters({ showAllDone: !search.showAllDone })}
                           onOpen={open}
                           multipleEnvironments={ids.length > 1}
                         />
-                      ),
-                    )}
-                  </div>
-                </DndContext>
-              )}
-            </>
-          )}
+                      ))}
+                    </div>
+                  </DndContext>
+                )}
+              </>
+            )}
+          </div>
         </WorkspacePageContainer>
       </div>
       {selected ? (
@@ -530,6 +550,9 @@ function TicketCard({
       >
         {entry.ticket.title}
       </button>
+      <span className="text-xs font-mono text-muted-foreground select-text wrap-anywhere">
+        {entry.ticket.readableId ?? entry.ticket.id}
+      </span>
       {entry.ticket.body.trim() ? (
         <p className="line-clamp-2 text-xs text-muted-foreground whitespace-pre-line wrap-anywhere">
           {entry.ticket.body.trim()}

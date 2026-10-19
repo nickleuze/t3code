@@ -238,14 +238,18 @@ A ticket is the work record for an idea or task: its current state, decisions,
 handoffs, and linked threads, goals, agent tasks, and pull requests. Open **Tickets**
 from the sidebar or command palette and capture work with or without a project.
 `ticket.new` and `tickets.open` can be assigned in **Settings → Keybindings**.
-The board works at phone width, with one stage at a time.
+The board shows one stage at a time when space is limited. Search by a copied
+Ticket ID to find it, including older Done or Dropped work within your selected
+project and environment.
 
 Stages are **Inbox**, **Ready**, **In progress**, **In review**, **Done**, and
 **Dropped**. Move a ticket yourself when its state changes. Starting linked work
 moves Inbox or Ready to In progress; planning alone does not. A witnessed
 non-draft pull request on the current work thread moves active work to In review,
-and its merge moves it to Done. Old thread history and sync do not advance stages.
-A result entry marks work ready for your acceptance; **Accept** moves it to Done.
+and its merge keeps it In review. A merge records evidence; Done means you have
+accepted the ticket's finish condition. A result entry marks work ready for that
+acceptance; **Accept** moves it to Done. Old thread history and sync do not create
+new stage transitions.
 **Reopen** returns Done or Dropped work to Ready. Done shows the last 14 days by
 default; deleted tickets can be restored from **Recently deleted** or Undo.
 
@@ -257,13 +261,29 @@ thread. A remote launch refreshes sync if the ticket is missing there; if it is
 still missing, sync it before trying again. Choose a local project on the target
 machine when its shared project key has no mapping.
 
+Each new launch includes references to the Project Home's README and STATUS on
+the destination machine and its declared Area context. Missing or unreadable files are identified
+so the agent can report context gaps. Governed Area/shared memory is read only
+when the Run has the required tools and permissions; launching does not install
+an integration or grant access. Retrying a confirmed launch keeps its original
+Brief; a new launch reads the destination context again.
+
 To capture and start work together, choose a project and use **Create & launch**
 (or Mod+Shift+Enter) in New ticket. If launch fails, the created ticket remains and
 Retry continues that launch safely.
 
-Record notes, decisions, questions, and handoffs as entries. A handoff captures
-what changed and **Next**; decisions can be superseded and questions resolved
-without erasing their history. Agents use `t3_ticket_list`, `t3_ticket_get`,
+The detail view shows the brief and dated current evidence. **Next action** names
+its source; answering a question can leave that action in place, while a new work
+update or decision replaces it. Closing or reopening leaves previous actions in
+history. **Add entry** is available at the top, and **Entries** shows recent work
+first; choose **All** and **Show older** for the full history.
+The Brief shows who recorded it. Follow **current decisions and corrections** for
+accepted scope changes; **All** also retains earlier titles and Briefs.
+
+Record notes, decisions, questions, results and handoffs as entries. A handoff
+captures what changed and **Next**. Supersede a decision or resolve a blocker
+without erasing its history. Answer or dismiss a question with the answer or reason
+you want future work to use. Agents use `t3_ticket_list`, `t3_ticket_get`,
 `t3_ticket_create`, `t3_ticket_update`, `t3_ticket_link`, and `t3_ticket_entry` to keep the same record.
 Use `t3_ticket_start` to start or hand off a ticket: it launches in plan mode by
 default, accepts `default` or `goal` mode, and returns an Open thread link. Reuse
@@ -271,6 +291,15 @@ default, accepts `default` or `goal` mode, and returns an Open thread link. Reus
 Handoff reminders ask an agent that used tools without an entry to record its
 handoff. They skip planning, read-only work, and terminal tickets, and can be
 turned off in **Settings → Tickets**.
+They ask for a brief acknowledgment after recording, rather than another full reply.
+
+When a planning run ends, T3 records its outcome and source Run on the linked
+Ticket, including failed or interrupted planning. Open the source thread to read
+the plan, corrections and questions; the record does not copy the conversation.
+Review that evidence and record the needed decision. An existing next action stays
+in place. Planning does not accept the Ticket or authorize implementation.
+New Runs receive recorded question answers and dismissals alongside decisions,
+with their sources. Source threads on another machine must still be available there.
 
 Tickets stay local until you configure sync. In **Settings → Tickets**, select the
 environment, enter a **Remote URL** for a Git repository, and configure it. Save a

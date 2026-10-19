@@ -9,6 +9,7 @@ import {
   type TicketUpsertInput,
 } from "@t3tools/contracts";
 import * as DateTime from "effect/DateTime";
+import { ticketStartPrompt } from "@t3tools/shared/ticket";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as TestClock from "effect/testing/TestClock";
@@ -527,6 +528,75 @@ it.effect("ticket start defaults to plan and caller-scoped retry ids", () =>
     );
     expect(h.starts[2]?.threadId).not.toBe(h.starts[0]?.threadId);
   }),
+);
+
+it.effect(
+  "a new Run recovers corrected scope and question responses beyond the recent timeline",
+  () =>
+    Effect.gen(function* () {
+      const h = yield* makeHarness();
+      const ticket = yield* h.seed({
+        title: "Original premise",
+        body: "Original broad scope",
+        status: "in_progress",
+      });
+      yield* h.call("t3_ticket_entry", {
+        ticket: ticket.id,
+        kind: "decision",
+        text: "Nick accepted validation only; the migration already ran. Planning acceptance is not permission to implement.",
+        clientRequestId: "accepted-scope",
+      });
+      yield* h.call("t3_ticket_update", {
+        id: ticket.id,
+        title: "Validate the completed migration",
+        body: "Scope: validate only. Done when: measured checks pass.",
+      });
+      yield* h.call("t3_ticket_entry", {
+        ticket: ticket.id,
+        kind: "question",
+        text: "Which host needs validation?",
+        clientRequestId: "question",
+      });
+      const question = (yield* h.tickets.get(ticket.id)).questions[0]!;
+      yield* h.call("t3_ticket_entry", {
+        ticket: ticket.id,
+        kind: "note",
+        text: "Answer: Nick selected the Mini.",
+        resolves: question.eventId,
+        clientRequestId: "answer",
+      });
+      for (let i = 0; i < 31; i++) {
+        yield* TestClock.adjust("1 second");
+        yield* h.tickets.entry({ id: ticket.id, kind: "note", text: `Later evidence ${i}` });
+      }
+      yield* h.tickets.rebuild;
+      const result = yield* h.call("t3_ticket_get", { ticket: ticket.id });
+      expect(result.timeline).toHaveLength(30);
+      expect(result.timelineOmitted).toBeGreaterThan(0);
+      expect(result.ticket.workState.questions).toEqual([]);
+      expect(result.ticket.workState.decisions[0]).toMatchObject({
+        at: EPOCH,
+        by: { thread: CALLER, machine: "test" },
+      });
+      expect(result.ticket.workState.answers[0]).toMatchObject({
+        question: "Which host needs validation?",
+        text: "Answer: Nick selected the Mini.",
+        questionEventId: question.eventId,
+        by: { thread: CALLER },
+      });
+      expect((yield* h.tickets.list()).tickets[0]?.workState?.answers).toBeUndefined();
+      expect(result.ticket.workState.briefSource).toMatchObject({
+        at: EPOCH,
+        by: { thread: CALLER },
+      });
+      const prompt = ticketStartPrompt((yield* h.tickets.get(ticket.id)).ticket);
+      expect(prompt).toContain("Nick accepted validation only");
+      expect(prompt).toContain("Answer: Nick selected the Mini.");
+      expect(prompt).toContain("Scope: validate only. Done when: measured checks pass.");
+      expect(prompt).toContain(`t3-thread://v1/${CALLER}`);
+      expect(prompt).toContain(question.eventId);
+      expect(prompt).not.toContain("Original broad scope");
+    }),
 );
 it.effect("ticket start refuses mode escalation and read-only callers before launching", () =>
   Effect.gen(function* () {

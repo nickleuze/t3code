@@ -556,6 +556,8 @@ export type WorkModelProjectOptions = typeof WorkModelProjectOptions.Type;
 
 export const WorkModelProjectPreview = Schema.Struct({
   workspaceRoot: Schema.String,
+  /** README identity; may differ from a preserved legacy Ticket ID prefix. */
+  projectIdentity: Schema.optionalKey(Schema.String),
   projectKey: Schema.String,
   scope: Schema.Literals(["personal", "company"]),
   existingHome: Schema.Boolean,

@@ -141,7 +141,7 @@ export const make = Effect.gen(function* () {
           commandId: CommandId.make(id),
           messageId: MessageId.make(id),
           threadId: thread.id,
-          text: `${PREFIX} This turn used tools without recording a ticket entry. Write a handoff with t3_ticket_entry for ${eligible.join(", ")}: what changed, decisions, and Next:. This is a record-keeping request, not new work or approval.`,
+          text: `${PREFIX} This turn used tools without recording a ticket entry. Write a concise handoff with t3_ticket_entry for ${eligible.join(", ")}: what changed and decisions, with the next action in the structured next field. Preserve corrections and accepted scope with their source; do not infer implementation approval. Reuse a stable clientRequestId if retrying. This is record-keeping, not new work or approval. After recording, acknowledge in at most one line; do not repeat the substantive final answer.`,
           attachments: [],
           dispatchMode: { type: "queue_after_active" },
           createdBy: "agent",

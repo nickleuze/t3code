@@ -558,7 +558,7 @@ export function AddProjectSourceScreen() {
   );
 
   return (
-    <AddProjectShell title="Add project">
+    <AddProjectShell title="New or existing project">
       {selectedEnvironment === null ? <EmptyEnvironmentState /> : null}
 
       {environmentOptions.length > 1 ? (
@@ -611,7 +611,7 @@ export function AddProjectSourceScreen() {
             {selectedEnvironment.newProjectsRoot !== null ? (
               <ListRow
                 title="New project"
-                subtitle="Start a new Git repository from a name"
+                subtitle="Choose a name, Area and Project Home"
                 icon={
                   <SymbolView
                     name="plus"
@@ -631,10 +631,10 @@ export function AddProjectSourceScreen() {
               />
             ) : null}
             <ListRow
-              title="Local folder"
+              title="Add existing project"
               subtitle={
                 canCreateProject
-                  ? "Browse a folder on disk"
+                  ? "Register a folder on this machine"
                   : "This connection cannot add projects."
               }
               icon={
@@ -1004,7 +1004,8 @@ export function AddProjectNewScreen(props: { readonly environmentId?: string | s
           input: {},
         }),
   );
-  const inArea = (optionsState.data?.areas.length ?? 0) > 0;
+  const available = optionsState.error ? null : optionsState.data;
+  const inArea = (available?.areas.length ?? 0) > 0;
   const canCreate = useEnvironmentScope(
     environment?.environmentId ?? null,
     AuthOrchestrationOperateScope,
@@ -1020,15 +1021,25 @@ export function AddProjectNewScreen(props: { readonly environmentId?: string | s
           input: {},
         }),
   );
-  const githubTarget = getNewProjectGitHubTarget(discoveryState.data);
+  const canPublish = useEnvironmentScope(
+    environment?.environmentId ?? null,
+    AuthSourceControlWriteScope,
+  );
+  const githubTarget = discoveryState.error ? null : getNewProjectGitHubTarget(discoveryState.data);
   const [name, setName] = useState("");
   const [area, setArea] = useState("");
   const [slug, setSlug] = useState<string | null>(null);
   const [purpose, setPurpose] = useState("");
   const [goal, setGoal] = useState("");
   const [preview, setPreview] = useState<WorkModelProjectPreview | null>(null);
-  const [created, setCreated] = useState<ProjectCreateNewResult | null>(null);
+  const [created, setCreated] = useState<
+    (ProjectCreateNewResult & { readonly machineLabel: string }) | null
+  >(null);
   const [basicCreation, setBasicCreation] = useState(false);
+  const [basicReviewed, setBasicReviewed] = useState(false);
+  const [reviewedGitHub, setReviewedGitHub] = useState<{ readonly account: string | null } | null>(
+    null,
+  );
   const [publishesToGitHub, setPublishesToGitHub] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -1040,11 +1051,18 @@ export function AddProjectNewScreen(props: { readonly environmentId?: string | s
     ...(goal.trim() ? { goal: goal.trim() } : {}),
     adoptExisting: preview?.existingHome ?? false,
   };
+  const reviewMatchesSetup = (!preview || inArea) && (!basicReviewed || !inArea);
   const valid =
     canCreate &&
+    reviewMatchesSetup &&
+    environment !== null &&
+    canCreateProjectInEnvironment(environment.connectionState) &&
     trimmedName.length > 0 &&
-    (optionsState.data !== null || basicCreation) &&
-    (!inArea || (!!area && !!purpose.trim()));
+    !optionsState.isPending &&
+    (inArea
+      ? !!area && available!.areas.some((a) => a.name === area) && !!purpose.trim()
+      : basicCreation);
+  const isReviewed = preview !== null || basicReviewed;
   const pathPreview =
     environment?.newProjectsRoot != null
       ? getNewProjectPathPreview(environment.newProjectsRoot, trimmedName)
@@ -1088,6 +1106,10 @@ export function AddProjectNewScreen(props: { readonly environmentId?: string | s
               setArea("");
               setPreview(null);
               setBasicCreation(false);
+              setBasicReviewed(false);
+              setPublishesToGitHub(false);
+              setReviewedGitHub(null);
+              setError(null);
             }}
           />
         );
@@ -1100,16 +1122,34 @@ export function AddProjectNewScreen(props: { readonly environmentId?: string | s
   const submit = async () => {
     if (!environment || !valid || submittingRef.current) return;
     submittingRef.current = true;
+    setSelectedEnvironmentId(environment.environmentId);
     setError(null);
     setIsSubmitting(true);
     try {
-      if (inArea && preview === null) {
+      if (inArea && !isReviewed) {
         const reviewed = await reviewHome({
           environmentId: environment.environmentId,
           input: { name: trimmedName, ...details },
         });
         if (AsyncResult.isFailure(reviewed)) setError(errorMessage(Cause.squash(reviewed.cause)));
-        else setPreview(reviewed.value);
+        else {
+          setPreview(reviewed.value);
+          setReviewedGitHub(
+            publishesToGitHub && canPublish && !reviewed.value.existingHome ? githubTarget : null,
+          );
+        }
+        return;
+      }
+      if (!isReviewed) {
+        setBasicReviewed(true);
+        setReviewedGitHub(publishesToGitHub && canPublish ? githubTarget : null);
+        return;
+      }
+      if (
+        reviewedGitHub &&
+        (!canPublish || !githubTarget || githubTarget.account !== reviewedGitHub.account)
+      ) {
+        setError("GitHub availability changed. Go back and review the publication option again.");
         return;
       }
       const result = await createNew({
@@ -1117,21 +1157,26 @@ export function AddProjectNewScreen(props: { readonly environmentId?: string | s
         input: { name: trimmedName, ...(inArea ? { workModel: details } : {}) },
       });
       if (AsyncResult.isFailure(result)) {
-        setError(errorMessage(Cause.squash(result.cause)));
+        setError(
+          inArea
+            ? errorMessage(Cause.squash(result.cause))
+            : "Basic creation did not finish. Check the project list before retrying; retrying may create a numbered copy.",
+        );
         setPreview(null);
+        setBasicReviewed(false);
         return;
       }
       const { projectId, workspaceRoot, commitError } = result.value;
       if (commitError !== undefined) {
         Alert.alert("Created without a first commit", commitError);
       }
-      if (publishesToGitHub && githubTarget !== null) {
+      if (reviewedGitHub !== null) {
         void publishRepository({
           environmentId: environment.environmentId,
           input: {
             cwd: workspaceRoot,
             provider: "github",
-            repository: getNewProjectGitHubRepository(githubTarget, workspaceRoot),
+            repository: getNewProjectGitHubRepository(reviewedGitHub, workspaceRoot),
             visibility: "private",
           },
         }).then((publishResult) => {
@@ -1144,7 +1189,7 @@ export function AddProjectNewScreen(props: { readonly environmentId?: string | s
         });
       }
       if (inArea) {
-        setCreated(result.value);
+        setCreated({ ...result.value, machineLabel: environment.label });
         return;
       }
       // The draft screen resolves its project from the client store, so it
@@ -1179,7 +1224,18 @@ export function AddProjectNewScreen(props: { readonly environmentId?: string | s
         <Text selectable className="text-sm text-foreground-muted">
           {created.workspaceRoot}
         </Text>
-        <Text>Create the first Ticket in T3’s web or desktop Ticket board when you are ready.</Text>
+        <Text>
+          Registered in T3 on {created.machineLabel}. The Home and its identity are independent of
+          this machine’s registration.
+        </Text>
+        <Text>
+          Create the first Ticket in T3’s web or desktop Ticket board when you are ready. No work
+          has started.
+        </Text>
+        <Text>
+          Remove the registration later in Project settings on web or desktop; the Home files stay
+          on this machine.
+        </Text>
         <PrimaryActionButton
           label="Done"
           onPress={() =>
@@ -1196,27 +1252,68 @@ export function AddProjectNewScreen(props: { readonly environmentId?: string | s
       {error ? <ErrorBanner message={error} /> : null}
       {environment ? (
         <>
-          {preview ? (
+          <Text>Destination machine: {environment.label}</Text>
+          {!reviewMatchesSetup ? (
+            <Text>Setup changed since review. Go back and review again.</Text>
+          ) : null}
+          {isReviewed ? (
             <>
-              <Text className="text-lg font-t3-bold">Review Project Home</Text>
+              <Text className="text-lg font-t3-bold">Review project setup</Text>
               <Text>
-                {trimmedName} · {area} · {preview.scope}
+                {trimmedName}
+                {preview ? ` · ${area} · ${preview.scope}` : " · Basic creation"}
               </Text>
-              <Text selectable>{preview.workspaceRoot}</Text>
-              <Text>Ticket key: {preview.projectKey}</Text>
-              {preview.existingHome ? (
-                <Text>Adopt this Home. Its files, purpose, Goal and identity are preserved.</Text>
-              ) : (
+              <Text selectable>{preview?.workspaceRoot ?? pathPreview}</Text>
+              {preview ? (
+                <>
+                  <Text>
+                    Project identity (README):{" "}
+                    {preview.projectIdentity ?? "Not reported by this server"}
+                  </Text>
+                  <Text>Ticket ID prefix: {preview.projectKey}</Text>
+                  <Text>
+                    Registration:{" "}
+                    {preview.registeredProjectId
+                      ? "Reuse existing T3 registration"
+                      : "Add this Home to T3"}
+                  </Text>
+                </>
+              ) : null}
+              <Text>
+                GitHub publication:{" "}
+                {preview?.existingHome
+                  ? "Not offered when adopting. Use Publish Repository in the Git menu if needed."
+                  : reviewedGitHub
+                    ? `Private repository ${getNewProjectGitHubRepository(reviewedGitHub, preview?.workspaceRoot ?? pathPreview ?? "")}`
+                    : "None"}
+              </Text>
+              {preview?.existingHome ? (
+                <Text>
+                  Adopt this Home. Its files, purpose, Goal, identity and Ticket ID prefix are
+                  preserved.
+                </Text>
+              ) : preview ? (
                 <Text>
                   {purpose}
                   {goal ? `\nGoal: ${goal}` : ""}
-                  {"\nCreates README, STATUS, AGENTS, TOOLS and a Git repository."}
+                  {
+                    "\nCreates README, STATUS, AGENTS, TOOLS and a local Git repository. GitHub publication is optional."
+                  }
+                </Text>
+              ) : (
+                <Text>
+                  Creates a basic Git repository and opens a thread draft, without a Work Model Area
+                  or Home setup. T3 chooses a numbered name if this folder is taken.
                 </Text>
               )}
               <PrimaryActionButton
                 label="Back"
                 disabled={isSubmitting}
-                onPress={() => setPreview(null)}
+                onPress={() => {
+                  setPreview(null);
+                  setBasicReviewed(false);
+                  setError(null);
+                }}
               />
             </>
           ) : (
@@ -1233,24 +1330,43 @@ export function AddProjectNewScreen(props: { readonly environmentId?: string | s
                 returnKeyType="done"
                 onSubmitEditing={() => void submit()}
               />
-              {optionsState.data === null ? (
+              {available === null ? (
                 <Text>
                   {optionsState.error
-                    ? "Project setup could not be loaded from this machine."
+                    ? "Project setup could not be loaded from this machine. It may be unavailable or unsupported by this server."
                     : "Loading project setup…"}
                 </Text>
               ) : null}
-              {optionsState.error && !basicCreation ? (
+              {optionsState.error || (available && (!inArea || !available.initializerAvailable)) ? (
                 <PrimaryActionButton
-                  label="Use basic creation"
-                  onPress={() => setBasicCreation(true)}
+                  label="Retry setup"
+                  disabled={isSubmitting || optionsState.isPending}
+                  onPress={optionsState.refresh}
                 />
+              ) : null}
+              {available && !inArea ? (
+                <Text>
+                  This machine has no Work Model Areas. Set up an Area here or choose another
+                  machine to create a Project Home.
+                </Text>
+              ) : null}
+              {!inArea && (available || optionsState.error) ? (
+                <>
+                  <Text>
+                    Basic creation makes a Git repository without a Work Model Area or Home setup.
+                  </Text>
+                  <PrimaryActionButton
+                    label={basicCreation ? "Use Work Model setup" : "Use basic creation"}
+                    disabled={isSubmitting}
+                    onPress={() => setBasicCreation((value) => !value)}
+                  />
+                </>
               ) : null}
               {inArea ? (
                 <>
                   <Text className="font-t3-bold">Choose an Area</Text>
                   <ListSection>
-                    {optionsState.data!.areas.map((option, index) => (
+                    {available!.areas.map((option, index) => (
                       <ListRow
                         key={option.name}
                         title={option.name}
@@ -1282,11 +1398,17 @@ export function AddProjectNewScreen(props: { readonly environmentId?: string | s
                     />
                   ))}
                   <Text className="text-sm text-foreground-muted">
-                    {optionsState.data!.projectsRoot}/{area}/{details.slug}
+                    Project Home: {available!.projectsRoot}/{area || "<area>"}/{details.slug}
                   </Text>
+                  {!available!.initializerAvailable ? (
+                    <Text>
+                      This machine is missing project-init. Set it up here to create a new Home. You
+                      can still review and adopt an existing Home.
+                    </Text>
+                  ) : null}
                 </>
               ) : null}
-              {!inArea && pathPreview !== null ? (
+              {!inArea && basicCreation && pathPreview !== null ? (
                 <Text className="px-1 text-sm leading-snug text-foreground-muted" numberOfLines={2}>
                   {trimmedName.length > 0
                     ? `Creates ${pathPreview}`
@@ -1297,13 +1419,16 @@ export function AddProjectNewScreen(props: { readonly environmentId?: string | s
               {machineRows}
             </>
           )}
-          {githubTarget !== null ? (
+          {!isReviewed && githubTarget !== null && canPublish ? (
             <ListSection>
               <ListRow
-                title="Create private repository on GitHub"
+                title="Create private repository on GitHub (optional)"
                 subtitle={
                   trimmedName.length > 0 && pathPreview !== null
-                    ? getNewProjectGitHubRepository(githubTarget, pathPreview)
+                    ? getNewProjectGitHubRepository(
+                        githubTarget,
+                        inArea ? `${available!.projectsRoot}/${area}/${details.slug}` : pathPreview,
+                      )
                     : githubTarget.account
                 }
                 icon={
@@ -1314,9 +1439,11 @@ export function AddProjectNewScreen(props: { readonly environmentId?: string | s
                   />
                 }
                 isFirst
+                disabled={isSubmitting}
                 right={
                   <ThemedSwitch
                     accessibilityLabel="Create private repository on GitHub"
+                    disabled={isSubmitting}
                     value={publishesToGitHub}
                     onValueChange={setPublishesToGitHub}
                   />
@@ -1331,9 +1458,9 @@ export function AddProjectNewScreen(props: { readonly environmentId?: string | s
                 ? preview.existingHome
                   ? "Adopt existing Home"
                   : "Create project"
-                : inArea
-                  ? "Review Home"
-                  : "Create project"
+                : basicReviewed
+                  ? "Create basic project"
+                  : "Review setup"
             }
             disabled={isSubmitting || !valid}
             onPress={() => void submit()}
@@ -1352,7 +1479,8 @@ export function AddProjectNewScreen(props: { readonly environmentId?: string | s
                 />
               }
               isFirst
-              // New project opens from Add project, so going back shows the
+              disabled={isSubmitting}
+              // New project opens from the sources view, so going back shows the
               // other sources. A deep link has nothing behind it.
               onPress={() =>
                 navigation.canGoBack()
@@ -1405,7 +1533,7 @@ export function AddProjectLocalFolderScreen(props: { readonly environmentId?: st
   }, [createProject, environment, isBrowseNavigating, isSubmitting, pathInput]);
 
   return (
-    <AddProjectShell title="Local folder">
+    <AddProjectShell title="Add existing project">
       {error ? <ErrorBanner message={error} /> : null}
       {environment ? (
         <>

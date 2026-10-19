@@ -134,6 +134,7 @@ it.effect("previews without writes, creates standard Home and key, and starts no
       ]);
       const preview = yield* service.preview(draft);
       assert.isFalse(preview.existingHome);
+      assert.equal(preview.projectIdentity, draft.slug);
       assert.isFalse(yield* fs.exists(preview.workspaceRoot));
       const created = yield* service.create(draft);
       assert.equal(created.workspaceRoot, path.join(root, "systems", draft.slug));
@@ -177,6 +178,8 @@ it.effect("requires explicit adoption and preserves files, existing key and Proj
       assert.equal(rejected.reason, "existing-home");
       const preview = yield* service.preview({ ...draft, adoptExisting: true });
       assert.equal(preview.projectKey, "original-key");
+      assert.equal(preview.projectIdentity, draft.slug);
+      assert.equal(preview.registeredProjectId, created.projectId);
       const adopted = yield* service.create({
         ...draft,
         adoptExisting: true,
@@ -390,4 +393,34 @@ it.effect("allows one Idea to originate only one concurrently created Project", 
       assert.equal((yield* tickets.get(idea.id)).decisions.length, 1);
     }),
   ),
+);
+
+it.effect(
+  "reports a missing initializer before creation while allowing existing Home adoption",
+  () =>
+    withHome(({ root }) =>
+      Effect.gen(function* () {
+        const service = yield* WorkModel.WorkModelProjects;
+        const fs = yield* FileSystem.FileSystem;
+        const projects = yield* Projects.ProjectService;
+        const home = yield* service.create(draft);
+        yield* Effect.gen(function* () {
+          const unavailable = yield* WorkModel.WorkModelProjects;
+          assert.isFalse((yield* unavailable.options).initializerAvailable);
+          const failure = yield* Effect.flip(unavailable.preview({ ...draft, slug: "new-home" }));
+          assert.equal(failure.reason, "initializer-unavailable");
+          assert.isFalse(yield* fs.exists(`${root}/systems/new-home`));
+          const adopted = yield* unavailable.create({ ...draft, adoptExisting: true });
+          assert.equal(adopted.projectId, home.projectId);
+          assert.equal((yield* projects.snapshot).projects.length, 1);
+        }).pipe(
+          Effect.provide(
+            WorkModel.layer({
+              projectsRoot: root,
+              initializer: `${root}/missing-project-init`,
+            }).pipe(Layer.provide(ProcessRunner.layer)),
+          ),
+        );
+      }),
+    ),
 );

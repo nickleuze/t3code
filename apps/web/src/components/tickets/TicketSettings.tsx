@@ -246,7 +246,12 @@ function EnvironmentTicketSettings({ environmentId }: { environmentId: Environme
         />
       </label>
       <section aria-label="Ticket project mappings" className="grid gap-3">
-        <h3 className="font-medium">Project mapping</h3>
+        <h3 className="font-medium">Ticket ID prefixes and local registrations</h3>
+        <p className="text-sm text-muted-foreground">
+          A prefix keeps existing Ticket IDs stable, including legacy prefixes. Map it to this
+          machine’s T3 registration to launch work here. The durable Project identity lives in its
+          Home README; changing this mapping does not rename it or move files.
+        </p>
         {AsyncResult.isSuccess(mappings) ? (
           mappings.value.projects.map((mapping) => (
             <ProjectMapping
@@ -285,7 +290,7 @@ function ProjectMapping({
   return (
     <div className="grid gap-2 rounded-lg border p-3">
       <p className="text-sm font-medium">
-        {mapping.key}
+        Ticket ID prefix: {mapping.key}
         {!mapping.projectId && mapping.suggestedProjectId ? " · Suggested local match" : ""}
       </p>
       <Input
@@ -296,11 +301,11 @@ function ProjectMapping({
         disabled={busy || !allowed}
       />
       <TicketPicker
-        label={`Local project for ${mapping.key}`}
+        label={`Registration on this machine for ${mapping.key}`}
         value={selected}
         options={[
           { value: "none", label: "Unmapped" },
-          ...projects.map((p) => ({ value: p.id, label: p.title })),
+          ...projects.map((p) => ({ value: p.id, label: `${p.title} · ${p.workspaceRoot}` })),
         ]}
         onChange={setSelected}
         disabled={busy || !allowed}

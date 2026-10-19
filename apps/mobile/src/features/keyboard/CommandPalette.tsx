@@ -189,7 +189,7 @@ export function CommandPalette(props: {
       {
         key: "addProject",
         kind: "action",
-        title: "Add project",
+        title: "New or existing project",
         searchTerms: ["folder", "clone", "repository", "git"],
         run: () => navigation.navigate("NewTaskSheet", { screen: "AddProject" }),
       },

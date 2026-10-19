@@ -68,7 +68,7 @@ const ProjectReadTool = Tool.make("t3_project_read", {
 const ProjectCreateTool = Tool.make("t3_project_create", {
   ...shared,
   description:
-    "Register a project directory through the existing project service. Set createWorkspaceRootIfMissing to create a directory. Omit workspaceRoot to start a new project from just its title: the app makes a Git repository for it in its own projects folder, with a README, an icon, and a first commit (commitError says why a commit failed; the project exists either way). Each call creates a new request; an existing registered workspace is rejected. Clone separately with t3_project_clone when needed.",
+    "Register a project directory through the existing project service. Set createWorkspaceRootIfMissing to create a directory. Omit workspaceRoot for basic creation from a title: the app makes a Git repository in its standard projects folder, with a README, an icon, and a first commit (commitError says why a commit failed; the project exists either way). Basic creation and registration do not establish Work Model Area/Home metadata; use the user-reviewed New project setup for that. Each call creates a new request; an existing registered workspace is rejected. Clone separately with t3_project_clone when needed.",
   parameters: Schema.Struct({
     ...ProjectCreatePayload.fields,
     workspaceRoot: Schema.optional(ProjectCreatePayload.fields.workspaceRoot),

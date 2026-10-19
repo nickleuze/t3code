@@ -1,27 +1,50 @@
 # Settings and project overrides
 
-## Creating a Work Model Project
+## New and existing projects
 
-On web and desktop, choose **New Project** or open an Inbox Idea and choose
-**Create Project from Idea**. Pick the machine, an existing Area, a name and a
-purpose. You can add a current Goal. **Review** shows the Home path and Ticket
-key before **Create Project** creates it through that machine's `project-init`.
-It creates the standard README, STATUS, AGENTS and TOOLS files, a `.gitignore`
-and a Git repository, then registers the Home in T3.
+Use the sidebar’s **New or existing project** action, or search the command
+palette for **New project** or **Add existing project**. New project opens one
+setup form for the name, destination machine, Area and purpose. Adding an
+existing project registers a folder on that machine or clones a repository.
+It does not establish or move a Work Model Project Home.
 
-If the Home already exists, **Adopt existing Home** preserves its files,
-purpose, Goal, identity and existing Ticket key. If registration fails after
-creation, keep the same destination and review it again to adopt and resume.
+For a Work Model Project, choose an existing Area and optionally a current
+Goal. **Review setup** shows the destination Home, README identity, Ticket ID
+prefix and local T3 registration before you create it. You can go back to edit
+or cancel without creating anything. Creation uses that machine’s `project-init`
+to make README, STATUS, AGENTS, TOOLS, `.gitignore` and a local Git repository.
+Publishing a private GitHub repository is optional and appears in the review.
 
-Creating from an Idea closes that Idea as the Project's origin and keeps its
-history. The success screen offers **Create first Ticket** as a separate step.
-Starting work is an explicit action on that Ticket.
+A missing `project-init` prevents a new Home, but you can still review and
+**Adopt existing Home**. Adoption preserves files, purpose, Goal, identity and
+any legacy Ticket ID prefix. Adoption does not publish a new GitHub repository;
+use **Publish Repository** in the Git menu if needed. If registration fails after files were created,
+keep the same destination and review it again to adopt and resume. This avoids
+creating a second Home.
 
-Native mobile's **New project** form also supports Area selection, Home review
-and adoption. Create its first Ticket in the web or desktop Ticket board.
-Machines without Work Model Areas keep T3's standard creation flow. When setup
-discovery fails on an older server, **Use basic creation** explicitly chooses
-its standard T3 projects folder instead.
+A host without Work Model Areas needs its own setup. You can choose another
+machine or retry after setup is ready. **Use basic creation** explicitly chooses
+a Git repository in the host’s standard T3 folder, without Work Model metadata.
+If a basic-creation request fails, check the project list before retrying: a
+retry can create a numbered copy. This fallback is also available when setup discovery is unavailable, including
+on older servers. Basic creation opens a thread draft after success.
+
+An Inbox Idea offers **New project from Idea**. The reviewed creation closes
+that Idea as the Project’s origin and preserves its history. The success screen
+links to **Project settings** and offers **Create first Ticket** separately;
+creating the Project starts no work. Removing a registration in Project settings
+keeps the Home files; the removal confirmation explains which conversation
+history is deleted. Use **Add existing project** to register the Home again later.
+
+Native mobile has the same Area, prerequisite, review and adoption flow.
+Create its first Ticket and use Project settings (including removal) on web or desktop.
+An older server may
+not report the README identity; the review labels that missing information.
+
+The README’s Project identity belongs to the Home. A T3 registration refers to
+that Home on one machine. **Settings → Tickets** maps preserved Ticket ID prefixes
+to those local registrations; changing a mapping neither renames historical IDs
+nor moves a Home. Legacy prefixes can legitimately differ from README identity.
 
 ## Settings scope
 

@@ -137,6 +137,87 @@ it.effect(
       assert.equal(observed.at(-1)?.kind, "pr_closed");
     }),
 );
+it.effect("supporting and main PR merges leave a two-PR ticket in review until acceptance", () =>
+  Effect.gen(function* () {
+    const context = yield* Layer.build(
+      Tickets.layer.pipe(
+        Layer.provide(Projects.layer),
+        Layer.provide(NodeCrypto.layer),
+        Layer.provide(Sqlite.layerMemory),
+      ),
+    );
+    const tickets = yield* Tickets.TicketService.pipe(Effect.provideContext(context));
+    const { ticket } = yield* tickets.upsert({ title: "Two-PR finish condition" });
+    const threadId = ThreadId.make("two-pr-work");
+    yield* tickets.link({ id: ticket.id, threadId, role: "work", startWork: true });
+    const worker = yield* Observations.make.pipe(
+      Effect.provideContext(context),
+      Effect.provide(Layer.mock(Sink.EventSinkV2)({})),
+    );
+    const snapshot = (main: "open" | "merged", supporting: "open" | "merged") =>
+      worker.observe({
+        sequence: 1,
+        commandId: CommandId.make("live-pr-sync"),
+        event: {
+          type: "thread.pull-request-synced",
+          payload: {
+            id: threadId,
+            title: "Implementation and CI",
+            pullRequests: [main, supporting].map((state, index) => ({
+              number: index + 19,
+              url: `https://fixture.local/pull/${index + 19}`,
+              source: "manual",
+              snapshot: { state, isDraft: false, title: index === 0 ? "Main" : "CI" },
+            })),
+          },
+        },
+      } as unknown as OrchestrationV2StoredEvent);
+
+    yield* snapshot("open", "open");
+    yield* worker.drain;
+    yield* snapshot("open", "merged");
+    yield* worker.drain;
+    assert.equal((yield* tickets.get(ticket.id)).ticket.status, "in_review");
+    assert.deepStrictEqual((yield* tickets.get(ticket.id)).ticket.workState?.prs, [
+      "https://fixture.local/pull/19",
+      "https://fixture.local/pull/20",
+    ]);
+    const afterSupporting = (yield* tickets.timeline({ id: ticket.id })).events;
+    assert.deepStrictEqual(
+      afterSupporting.flatMap((e) => (e.type === "auto" && e.kind === "pr_merged" ? [e.ref] : [])),
+      ["https://fixture.local/pull/20"],
+    );
+    yield* snapshot("open", "merged");
+    yield* worker.drain;
+    assert.deepStrictEqual((yield* tickets.timeline({ id: ticket.id })).events, afterSupporting);
+    yield* snapshot("merged", "merged");
+    yield* worker.drain;
+    assert.equal((yield* tickets.get(ticket.id)).ticket.status, "in_review");
+
+    yield* tickets.entry({ id: ticket.id, kind: "result", text: "Finish condition verified" });
+    yield* tickets.action({ id: ticket.id, action: "accept" });
+    const accepted = yield* tickets.get(ticket.id);
+    assert.equal(accepted.ticket.status, "done");
+    yield* tickets.observe({ threadId, key: "late-link", kind: "pr_linked", ref: "late-pr" });
+    yield* tickets.observe({ threadId, key: "late-merge", kind: "pr_merged", ref: "late-pr" });
+    yield* tickets.observe({ threadId, key: "child-result", kind: "task_done", ref: "child" });
+    yield* tickets.entry({ id: ticket.id, kind: "result", text: "Later child verification" });
+    yield* snapshot("merged", "merged");
+    yield* worker.drain;
+    yield* tickets.rebuild;
+    const after = yield* tickets.get(ticket.id);
+    assert.equal(after.ticket.status, "done");
+    assert.equal(after.ticket.statusSetAt, accepted.ticket.statusSetAt);
+    assert.isFalse(after.ticket.workState?.resultReady);
+    assert.deepStrictEqual(
+      (yield* tickets.timeline({ id: ticket.id })).events.flatMap((e) =>
+        e.type === "stage" && e.stage === "done" ? [e.reason] : [],
+      ),
+      ["accepted"],
+    );
+  }),
+);
+
 it.effect("an unrelated metadata update never replays a preexisting goal or its iterations", () =>
   Effect.gen(function* () {
     const observed: Tickets.TicketObservation[] = [];

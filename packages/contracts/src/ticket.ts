@@ -50,6 +50,23 @@ export type TicketGithubIssue = typeof TicketGithubIssue.Type;
 const TicketCreatedBy = Schema.Literals(["user", "agent"]);
 const TicketCreationSource = Schema.Literals(["web", "mobile", "mcp", "github"]);
 
+export const TicketAuthor = Schema.Struct({
+  actor: Schema.Literals(["user", "agent"]),
+  model: Schema.optional(Schema.String),
+  thread: Schema.optional(ThreadId),
+  machine: TrimmedNonEmptyString,
+});
+export type TicketAuthor = typeof TicketAuthor.Type;
+export const TicketEntryKind = Schema.Literals([
+  "decision",
+  "progress",
+  "blocker",
+  "question",
+  "result",
+  "handoff",
+  "note",
+]);
+
 export const Ticket = Schema.Struct({
   id: TicketId,
   /** Derived `<projectKey>-<ULID suffix>`; null for Ideas without a project or area. */
@@ -59,14 +76,71 @@ export const Ticket = Schema.Struct({
   record: Schema.optional(Schema.Boolean),
   workState: Schema.optional(
     Schema.Struct({
-      decisions: Schema.Array(Schema.Struct({ eventId: Schema.String, text: Schema.String })),
-      questions: Schema.Array(Schema.Struct({ eventId: Schema.String, text: Schema.String })),
+      decisions: Schema.Array(
+        Schema.Struct({
+          eventId: Schema.String,
+          text: Schema.String,
+          at: Schema.optional(IsoDateTime),
+          by: Schema.optional(TicketAuthor),
+        }),
+      ),
+      questions: Schema.Array(
+        Schema.Struct({
+          eventId: Schema.String,
+          text: Schema.String,
+          at: Schema.optional(IsoDateTime),
+          by: Schema.optional(TicketAuthor),
+        }),
+      ),
+      answers: Schema.optional(
+        Schema.Array(
+          Schema.Struct({
+            eventId: Schema.String,
+            text: Schema.String,
+            questionEventId: Schema.String,
+            question: Schema.String,
+            at: IsoDateTime,
+            by: TicketAuthor,
+          }),
+        ),
+      ),
+      briefSource: Schema.optional(
+        Schema.NullOr(
+          Schema.Struct({
+            eventId: Schema.String,
+            at: IsoDateTime,
+            by: TicketAuthor,
+          }),
+        ),
+      ),
       lastHandoff: Schema.NullOr(
         Schema.Struct({ text: Schema.String, next: Schema.optional(Schema.String) }),
       ),
       prs: Schema.Array(Schema.String),
       blocked: Schema.Boolean,
       resultReady: Schema.optional(Schema.Boolean),
+      nextAction: Schema.optional(
+        Schema.NullOr(
+          Schema.Struct({
+            eventId: Schema.String,
+            text: Schema.String,
+            at: IsoDateTime,
+            by: TicketAuthor,
+          }),
+        ),
+      ),
+      currentEvidence: Schema.optional(
+        Schema.NullOr(
+          Schema.Struct({
+            eventId: Schema.String,
+            kind: TicketEntryKind,
+            text: Schema.String,
+            next: Schema.optional(Schema.String),
+            at: IsoDateTime,
+            by: TicketAuthor,
+          }),
+        ),
+      ),
     }),
   ),
   projectId: Schema.NullOr(ProjectId),
@@ -143,22 +217,6 @@ export class TicketError extends Schema.TaggedError<TicketError>()("TicketError"
   cause: Schema.optional(Schema.Defect()),
 }) {}
 
-export const TicketAuthor = Schema.Struct({
-  actor: Schema.Literals(["user", "agent"]),
-  model: Schema.optional(Schema.String),
-  thread: Schema.optional(ThreadId),
-  machine: TrimmedNonEmptyString,
-});
-export type TicketAuthor = typeof TicketAuthor.Type;
-export const TicketEntryKind = Schema.Literals([
-  "decision",
-  "progress",
-  "blocker",
-  "question",
-  "result",
-  "handoff",
-  "note",
-]);
 export const TicketReferenceKind = Schema.Literals(["thread", "goal", "task", "pr"]);
 const EventBase = {
   eventId: TrimmedNonEmptyString,

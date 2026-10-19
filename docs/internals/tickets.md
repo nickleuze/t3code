@@ -18,9 +18,12 @@ next rebuild will discard that edit. Local project paths and mappings stay local
 
 A stage advances automatically only on a witnessed transition. Linking an old
 thread, importing files, rebuilding, or seeing an old goal's history must not imply
-that work just started. Only current work can advance on its non-draft PR link or
-merge; an agent result requires human acceptance. This protects deliberate stage
-changes from stale history and distinguishes a finished turn from finished work.
+that work just started. Current work's non-draft PR links and merges can move
+active work to In review. A supporting PR may merge before the Ticket's finish
+condition is met, so completion requires explicit acceptance. Historical stage
+events retain their recorded meaning, including older merge-driven Done events;
+import and rebuild never reinterpret them. This protects deliberate stage changes
+from stale history and distinguishes a finished turn from finished work.
 
 The [observation](../../apps/server/src/tickets/TicketObservations.ts) and
 [handoff-nudge](../../apps/server/src/tickets/TicketHandoffNudge.ts) workers read the
@@ -29,6 +32,18 @@ orchestration events. Reconciliation snapshots establish baselines, not activity
 changing these workers to replay history would manufacture transitions or dispatch
 new agent work from an old completed turn. The nudge also checks RuntimePolicy:
 record-keeping must not turn read-only work into an automatic write request.
+
+Planning outcomes are different from write nudges: the server records only source
+pointers and the terminal Run outcome, without dispatching a provider or changing
+stage/permissions. [TicketPlanOutcome](../../apps/server/src/tickets/TicketPlanOutcome.ts)
+initializes a local cursor at the latest sequence on first activation, then recovers
+only subsequent missed events, including restart interruptions. Advance it after
+all linked-ticket writes; per-run/per-ticket entry keys handle a crash after a
+write. Both entry time and ID use the source completion time so delayed delivery
+cannot cross a newer acceptance/reopen boundary or overwrite later evidence.
+The automatic note leaves blockers and authored next actions intact; a current
+handoff remains in the launch Brief beside the source note. No prior history is
+backfilled, and the cursor is delivery state, not part of Ticket sync/rebuild.
 
 ## Launch decisions
 

@@ -21,6 +21,7 @@ import {
   ProjectWriteFileError,
   ProjectCreateNewInput,
   WorkModelProjectDraft,
+  WorkModelProjectPreview,
 } from "./project.ts";
 
 const decodeProjectCreatePayload = Schema.decodeUnknownSync(ProjectCreatePayload);
@@ -282,3 +283,20 @@ effectIt.effect("an icon kind from a newer server shows the default icon", () =>
     assert.strictEqual(broken._tag, "Failure");
   }),
 );
+
+it("accepts older Project previews and keeps README identity separate from a legacy Ticket prefix", () => {
+  const legacy = {
+    workspaceRoot: "/home/systems/project",
+    projectKey: "legacy-t3-project",
+    scope: "personal" as const,
+    existingHome: true,
+    registeredProjectId: ProjectId.make("local-registration"),
+    files: [],
+  };
+  const decode = Schema.decodeUnknownSync(WorkModelProjectPreview);
+  expect(decode(legacy)).toEqual(legacy);
+  expect(decode({ ...legacy, projectIdentity: "project" })).toEqual({
+    ...legacy,
+    projectIdentity: "project",
+  });
+});

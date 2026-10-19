@@ -42,7 +42,7 @@ import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { InlineButton } from "../ui/button";
 import { resolveProjectSettings } from "@t3tools/shared/projectSettings";
 
-// Picker value for the "Add project" row; real entries are keyed by logical
+// Picker value for the "New or existing project" row; real entries are keyed by logical
 // project key.
 const ADD_PROJECT_VALUE = "add-project";
 
@@ -179,12 +179,12 @@ export function DraftHeroHeadline({
     activeProject !== null && isScratchProject(activeProject, scratchWorkspaceRoot);
 
   // {value, label} items let Base UI drive the combobox selection while the
-  // popup search filters the same collection. "Add project" is an action, not
+  // popup search filters the same collection. "New or existing project" is an action, not
   // a project, so it only trails the unfiltered list.
   const pickerItems = useMemo<readonly PickerItem[]>(
     () => [
       ...menuEntries.map(({ group }) => ({ value: group.projectKey, label: group.displayName })),
-      { value: ADD_PROJECT_VALUE, label: "Add project" },
+      { value: ADD_PROJECT_VALUE, label: "New or existing project" },
     ],
     [menuEntries],
   );

@@ -5675,7 +5675,7 @@ export default function Sidebar() {
                     className="inline-flex cursor-pointer items-center gap-1.5 rounded-md border border-sidebar-border px-2.5 py-1 text-2xs font-medium text-sidebar-muted-foreground transition-colors hover:bg-sidebar-row-hover hover:text-sidebar-foreground"
                   >
                     <PlusIcon className="-mx-0.5 size-3" />
-                    Add project
+                    New or existing project
                   </button>
                 </>
               ) : scopedProjectGroup ? (

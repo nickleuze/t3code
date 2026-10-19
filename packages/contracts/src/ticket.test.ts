@@ -21,6 +21,7 @@ const ticket = {
   deletedAt: null,
 };
 const decodeTicket = Schema.decodeUnknownSync(Ticket);
+const encodeTicket = Schema.encodeSync(Ticket);
 const decodeList = Schema.decodeUnknownSync(TicketListResult);
 const decodeUpsert = Schema.decodeUnknownSync(TicketUpsertInput);
 const isTicket = Schema.is(Ticket);
@@ -91,4 +92,61 @@ it("defaults missing legacy issue close time to null and preserves known close t
   const decode = Schema.decodeSync(TicketGithubIssue);
   expect(decode(issue).closedAt).toBeNull();
   expect(decode({ ...issue, closedAt: ticket.updatedAt }).closedAt).toBe(ticket.updatedAt);
+});
+
+it("reads older work state without current evidence and round-trips optional dated evidence", () => {
+  const workState = { decisions: [], questions: [], lastHandoff: null, prs: [], blocked: false };
+  expect(decodeTicket({ ...ticket, workState }).workState).toEqual(workState);
+  const currentEvidence = {
+    eventId: "entry",
+    kind: "result",
+    text: "Focused checks passed",
+    next: "Nick reviews",
+    at: ticket.updatedAt,
+    by: { actor: "agent", machine: "local", model: "provider-neutral" },
+  };
+  const nextAction = {
+    eventId: "handoff",
+    text: "Review",
+    at: ticket.updatedAt,
+    by: currentEvidence.by,
+  };
+  const record = decodeTicket({
+    ...ticket,
+    workState: { ...workState, currentEvidence, nextAction },
+  });
+  expect(decodeTicket(encodeTicket(record)).workState?.nextAction).toEqual(nextAction);
+  expect(decodeTicket(encodeTicket(record)).workState?.currentEvidence).toEqual(currentEvidence);
+});
+
+it("keeps older decision summaries readable and round-trips optional provenance and answers", () => {
+  const decision = { eventId: "scope", text: "Accepted validation only" };
+  const old = { decisions: [decision], questions: [], lastHandoff: null, prs: [], blocked: false };
+  expect(decodeTicket({ ...ticket, workState: old }).workState).toEqual(old);
+  const source = {
+    eventId: "source",
+    at: ticket.updatedAt,
+    by: { actor: "user", machine: "home" },
+  };
+  const workState = {
+    ...old,
+    decisions: [{ ...decision, ...source }],
+    briefSource: source,
+    answers: [
+      {
+        ...source,
+        questionEventId: "question",
+        question: "Which scope?",
+        text: "Answer: validation",
+      },
+    ],
+  };
+  expect(decodeTicket(encodeTicket(decodeTicket({ ...ticket, workState }))).workState).toEqual(
+    workState,
+  );
+  const legacySummary = Schema.Struct({ eventId: Schema.String, text: Schema.String });
+  expect(Schema.decodeUnknownSync(legacySummary)(workState.decisions[0])).toEqual({
+    eventId: "source",
+    text: decision.text,
+  });
 });

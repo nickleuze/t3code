@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vite-plus/test";
-import { TicketId, type TicketEvent } from "@t3tools/contracts";
+import { ThreadId, TicketId, type TicketEvent } from "@t3tools/contracts";
 import { deterministicEventId, projectTicket, ticketIds } from "./TicketRecord.ts";
 
 const id = TicketId.make("01K79000000000000000000000");
@@ -101,6 +101,7 @@ describe("work record projection", () => {
       extra = {},
     ): TicketEvent => ({
       ...created,
+      by: { actor: "agent", machine: "A", thread: ThreadId.make("work") },
       eventId: `01K7900000000000000000000${n}-A`,
       type: "entry",
       kind,

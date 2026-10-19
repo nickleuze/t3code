@@ -2,6 +2,8 @@
 import * as NodeCrypto from "node:crypto";
 import { TicketId, ThreadId, type Ticket, type TicketEvent } from "@t3tools/contracts";
 
+import { deriveTicketWorkState } from "@t3tools/shared/ticket";
+
 const ALPHABET = "0123456789ABCDEFGHJKMNPQRSTVWXYZ";
 function base32(value: bigint, length: number): string {
   let encoded = "";
@@ -100,13 +102,6 @@ export function projectTicket(events: readonly TicketEvent[]): TicketRecordState
     if (event.type === "restored") ticket.deletedAt = null;
     if (event.at > ticket.updatedAt) ticket.updatedAt = event.at;
   }
-  entries.sort((a, b) => a.at.localeCompare(b.at) || a.eventId.localeCompare(b.eventId));
-  const superseded = new Set(entries.flatMap((e) => e.supersedes ?? []));
-  const resolved = new Set(entries.flatMap((e) => e.resolves ?? []));
-  const latestByThread = new Map<string, (typeof entries)[number]>();
-  for (const entry of entries)
-    if (["blocker", "progress", "result", "handoff"].includes(entry.kind))
-      latestByThread.set(entry.by.thread ?? entry.by.machine, entry);
   Object.assign(ticket, {
     links: [...references.values()]
       .filter((e) => e.kind === "thread")
@@ -119,31 +114,29 @@ export function projectTicket(events: readonly TicketEvent[]): TicketRecordState
         machineLabel: e.machineLabel,
       })),
   });
-  const decisions = entries.filter((e) => e.kind === "decision" && !superseded.has(e.eventId));
-  const questions = entries.filter((e) => e.kind === "question" && !resolved.has(e.eventId));
-  const lastHandoff = entries.findLast((e) => e.kind === "handoff") ?? null;
-  const blocked = [...latestByThread.values()].some(
-    (e) => e.kind === "blocker" && !resolved.has(e.eventId) && !superseded.has(e.eventId),
-  );
+  const {
+    decisions,
+    answers,
+    questions,
+    briefSource,
+    lastHandoff,
+    blockers,
+    currentEvidence,
+    nextAction,
+    resultReady,
+  } = deriveTicketWorkState(sorted, ticket.status);
+  const blocked = blockers.length > 0;
   Object.assign(ticket, {
     workState: {
-      decisions: decisions.map((e) => ({ eventId: e.eventId, text: e.text })),
-      questions: questions.map((e) => ({ eventId: e.eventId, text: e.text })),
+      decisions: decisions.map((e) => ({ eventId: e.eventId, text: e.text, at: e.at, by: e.by })),
+      answers,
+      questions: questions.map((e) => ({ eventId: e.eventId, text: e.text, at: e.at, by: e.by })),
+      briefSource,
       lastHandoff,
       blocked,
-      resultReady:
-        ticket.status !== "done" &&
-        ticket.status !== "dropped" &&
-        entries.some(
-          (e) =>
-            e.kind === "result" &&
-            !sorted.some(
-              (later) =>
-                later.eventId > e.eventId &&
-                later.type === "stage" &&
-                ["reopen", "start_work", "accepted"].includes(later.reason),
-            ),
-        ),
+      resultReady,
+      currentEvidence,
+      nextAction,
       prs: [...references.values()].filter((e) => e.kind === "pr").map((e) => e.ref),
     },
   });
