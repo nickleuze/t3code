@@ -280,7 +280,12 @@ export function EnvironmentDeploymentStatus({
       ? serverEnvironment.deploymentsLive({ environmentId: environment.environmentId, input: {} })
       : null,
   );
-  const status = query.data ? environmentDeploymentStatus(query.data.deployments) : null;
+  const status = query.data
+    ? environmentDeploymentStatus(
+        query.data.deployments,
+        environment.serverConfig?.environment.serverVersion,
+      )
+    : null;
   if (status === null) return null;
   return (
     <span

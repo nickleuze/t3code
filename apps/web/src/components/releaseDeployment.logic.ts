@@ -294,9 +294,18 @@ export function releaseToResume(
 /** Connections settings: the latest release on one host, read-only. */
 export function environmentDeploymentStatus(
   records: ReadonlyArray<HostDeployment>,
+  serverVersion?: string,
 ): { readonly text: string; readonly reason: string | null; readonly stopped: boolean } | null {
   const latest = latestHostDeployment(records);
   if (latest === null) return null;
+  // A stopped release the host has since moved past, e.g. by a manual install, is moot.
+  if (
+    STOPPED.has(latest.status) &&
+    serverVersion !== undefined &&
+    compareUpdateVersions(serverVersion, latest.request.version) >= 0
+  ) {
+    return null;
+  }
   return {
     text: `${latest.request.version} · ${hostDeploymentStatusLabel(latest)}`,
     reason: latest.reason,

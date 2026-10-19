@@ -79,6 +79,9 @@ export class DesktopAppUpdate extends Context.Service<
     /** While a release deployment holds the updater, runs and commits from
         anyone else are refused. `undefined` releases it. */
     readonly reserve: (deployment: string | undefined) => Effect.Effect<void>;
+    /** Withdraws a prepared install that will not be committed. The desktop
+        app holds one preparation at a time and refuses new runs meanwhile. */
+    readonly release: (requestId: string) => Effect.Effect<void>;
   }
 >()("t3/desktopUpdate/DesktopAppUpdate") {}
 
@@ -297,6 +300,7 @@ export const make = Effect.fn("desktopUpdate.desktopAppUpdate.make")(function* (
     run,
     commit,
     reserve: (deployment) => Ref.set(reservedBy, deployment),
+    release: (requestId) => receiver.cancelDesktopUpdate(requestId).pipe(Effect.ignore),
   });
 });
 

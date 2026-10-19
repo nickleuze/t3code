@@ -226,25 +226,30 @@ const make = Effect.gen(function* () {
         .pipe(
           Effect.mapError((cause) => new HostDeploymentBlocked({ reason: cause.reason, cause })),
         );
-      if (prepared.targetVersion !== record.request.version) {
-        return yield* new HostDeploymentBlocked({
-          reason: `The update feed now offers ${prepared.targetVersion}; this deployment is pinned to ${record.request.version}.`,
-        });
-      }
-      if (prepared.downloadedSha512 !== artifact.sha512) {
-        return yield* new HostDeploymentBlocked({
-          reason:
-            prepared.downloadedSha512 === undefined
-              ? "The desktop app did not report the downloaded artifact's digest, so it cannot be matched to the approved release."
-              : "The downloaded artifact does not match the approved release's digest.",
-        });
-      }
-      if (prepared.desktopUpdateToken === undefined) {
+      const token = prepared.desktopUpdateToken;
+      if (token === undefined) {
         return yield* new HostDeploymentBlocked({
           reason: "The desktop app did not return an install token.",
         });
       }
-      return prepared.desktopUpdateToken;
+      // A refused artifact must not hold the desktop app's one preparation, or a retry is refused.
+      const refuse = (reason: string) =>
+        desktopAppUpdate
+          .release(token)
+          .pipe(Effect.andThen(Effect.fail(new HostDeploymentBlocked({ reason }))));
+      if (prepared.targetVersion !== record.request.version) {
+        return yield* refuse(
+          `The update feed now offers ${prepared.targetVersion}; this deployment is pinned to ${record.request.version}.`,
+        );
+      }
+      if (prepared.downloadedSha512 !== artifact.sha512) {
+        return yield* refuse(
+          prepared.downloadedSha512 === undefined
+            ? "The desktop app did not report the downloaded artifact's digest, so it cannot be matched to the approved release."
+            : "The downloaded artifact does not match the approved release's digest.",
+        );
+      }
+      return token;
     });
 
   const blockingRunReason = (blocking: ReadonlyArray<{ readonly threadId: string }>) =>
@@ -315,6 +320,7 @@ const make = Effect.gen(function* () {
     Effect.gen(function* () {
       // Prepare failures mean the feed changed (blocked); later ones are failed attempts.
       let phase: "prepare" | "backup" | "commit" = "prepare";
+      let prepared: string | undefined;
       yield* Effect.gen(function* () {
         const record = yield* requireRecord(releaseId).pipe(Effect.orDie);
         yield* setStep(releaseId, "waiting", "idle", "Waiting for this host to be idle.");
@@ -326,6 +332,7 @@ const make = Effect.gen(function* () {
           `Backing up state before installing ${record.request.version}.`,
         );
         const token = yield* prepare(record);
+        prepared = token;
         phase = "backup";
         const from = record.from ?? (yield* host.runtimeIdentity);
         const backup = yield* host.backup({ releaseId, from }).pipe(
@@ -354,6 +361,12 @@ const make = Effect.gen(function* () {
         // Reopen before recording the outcome, so a stopped deployment never holds the gate.
         Effect.catch((cause) =>
           reopenGate.pipe(
+            // A failed backup leaves the preparation uncommitted; free it for a retry.
+            Effect.andThen(
+              phase === "backup" && prepared !== undefined
+                ? desktopAppUpdate.release(prepared)
+                : Effect.void,
+            ),
             Effect.andThen(
               finish(
                 releaseId,
@@ -433,6 +446,8 @@ const make = Effect.gen(function* () {
         yield* finish(releaseId, "blocked", "download", downloaded.failure.reason);
         return;
       }
+      // The install re-prepares under the gate; this check's preparation would refuse it.
+      yield* desktopAppUpdate.release(downloaded.success);
       const publishedAt = yield* nowIso;
       record = yield* update(releaseId, (current) => ({
         ...current,

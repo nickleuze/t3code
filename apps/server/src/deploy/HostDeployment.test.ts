@@ -88,6 +88,8 @@ interface Fakes {
   commits: number;
   prunes: Array<number>;
   reservations: Array<string | undefined>;
+  /** Like the desktop app, one unexpired preparation refuses further runs. */
+  prepared: string | undefined;
   resumes: number;
 }
 
@@ -104,6 +106,7 @@ function makeFakes(overrides: Partial<Fakes> = {}): Fakes {
     commits: 0,
     prunes: [],
     reservations: [],
+    prepared: undefined,
     resumes: 0,
     ...overrides,
   };
@@ -135,16 +138,24 @@ function makeLayer(fakes: Fakes, environmentId: EnvironmentId = MINI) {
       DesktopAppUpdate.DesktopAppUpdate.of({
         available: true,
         run: () =>
-          Effect.sync(() => {
+          Effect.suspend(() => {
+            if (fakes.prepared !== undefined) {
+              return Effect.fail(
+                new ServerSelfUpdateError({
+                  reason: "A prepared desktop update is already in progress.",
+                }),
+              );
+            }
             fakes.runs += 1;
-            return {
+            fakes.prepared = `token-${fakes.runs}`;
+            return Effect.succeed({
               targetVersion: fakes.offeredVersion,
               method: "desktop-app" as const,
               desktopUpdateToken: `token-${fakes.runs}`,
               ...(fakes.offeredSha512 === undefined
                 ? {}
                 : { downloadedSha512: fakes.offeredSha512 }),
-            };
+            });
           }),
         commit: () =>
           Effect.suspend(() => {
@@ -154,6 +165,10 @@ function makeLayer(fakes: Fakes, environmentId: EnvironmentId = MINI) {
               : Effect.fail(new ServerSelfUpdateError({ reason: "Normal Quit timed out." }));
           }),
         reserve: (deployment) => Effect.sync(() => void fakes.reservations.push(deployment)),
+        release: (requestId) =>
+          Effect.sync(() => {
+            if (fakes.prepared === requestId) fakes.prepared = undefined;
+          }),
       }),
     ),
     Layer.succeed(
@@ -310,6 +325,8 @@ it.effect("backs up and hands off once idle; a failed quit reopens the gate", ()
     assert.isNotNull(failed.milestones.publishedAt);
     assert.isNull(failed.milestones.installedAt);
     assert.strictEqual(fakes.commits, 1);
+    // The download check's preparation was withdrawn so the gated one could run.
+    assert.strictEqual(fakes.runs, 2);
     assert.deepEqual(fakes.prunes, [2]);
     assert.isUndefined(yield* gate.closedReason);
     assert.strictEqual(fakes.resumes, 1);
@@ -331,6 +348,15 @@ it.effect("a backup failure never commits and reopens the gate", () => {
     assert.include(failed.reason ?? "", "integrity check");
     assert.strictEqual(fakes.commits, 0);
     assert.isUndefined(yield* gate.closedReason);
+
+    // The uncommitted preparation was withdrawn, so a retry reaches the hand-off.
+    fakes.backupFailure = undefined;
+    yield* deployments.retry(RELEASE);
+    const retried = yield* awaitRecord(
+      (record) => record.status === "failed" && record.step === "commit",
+    );
+    assert.strictEqual(retried.reason, "Normal Quit timed out.");
+    assert.strictEqual(fakes.commits, 1);
   }).pipe(Effect.provide(HostDeployment.layer.pipe(Layer.provideMerge(makeLayer(fakes)))));
 });
 

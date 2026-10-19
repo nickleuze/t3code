@@ -383,6 +383,7 @@ it.layer(NodeServices.layer)("server self update", (it) => {
             ),
           commit: () => Effect.never,
           reserve: () => Effect.void,
+          release: () => Effect.void,
         },
       });
       const result = yield* selfUpdate.update({ targetVersion: "1.1.0" }, (stage) =>

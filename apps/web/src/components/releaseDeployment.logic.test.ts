@@ -263,4 +263,10 @@ describe("environmentDeploymentStatus", () => {
       ]),
     ).toEqual({ text: "1.4.0 · Blocked", reason: "Free 4 GiB, then retry.", stopped: true });
   });
+
+  it("drops a stopped release the host has since moved past", () => {
+    const blocked = [record(mac, { status: "blocked", reason: "The feed now offers 1.4.1." })];
+    expect(environmentDeploymentStatus(blocked, "1.4.1")).toBeNull();
+    expect(environmentDeploymentStatus(blocked, "1.3.0")?.stopped).toBe(true);
+  });
 });
