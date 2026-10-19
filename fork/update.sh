@@ -184,10 +184,11 @@ command -v trash >/dev/null || { log "ABORTED: the trash command is unavailable;
 log "Quitting Alpha"
 # A normal Quit runs the app's own shutdown. If it fails (no Automation
 # permission on a headless Mac, or a shutdown that stalls), the update stops
-# rather than killing processes; forcing it would not fix the stall.
+# rather than killing processes; forcing it would not fix the stall. An app
+# that does not answer Apple events at all fails after 30s instead of 2 min.
 quit_ok=1
 if alpha_running; then
-  if osascript -e "tell application id \"\$bundle_id\" to quit"; then
+  if osascript -e 'with timeout of 30 seconds' -e "tell application id \"\$bundle_id\" to quit" -e 'end timeout'; then
     for i in \$(seq 1 60); do alpha_running || break; sleep 1; done
   else
     quit_ok=0
@@ -195,6 +196,11 @@ if alpha_running; then
 fi
 if [ "\$quit_ok" != 1 ] || alpha_running; then
   alpha_running || open "\$APP"
+  # A Keychain prompt that nobody sees blocks Alpha's main process, so it
+  # cannot quit until someone answers it on the Mac's screen.
+  if pgrep -x SecurityAgent >/dev/null; then
+    log "A macOS security prompt is waiting on this Mac's screen (SecurityAgent), likely Keychain access for Alpha. Answer it (Always Allow), then rerun the update."
+  fi
   log "ABORTED: Alpha did not quit normally; nothing was changed."
   exit 1
 fi

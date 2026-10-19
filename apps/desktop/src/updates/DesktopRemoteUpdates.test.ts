@@ -473,6 +473,39 @@ describe("DesktopRemoteUpdates", () => {
     );
   });
 
+  it.effect("answers a request at once while it waits on a check already running", () => {
+    // The server gives up on a desktop app that stays silent, so a request
+    // that only rides along with someone else's check must still be answered.
+    const checkStarted = Deferred.makeUnsafe<void>();
+    const releaseCheck = Deferred.makeUnsafe<void>();
+    const harness = makeHarness({
+      checkForUpdates: Deferred.succeed(checkStarted, undefined).pipe(
+        Effect.andThen(Deferred.await(releaseCheck)),
+      ),
+    });
+
+    return runRemoteUpdatesTest(harness, ({ reports, requests }) =>
+      Effect.gen(function* () {
+        const updates = yield* DesktopUpdates.DesktopUpdates;
+        const check = yield* updates.check("poll").pipe(Effect.forkChild);
+        yield* Deferred.await(checkStarted);
+        yield* settle;
+
+        yield* Queue.offer(requests, request("req-answer"));
+        yield* settle;
+        assert.deepEqual(
+          reports
+            .filter((report) => report.requestId === "req-answer")
+            .map((report) => [report.state.status, report.outcome]),
+          [["checking", undefined]],
+        );
+
+        yield* Deferred.succeed(releaseCheck, undefined);
+        yield* Fiber.join(check);
+      }),
+    );
+  });
+
   it.effect("waits for a background check before installing a prepared update", () => {
     const backgroundCheckStarted = Deferred.makeUnsafe<void>();
     const releaseBackgroundCheck = Deferred.makeUnsafe<void>();

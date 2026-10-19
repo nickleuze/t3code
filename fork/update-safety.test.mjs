@@ -70,6 +70,9 @@ if [ "$1" = submit ]; then /bin/bash "\${@: -1}"; fi`,
       ? `printf "osascript %s\\n" "$*" >> "$T3_TEST_TRACE"
 case "$T3_TEST_QUIT" in ok) /bin/rm -f "$T3_TEST_RUNNING" ;; fail) exit 1 ;; esac`
       : unexpected("osascript"),
+    pgrep: host
+      ? `[ "$*" = "-x SecurityAgent" ] && [ "$T3_TEST_PROMPT" = security ]`
+      : unexpected("pgrep"),
     open: host
       ? `printf "open %s\\n" "$*" >> "$T3_TEST_TRACE"; [ "$T3_TEST_START" = fail ] || : > "$T3_TEST_RUNNING"`
       : unexpected("open"),
@@ -97,6 +100,7 @@ esac`,
         T3_TEST_APP: app,
         T3_TEST_QUIT: host?.quit ?? "",
         T3_TEST_START: host?.start ?? "",
+        T3_TEST_PROMPT: host?.prompt ?? "",
         T3_TEST_UNPACK: host?.unpack ?? "",
       },
       encoding: "utf8",
@@ -187,7 +191,7 @@ NodeTest.test("install quits normally and keeps the previous app and every older
   const result = host.update([]);
   NodeAssert.equal(result.status, 0, result.log);
   NodeAssert.match(result.log, /INSTALLED: fork fixture-version/);
-  NodeAssert.match(result.trace, /osascript -e tell application id "fixture\.alpha" to quit/);
+  NodeAssert.match(result.trace, /osascript .*-e tell application id "fixture\.alpha" to quit/);
   NodeAssert.equal(appVersion(host.app), "fixture-version");
   for (const path of older) NodeAssert.ok(NodeFS.existsSync(path), path);
   const backup = NodeFS.readdirSync(host.backups).find((name) =>
@@ -209,10 +213,22 @@ NodeTest.test("a failed or ignored normal Quit stops without changing the app", 
     const result = host.update([]);
     NodeAssert.equal(result.status, 1, result.log);
     NodeAssert.match(result.log, /ABORTED: Alpha did not quit normally; nothing was changed/);
+    NodeAssert.doesNotMatch(result.log, /security prompt/);
     NodeAssert.equal(appVersion(host.app), "previous-version");
     NodeAssert.ok(!NodeFS.existsSync(host.backups));
     NodeAssert.doesNotMatch(result.trace, /unexpected|open /);
   }
+});
+
+NodeTest.test("a Quit blocked by an unseen security prompt says how to unblock it", () => {
+  const host = fixture([{ output: "0" }, { output: "0" }], { quit: "fail", prompt: "security" });
+  const result = host.update([]);
+  NodeAssert.equal(result.status, 1, result.log);
+  NodeAssert.match(result.trace, /osascript -e with timeout of 30 seconds -e tell application/);
+  NodeAssert.match(result.log, /security prompt is waiting on this Mac's screen \(SecurityAgent\)/);
+  NodeAssert.match(result.log, /ABORTED: Alpha did not quit normally; nothing was changed/);
+  NodeAssert.equal(appVersion(host.app), "previous-version");
+  NodeAssert.doesNotMatch(result.trace, /unexpected|open /);
 });
 
 NodeTest.test("a staged update installs later only over the app it was staged against", () => {

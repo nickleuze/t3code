@@ -7,6 +7,7 @@ import {
 } from "@t3tools/contracts";
 import * as Context from "effect/Context";
 import * as Crypto from "effect/Crypto";
+import * as Deferred from "effect/Deferred";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -22,6 +23,10 @@ import * as DesktopTelemetryReceiver from "../resourceTelemetry/DesktopTelemetry
     terminal outcome. Generous: it covers a slow download of a full build. */
 const DESKTOP_UPDATE_TIMEOUT = Duration.minutes(20);
 const DESKTOP_INSTALL_TIMEOUT = Duration.minutes(2);
+/** The desktop app answers a request right away. Silence means its main
+    process is not handling messages, e.g. while a macOS Keychain prompt that
+    nobody sees blocks it, so waiting the full update timeout would not help. */
+const DESKTOP_UPDATE_ANSWER_TIMEOUT = Duration.seconds(60);
 
 /** Progress stage a desktop update state maps to, or null when the state
     carries no progress worth streaming. */
@@ -124,8 +129,32 @@ export const make = Effect.fn("desktopUpdate.desktopAppUpdate.make")(function* (
               ),
             );
 
-      const terminal = yield* changes.pipe(
+      const answered = yield* Deferred.make<void>();
+      const unanswered = Deferred.await(answered).pipe(
+        Effect.timeout(DESKTOP_UPDATE_ANSWER_TIMEOUT),
+        Effect.catchTags({
+          // Withdraw the request so an app that unblocks later does not
+          // start an update nobody is waiting for.
+          TimeoutError: () =>
+            receiver
+              .cancelDesktopUpdate(requestId)
+              .pipe(
+                Effect.ignore,
+                Effect.andThen(
+                  Effect.fail(
+                    failWith(
+                      "The T3 Code desktop app on this machine is not responding. Something may be blocking it, such as a macOS Keychain prompt waiting on that machine's screen.",
+                    ),
+                  ),
+                ),
+              ),
+        }),
+        Effect.andThen(Effect.never),
+      );
+
+      const reports = changes.pipe(
         Stream.filter((report) => report.requestId === requestId),
+        Stream.tap(() => Deferred.succeed(answered, undefined)),
         Stream.mapEffect(
           (
             report,
@@ -144,6 +173,7 @@ export const make = Effect.fn("desktopUpdate.desktopAppUpdate.make")(function* (
         ),
         Stream.runHead,
       );
+      const terminal = yield* Effect.raceFirst(reports, unanswered);
       if (Option.isNone(terminal)) {
         return yield* failWith("The desktop app stopped reporting its update.");
       }
