@@ -25,15 +25,25 @@ export const HostDeploymentFeed = Schema.Struct({
 });
 export type HostDeploymentFeed = typeof HostDeploymentFeed.Type;
 
+/** One platform's release file: its sha256 and the feed's sha512, which electron-updater verifies. */
+export const HostDeploymentArtifact = Schema.Struct({
+  sha256: TrimmedNonEmptyString,
+  sha512: TrimmedNonEmptyString,
+});
+export type HostDeploymentArtifact = typeof HostDeploymentArtifact.Type;
+
 /** Immutable once approved; `releaseId` is the release version. */
 export const HostDeploymentRequest = Schema.Struct({
   releaseId: TrimmedNonEmptyString,
   version: TrimmedNonEmptyString,
   /** Full source commit from the release manifest. */
   commit: TrimmedNonEmptyString,
+  /** The macOS zip. */
   artifactSha256: TrimmedNonEmptyString,
   /** Feed digest of the same archive, which electron-updater verifies. */
   artifactSha512: TrimmedNonEmptyString,
+  /** The Windows installer; absent for releases published before it, which Windows hosts refuse. */
+  windowsArtifact: Schema.optionalKey(HostDeploymentArtifact),
   feed: HostDeploymentFeed,
   /** What the feature acceptance receipt on each host must confirm. */
   acceptanceScope: TrimmedNonEmptyString,
@@ -81,7 +91,7 @@ export const HostDeploymentBackup = Schema.Struct({
   databaseBytes: Schema.Number,
   threadCount: Schema.Number,
   projectCount: Schema.Number,
-  /** The copied app bundle and the version its Info.plist reports. */
+  /** The copied app bundle and the version its Info.plist reports; null on Windows. */
   appBundle: Schema.NullOr(Schema.Struct({ path: TrimmedNonEmptyString, version: Schema.String })),
   verifiedAt: IsoDateTime,
 });

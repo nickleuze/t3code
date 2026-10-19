@@ -4,6 +4,7 @@ import * as NodeOS from "node:os";
 import * as NodeSqlite from "node:sqlite";
 
 import type {
+  HostDeploymentArtifact,
   HostDeploymentBackup,
   HostDeploymentIdentity,
   HostDeploymentRequest,
@@ -42,11 +43,14 @@ export interface LiveCounts {
 
 /**
  * The host side of a release deployment: identity, preflight, backups and
- * retention. Everything that touches the filesystem, `codesign` or SQLite
- * files lives here so the deployment state machine stays testable.
+ * retention on macOS and Windows. Everything that touches the filesystem,
+ * `codesign` or SQLite files lives here so the deployment state machine stays
+ * testable.
  */
 export interface HostDeploymentHostShape {
   readonly runtimeIdentity: Effect.Effect<HostDeploymentIdentity>;
+  /** The release file this host's updater downloads, or null when the release has none. */
+  readonly approvedArtifact: (request: HostDeploymentRequest) => HostDeploymentArtifact | null;
   readonly preflight: (
     request: HostDeploymentRequest,
   ) => Effect.Effect<void, HostDeploymentBlocked>;
@@ -55,7 +59,7 @@ export interface HostDeploymentHostShape {
     readonly releaseId: string;
     readonly from: HostDeploymentIdentity;
   }) => Effect.Effect<HostDeploymentBackup, HostDeploymentBlocked>;
-  /** Moves verified backups beyond the newest `keep` to the Trash. */
+  /** Moves verified backups beyond the newest `keep` to the Trash (Recycle Bin on Windows). */
   readonly pruneBackups: (keep: number) => Effect.Effect<void>;
   readonly liveCounts: Effect.Effect<LiveCounts, HostDeploymentBlocked>;
   /** False when settings.json exists but no longer parses. */
@@ -79,6 +83,17 @@ const decodeBackupManifest = Schema.decodeUnknownOption(Schema.fromJsonString(Ba
 const encodeBackupManifest = Schema.encodeSync(Schema.fromJsonString(BackupManifest));
 const decodeJson = Schema.decodeUnknownOption(Schema.fromJsonString(Schema.Unknown));
 const parsesAsJson = (raw: string) => Option.isSome(decodeJson(raw));
+
+/** The macOS zip or the Windows installer; other platforms have no release build. */
+export function approvedArtifact(
+  request: HostDeploymentRequest,
+  platform: NodeJS.Platform,
+): HostDeploymentArtifact | null {
+  if (platform === "darwin") {
+    return { sha256: request.artifactSha256, sha512: request.artifactSha512 };
+  }
+  return platform === "win32" ? (request.windowsArtifact ?? null) : null;
+}
 
 /** `owner` and `repo` from electron-builder's `app-update.yml`. */
 export function parseAppUpdateFeed(
@@ -111,6 +126,7 @@ const make = Effect.gen(function* () {
   const runner = yield* ProcessRunner.ProcessRunner;
   const sql = yield* SqlClient.SqlClient;
   const platform = yield* HostProcess.Platform;
+  const isMac = platform === "darwin";
 
   const backupRoot = path.join(config.baseDir, BACKUP_DIRECTORY);
   const blocked = (reason: string) => (cause: unknown) =>
@@ -132,7 +148,11 @@ const make = Effect.gen(function* () {
     return {
       version: packageJson.version,
       commit: config.appCommitHash ?? null,
-      signing: config.appBundlePath === undefined ? null : yield* signingOf(config.appBundlePath),
+      // Windows builds are unsigned.
+      signing:
+        !isMac || config.appBundlePath === undefined
+          ? null
+          : yield* signingOf(config.appBundlePath),
     } satisfies HostDeploymentIdentity;
   });
 
@@ -148,10 +168,10 @@ const make = Effect.gen(function* () {
   const preflight: HostDeploymentHostShape["preflight"] = (request) =>
     Effect.gen(function* () {
       const bundle = config.appBundlePath;
-      if (platform !== "darwin" || bundle === undefined) {
+      if ((!isMac && platform !== "win32") || bundle === undefined) {
         return yield* new HostDeploymentBlocked({
           reason:
-            "Release deployment installs the packaged macOS app, which this host is not running.",
+            "Release deployment installs the packaged desktop app, which this host is not running.",
         });
       }
       if (config.appCommitHash === undefined) {
@@ -161,7 +181,9 @@ const make = Effect.gen(function* () {
         });
       }
 
-      const feedFile = path.join(bundle, "Contents", "Resources", "app-update.yml");
+      const feedFile = isMac
+        ? path.join(bundle, "Contents", "Resources", "app-update.yml")
+        : path.join(bundle, "resources", "app-update.yml");
       const feed = parseAppUpdateFeed(
         yield* fs
           .readFileString(feedFile)
@@ -173,17 +195,20 @@ const make = Effect.gen(function* () {
         });
       }
 
-      const verify = yield* run("/usr/bin/codesign", [
-        "--verify",
-        "--deep",
-        "--strict",
-        bundle,
-      ]).pipe(Effect.mapError(blocked("Could not run codesign to check the running app.")));
-      if (verify.code !== 0 || (yield* signingOf(bundle)) === null) {
-        return yield* new HostDeploymentBlocked({
-          reason:
-            "The running app's code signature is not valid, so the updater would reject the new release.",
-        });
+      // The unsigned Windows build has no signature, and its updater checks none.
+      if (isMac) {
+        const verify = yield* run("/usr/bin/codesign", [
+          "--verify",
+          "--deep",
+          "--strict",
+          bundle,
+        ]).pipe(Effect.mapError(blocked("Could not run codesign to check the running app.")));
+        if (verify.code !== 0 || (yield* signingOf(bundle)) === null) {
+          return yield* new HostDeploymentBlocked({
+            reason:
+              "The running app's code signature is not valid, so the updater would reject the new release.",
+          });
+        }
       }
 
       yield* fs
@@ -201,8 +226,9 @@ const make = Effect.gen(function* () {
         Effect.map((info) => Number(info.size)),
         Effect.mapError(blocked(`Could not read ${config.dbPath}.`)),
       );
-      const required =
-        Math.ceil(databaseBytes * 1.2) + (yield* directoryBytes(bundle)) + FREE_SPACE_MARGIN_BYTES;
+      // Only macOS backups copy the app.
+      const appBytes = isMac ? yield* directoryBytes(bundle) : 0;
+      const required = Math.ceil(databaseBytes * 1.2) + appBytes + FREE_SPACE_MARGIN_BYTES;
       const available = yield* Effect.tryPromise(() =>
         NodeFSP.statfs(backupRoot, { bigint: true }),
       ).pipe(
@@ -216,32 +242,61 @@ const make = Effect.gen(function* () {
       }
     });
 
-  const sqliteFacts = (database: string) =>
-    run(
-      "/usr/bin/sqlite3",
-      [
-        "-readonly",
-        database,
-        "PRAGMA quick_check; SELECT count(*) FROM orchestration_v2_projection_threads; SELECT count(*) FROM projection_projects;",
-      ],
-      "15 minutes",
-    ).pipe(
+  const FACTS_SQL = [
+    "PRAGMA quick_check",
+    "SELECT count(*) FROM orchestration_v2_projection_threads",
+    "SELECT count(*) FROM projection_projects",
+  ];
+
+  // macOS checks out of process with the system sqlite3, so a large database
+  // does not stall this server.
+  const sqliteCliFacts = (database: string) =>
+    run("/usr/bin/sqlite3", ["-readonly", database, `${FACTS_SQL.join("; ")};`], "15 minutes").pipe(
       Effect.mapError(blocked("Could not run sqlite3 to verify the state backup.")),
-      Effect.flatMap((result) => {
+      Effect.map((result) => {
         const [check, threads, projects] = result.stdout.trim().split("\n");
-        const threadCount = Number(threads);
-        const projectCount = Number(projects);
-        return result.code === 0 &&
-          check === "ok" &&
-          Number.isFinite(threadCount) &&
-          Number.isFinite(projectCount)
-          ? Effect.succeed({ threadCount, projectCount })
+        return {
+          ok: result.code === 0,
+          check: check ?? result.stderr.trim(),
+          threads: Number(threads),
+          projects: Number(projects),
+        };
+      }),
+    );
+
+  // Windows ships no sqlite3, so the check runs in-process while runs are gated.
+  const sqliteInProcessFacts = (database: string) =>
+    Effect.try({
+      try: () => {
+        const db = new NodeSqlite.DatabaseSync(database, { readOnly: true });
+        try {
+          const [check, threads, projects] = FACTS_SQL.map(
+            (statement) => Object.values(db.prepare(statement).get() ?? {})[0],
+          );
+          return {
+            ok: true,
+            check: String(check),
+            threads: Number(threads),
+            projects: Number(projects),
+          };
+        } finally {
+          db.close();
+        }
+      },
+      catch: blocked("Could not open the state backup to verify it."),
+    });
+
+  const sqliteFacts = (database: string) =>
+    (isMac ? sqliteCliFacts(database) : sqliteInProcessFacts(database)).pipe(
+      Effect.flatMap(({ ok, check, threads, projects }) =>
+        ok && check === "ok" && Number.isFinite(threads) && Number.isFinite(projects)
+          ? Effect.succeed({ threadCount: threads, projectCount: projects })
           : Effect.fail(
               new HostDeploymentBlocked({
-                reason: `The state backup failed its integrity check (${check ?? result.stderr.trim()}).`,
+                reason: `The state backup failed its integrity check (${check}).`,
               }),
-            );
-      }),
+            ),
+      ),
     );
 
   const backup: HostDeploymentHostShape["backup"] = ({ releaseId, from }) =>
@@ -274,8 +329,9 @@ const make = Effect.gen(function* () {
           .pipe(Effect.mapError(blocked(`Could not back up ${file}.`)));
       }
 
+      // A Windows install restores by rerunning the previous release's installer.
       let appBundle: HostDeploymentBackup["appBundle"] = null;
-      if (config.appBundlePath !== undefined) {
+      if (isMac && config.appBundlePath !== undefined) {
         const appCopy = path.join(directory, path.basename(config.appBundlePath));
         const ditto = yield* run(
           "/usr/bin/ditto",
@@ -337,6 +393,26 @@ const make = Effect.gen(function* () {
           verified.push({ directory, verifiedAt: manifest.value.verifiedAt });
       }
       verified.sort((left, right) => right.verifiedAt.localeCompare(left.verifiedAt));
+      if (!isMac) {
+        for (const { directory } of verified.slice(keep)) {
+          const recycled = yield* run("powershell.exe", [
+            "-NoProfile",
+            "-NonInteractive",
+            "-Command",
+            `Add-Type -AssemblyName Microsoft.VisualBasic; [Microsoft.VisualBasic.FileIO.FileSystem]::DeleteDirectory('${directory.replaceAll("'", "''")}', 'OnlyErrorDialogs', 'SendToRecycleBin')`,
+          ]).pipe(
+            Effect.map((result) => result.code === 0),
+            Effect.orElseSucceed(() => false),
+          );
+          if (!recycled) {
+            yield* Effect.logWarning(
+              "Could not move an old deployment backup to the Recycle Bin.",
+              { directory },
+            );
+          }
+        }
+        return;
+      }
       const trash = path.join(NodeOS.homedir(), ".Trash");
       for (const { directory } of verified.slice(keep)) {
         const name = path.basename(directory);
@@ -373,6 +449,7 @@ const make = Effect.gen(function* () {
 
   return HostDeploymentHost.of({
     runtimeIdentity,
+    approvedArtifact: (request) => approvedArtifact(request, platform),
     preflight,
     backup,
     pruneBackups,

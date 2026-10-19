@@ -59,8 +59,8 @@ export function ReleaseApprovalDialog({
           <DialogHeader>
             <DialogTitle>Update to {manifest.version}?</DialogTitle>
             <DialogDescription>
-              Update order: {releaseTargetSequence(targets)}. Each Mac updates when idle and backs
-              up its state first.
+              Update order: {releaseTargetSequence(targets)}. Each machine updates when idle and
+              backs up its state first.
             </DialogDescription>
           </DialogHeader>
           <DialogPanel>
@@ -84,10 +84,10 @@ export function ReleaseApprovalDialog({
             </Button>
             <Button type="submit">
               {targets.length === 1
-                ? "Update Mac"
+                ? "Update"
                 : targets.length === 2
-                  ? "Update both Macs"
-                  : "Update all Macs"}
+                  ? "Update both machines"
+                  : "Update all machines"}
             </Button>
           </DialogFooter>
         </form>
@@ -258,10 +258,10 @@ export function ReleaseDeploymentDetails({
           disabled={!canAdmit}
           onClick={() => void deployment.installLocalOnly()}
         >
-          Install on this Mac only
+          Install on this machine only
         </Button>
       ) : null}
-      {deployment.done ? <p className="font-medium">Update complete on every Mac.</p> : null}
+      {deployment.done ? <p className="font-medium">Update complete on every machine.</p> : null}
     </div>
   );
 }

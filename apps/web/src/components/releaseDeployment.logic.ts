@@ -13,7 +13,7 @@ import {
 } from "@t3tools/client-runtime/state/hostDeployments";
 import * as Schema from "effect/Schema";
 
-const LOCAL_DEPLOYMENT_LABEL = "This Mac";
+const LOCAL_DEPLOYMENT_LABEL = "This machine";
 /** A finished release stays visible in the update popover for a day. */
 const RECENT_RELEASE_MS = 24 * 60 * 60 * 1000;
 const STOPPED: ReadonlySet<HostDeploymentStatus> = new Set(["blocked", "failed", "cancelled"]);
@@ -45,7 +45,7 @@ export interface ReleaseApprovalTarget {
   readonly role: "remote" | "local";
 }
 
-/** Remotes first, then this Mac when it has the update. */
+/** Remotes first, then this machine when it has the update. */
 export function orderReleaseTargets(
   remotes: ReadonlyArray<{ readonly environmentId: EnvironmentId; readonly serverLabel: string }>,
   localEnvironmentId: EnvironmentId | null,
@@ -90,6 +90,9 @@ export function buildReleaseDeploymentRequest(input: {
     commit: input.manifest.commit,
     artifactSha256: input.manifest.artifactSha256,
     artifactSha512: input.manifest.artifactSha512,
+    ...(input.manifest.windowsArtifact === undefined
+      ? {}
+      : { windowsArtifact: input.manifest.windowsArtifact }),
     feed: input.manifest.feed,
     acceptanceScope: "The approved release starts with preserved data and readable settings.",
     automaticAcceptance: true,
@@ -201,7 +204,7 @@ export interface LocalOnlyOverride {
 }
 
 /**
- * Installing on this Mac without its remotes is offered only while the local
+ * Installing on this machine without its remotes is offered only while the local
  * host waits for admission and some remote cannot verify: it stopped, or its
  * environment is not connected.
  */
@@ -231,8 +234,8 @@ export function localOnlyOverride(input: {
   if (blockers.length === 0) return null;
   const reasons = blockers.join("; ");
   return {
-    confirmation: `Install ${input.request.version} on this Mac without its remotes?\n\n${reasons}.\n\nThis Mac backs up its state, waits until it is idle, then installs and relaunches.`,
-    evidence: `Installed on this Mac without verified remotes: ${reasons}.`,
+    confirmation: `Install ${input.request.version} on this machine without its remotes?\n\n${reasons}.\n\nThis machine backs up its state, waits until it is idle, then installs and relaunches.`,
+    evidence: `Installed on this machine without verified remotes: ${reasons}.`,
   };
 }
 

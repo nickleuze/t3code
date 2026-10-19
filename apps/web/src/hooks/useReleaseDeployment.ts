@@ -80,7 +80,7 @@ function deploymentRecordsAtom(idsKey: string) {
 /**
  * Approved, idle-gated release deployment for the desktop update control.
  * Hosts own their records; this client approves the release, sequences
- * remotes before this Mac, and resumes that sequence after a restart.
+ * remotes before this machine, and resumes that sequence after a restart.
  */
 export function useReleaseDeployment(
   localState: DesktopUpdateState | null,
@@ -327,7 +327,7 @@ export function useReleaseDeployment(
     const confirmed = (await requestConfirmDialog(override.confirmation)) ?? true;
     if (!confirmed) return;
     await runAction(
-      "Could not install on this Mac",
+      "Could not install on this machine",
       admitCommand({
         environmentId: local.environmentId,
         input: { releaseId: request.releaseId, mode: "local-only", evidence: override.evidence },

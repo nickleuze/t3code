@@ -1,10 +1,14 @@
 name: Fork release
 
-# Builds the macOS arm64 desktop app from every push to the fork's nick/v2
-# and publishes it as a GitHub release. Installed builds update through the
-# app's built-in updater: every build is signed with the fork's one
-# self-signed certificate, so Squirrel.Mac accepts each new build as the same
-# app. fork/update.sh installs a release by hand (first install, recovery).
+# Builds the macOS arm64 and Windows x64 desktop apps from every push to the
+# fork's nick/v2 and publishes both in one GitHub release. Installed builds
+# update through the app's built-in updater. Every macOS build is signed with
+# the fork's one self-signed certificate, so Squirrel.Mac accepts each new
+# build as the same app. Windows builds are unsigned: the NSIS updater only
+# checks a publisher when the build names one. fork/update.sh installs a macOS
+# release by hand (first install, recovery).
+#
+# A manual dispatch from another branch builds both apps without publishing.
 
 on:
   push:
@@ -15,25 +19,27 @@ permissions:
   contents: write
 
 concurrency:
-  group: fork-release
+  group: fork-release-${{ github.ref }}
   cancel-in-progress: false
 
 jobs:
   checks:
-    if: github.repository == 'nickleuze/t3code' && github.ref == 'refs/heads/nick/v2'
+    if: github.repository == 'nickleuze/t3code'
     uses: ./.github/workflows/fork-ci.yml
     permissions:
       contents: read
       pull-requests: read
 
-  # Checks and release share this run's github.sha, so a release can only
-  # publish the exact commit that passed.
-  release:
+  # Checks, builds and release share this run's github.sha, so a release can
+  # only publish the exact commit that passed.
+  build_mac:
     needs: checks
-    if: github.repository == 'nickleuze/t3code' && github.ref == 'refs/heads/nick/v2' && needs.checks.result == 'success'
-    name: Build and publish macOS arm64
+    if: github.repository == 'nickleuze/t3code' && needs.checks.result == 'success'
+    name: Build macOS arm64
     runs-on: macos-15
     timeout-minutes: 75
+    outputs:
+      version: ${{ steps.version.outputs.version }}
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -62,8 +68,8 @@ jobs:
       - name: Ensure Electron runtime is installed
         run: vp run --filter @t3tools/desktop ensure:electron
 
-      # Each push gets a version above the last, so installed apps can tell
-      # they are behind.
+      # Each run gets a version above the last, so installed apps can tell
+      # they are behind. Both platforms derive the same version.
       - name: Resolve version
         id: version
         run: |
@@ -122,39 +128,200 @@ jobs:
           FORK_SIGNING_P12="$p12" fork/sign-release.sh "release/T3-Code-${VERSION}-arm64.zip"
           rm -f "$p12"
 
-      - name: Publish release
+      # Signing changed the zip, so the updater manifest electron-builder
+      # wrote is replaced with one for the signed zip only.
+      - name: Write updater manifest
         env:
-          GH_TOKEN: ${{ github.token }}
           VERSION: ${{ steps.version.outputs.version }}
         run: |
           zip="T3-Code-${VERSION}-arm64.zip"
-          test -f "release/${zip}"
-          # Builds before the built-in updater (up to 0.0.45-nick.9) install
-          # through their update button, which runs this asset.
-          cp fork/update.sh release/fork-update.sh
-          cd release
-          shasum -a 256 "${zip}" > SHA256SUMS
-          sha="$(cut -d' ' -f1 SHA256SUMS)"
-          # Signing changed the zip, so the updater manifest electron-builder
-          # wrote is replaced with one for the signed zip only.
-          sha512="$(openssl dgst -sha512 -binary "${zip}" | base64)"
-          cat > latest-mac.yml <<EOF
+          mkdir publish
+          cp "release/${zip}" publish/
+          sha512="$(openssl dgst -sha512 -binary "publish/${zip}" | base64)"
+          cat > publish/latest-mac.yml <<EOF
           version: ${VERSION}
           files:
             - url: ${zip}
               sha512: ${sha512}
-              size: $(stat -f%z "${zip}")
+              size: $(stat -f%z "publish/${zip}")
           path: ${zip}
           sha512: ${sha512}
           releaseDate: '$(date -u +%Y-%m-%dT%H:%M:%S.000Z)'
           EOF
-          printf '{"version":"%s","commit":"%s","zip":"%s","sha256":"%s","builtAt":"%s"}\n' \
-            "${VERSION}" "${GITHUB_SHA}" "${zip}" "${sha}" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
-            > fork-release.json
+
+      - name: Upload build
+        uses: actions/upload-artifact@v7
+        with:
+          name: fork-mac-arm64
+          path: publish/*
+          if-no-files-found: error
+          retention-days: 3
+
+  build_windows:
+    needs: checks
+    if: github.repository == 'nickleuze/t3code' && needs.checks.result == 'success'
+    name: Build Windows x64
+    runs-on: windows-2025
+    timeout-minutes: 75
+    defaults:
+      run:
+        shell: bash
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ github.sha }}
+          sparse-checkout: |
+            /*
+            !/.repos/
+          sparse-checkout-cone-mode: false
+
+      - name: Require the checked commit
+        run: test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
+        with:
+          targets: x86_64-pc-windows-msvc
+
+      # The resource monitor is built with Spectre-mitigated MSVC libraries,
+      # which the runner image does not include (as in release-desktop.yml).
+      - name: Install Spectre-mitigated MSVC libs
+        shell: pwsh
+        run: |
+          $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
+          $installPath = & $vswhere -products * -latest -property installationPath
+          $setupExe = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\setup.exe"
+          $proc = Start-Process -FilePath $setupExe `
+            -ArgumentList "modify", "--installPath", "`"$installPath`"", "--add", `
+            "Microsoft.VisualStudio.Component.VC.Runtimes.x86.x64.Spectre", "--quiet", "--norestart" `
+            -Wait -PassThru -NoNewWindow
+          if ($null -eq $proc -or $proc.ExitCode -ne 0) {
+            $code = if ($null -ne $proc) { $proc.ExitCode } else { 1 }
+            Write-Error "Visual Studio Installer failed with exit code $code"
+            exit $code
+          }
+
+      # Upstream measured that a package cache does not pay for its restore on
+      # Windows, where linking the packages takes the time.
+      - name: Setup Vite+
+        uses: voidzero-dev/setup-vp@v1
+        with:
+          node-version-file: package.json
+          cache: false
+          run-install: true
+
+      - name: Ensure Electron runtime is installed
+        run: vp run --filter @t3tools/desktop ensure:electron
+
+      - name: Resolve version
+        id: version
+        run: |
+          base="$(node -p "require('./apps/desktop/package.json').version")"
+          echo "version=${base}-nick.${GITHUB_RUN_NUMBER}" >> "$GITHUB_OUTPUT"
+
+      - name: Align package versions to release version
+        run: node scripts/update-release-package-versions.ts "${{ steps.version.outputs.version }}"
+
+      # Builds without the WSL runtime, so agents run natively on Windows; WSL
+      # would need the Linux CLI archive upstream's release builds alongside.
+      # The installer carries the app's update feed inside its app payload.
+      - name: Build
+        env:
+          T3CODE_DESKTOP_VERSION: ${{ steps.version.outputs.version }}
+          T3CODE_DESKTOP_UPDATE_REPOSITORY: ${{ github.repository }}
+          T3CODE_CLERK_PUBLISHABLE_KEY: ${{ vars.T3CODE_CLERK_PUBLISHABLE_KEY }}
+          T3CODE_CLERK_JWT_TEMPLATE: ${{ vars.T3CODE_CLERK_JWT_TEMPLATE }}
+          T3CODE_CLERK_CLI_OAUTH_CLIENT_ID: ${{ vars.T3CODE_CLERK_CLI_OAUTH_CLIENT_ID }}
+          T3CODE_RELAY_URL: ${{ vars.T3CODE_RELAY_URL }}
+        run: |
+          for name in T3CODE_CLERK_PUBLISHABLE_KEY T3CODE_CLERK_JWT_TEMPLATE T3CODE_CLERK_CLI_OAUTH_CLIENT_ID T3CODE_RELAY_URL; do
+            if [ -z "${!name}" ]; then
+              echo "Repository variable $name is not set; the build could not use T3 Connect." >&2
+              exit 1
+            fi
+          done
+          PATH="$PWD/node_modules/.bin:$PATH" \
+            node scripts/build-desktop-artifact.ts --platform win --target nsis --arch x64
+          installer="release/T3-Code-${T3CODE_DESKTOP_VERSION}-x64.exe"
+          payload="$RUNNER_TEMP/app-payload"
+          7z e -y -o"$payload" "$installer" '$PLUGINSDIR/app-64.7z' >/dev/null
+          feed="$(7z e -so "$payload/app-64.7z" resources/app-update.yml)"
+          if ! grep -qx "owner: ${GITHUB_REPOSITORY%/*}" <<<"$feed" || ! grep -qx "repo: ${GITHUB_REPOSITORY#*/}" <<<"$feed"; then
+            echo "Build does not update from ${GITHUB_REPOSITORY}:" >&2
+            echo "$feed" >&2
+            exit 1
+          fi
+
+      # electron-builder's latest.yml describes the unsigned installer as
+      # built, so it is published unchanged with the blockmap for
+      # differential updates.
+      - name: Upload build
+        uses: actions/upload-artifact@v7
+        with:
+          name: fork-win-x64
+          path: |
+            release/T3-Code-${{ steps.version.outputs.version }}-x64.exe
+            release/T3-Code-${{ steps.version.outputs.version }}-x64.exe.blockmap
+            release/latest.yml
+          if-no-files-found: error
+          retention-days: 3
+
+  # Both apps ship in one release or not at all, so neither platform's update
+  # feed points at a release without its build.
+  release:
+    needs: [build_mac, build_windows]
+    if: github.repository == 'nickleuze/t3code' && github.ref == 'refs/heads/nick/v2' && needs.build_mac.result == 'success' && needs.build_windows.result == 'success'
+    name: Publish release
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ github.sha }}
+          sparse-checkout: fork
+
+      - name: Download builds
+        uses: actions/download-artifact@v8
+        with:
+          pattern: fork-*
+          path: release
+          merge-multiple: true
+
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ needs.build_mac.outputs.version }}
+          WINDOWS_VERSION: ${{ needs.build_windows.outputs.version }}
+        run: |
+          test "$VERSION" = "$WINDOWS_VERSION"
+          zip="T3-Code-${VERSION}-arm64.zip"
+          exe="T3-Code-${VERSION}-x64.exe"
+          for file in "$zip" latest-mac.yml "$exe" "${exe}.blockmap" latest.yml; do
+            test -f "release/${file}"
+          done
+          # Builds before the built-in updater (up to 0.0.45-nick.9) install
+          # through their update button, which runs this asset.
+          cp fork/update.sh release/fork-update.sh
+          cd release
+          sha256sum "${zip}" "${exe}" > SHA256SUMS
+          sha="$(sha256sum "${zip}" | cut -d' ' -f1)"
+          exe_sha="$(sha256sum "${exe}" | cut -d' ' -f1)"
+          # fork/update.sh reads the macOS zip from this manifest; release
+          # deployments also pin the Windows installer.
+          printf '{"version":"%s","commit":"%s","zip":"%s","sha256":"%s","exe":"%s","exeSha256":"%s","builtAt":"%s"}\n' \
+            "${VERSION}" "${GITHUB_SHA}" "${zip}" "${sha}" "${exe}" "${exe_sha}" \
+            "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > fork-release.json
           notes="Built from ${GITHUB_SHA} on nick/v2.
 
-          Installed fork builds update from the app; fork/update.sh installs it by hand."
-          gh release create "fork-v${VERSION}" "${zip}" latest-mac.yml SHA256SUMS fork-release.json fork-update.sh \
+          macOS: ${zip}. Windows: ${exe} (unsigned, so SmartScreen asks once).
+          Installed fork builds update from the app; fork/update.sh installs the macOS build by hand."
+          gh release create "fork-v${VERSION}" \
+            "${zip}" latest-mac.yml "${exe}" "${exe}.blockmap" latest.yml \
+            SHA256SUMS fork-release.json fork-update.sh \
             --repo "${GITHUB_REPOSITORY}" \
             --target "${GITHUB_SHA}" \
             --title "Fork ${VERSION}" \

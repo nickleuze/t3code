@@ -96,14 +96,14 @@ export function updateAllConfirmation(
 ): string {
   const question =
     order === "local-only"
-      ? "Install on this Mac only?"
+      ? "Install on this machine only?"
       : `Update T3 Code on ${machines.map((machine) => machine.serverLabel).join(", ")}?`;
   const restart =
     order === "local-only"
       ? "Remote failures will be skipped. This client will quit and relaunch."
       : order === "remote-only"
         ? "Remote machines update using their own update feeds. They close and relaunch on those machines."
-        : "Remote machines update first using their own update feeds. This Mac installs and relaunches last, after all remotes reconnect successfully. A remote failure blocks this Mac's restart.";
+        : "Remote machines update first using their own update feeds. This machine installs and relaunches last, after all remotes reconnect successfully. A remote failure blocks this machine's restart.";
   const summaries = machines
     .map(
       (machine) =>

@@ -13,6 +13,9 @@ const ForkReleaseJson = Schema.Struct({
   commit: Schema.String,
   zip: Schema.String,
   sha256: Schema.String,
+  /** The Windows installer, in releases since the fork published one. */
+  exe: Schema.optionalKey(Schema.String),
+  exeSha256: Schema.optionalKey(Schema.String),
 });
 const decodeForkReleaseJson = Schema.decodeUnknownOption(Schema.fromJsonString(ForkReleaseJson));
 
@@ -30,10 +33,10 @@ export function parseFeed(raw: string): { readonly owner: string; readonly repo:
   return owner === undefined || repo === undefined ? null : { owner, repo };
 }
 
-/** The sha512 `latest-mac.yml` lists for `zip`, which electron-updater verifies. */
-function parseLatestMacSha512(raw: string, zip: string): string | null {
+/** The sha512 an updater feed (`latest-mac.yml`, `latest.yml`) lists for `file`. */
+function parseFeedSha512(raw: string, file: string): string | null {
   const lines = raw.split("\n").map((line) => line.trim());
-  const entry = lines.findIndex((line) => line === `- url: ${zip}` || line === `url: ${zip}`);
+  const entry = lines.findIndex((line) => line === `- url: ${file}` || line === `url: ${file}`);
   if (entry === -1) return null;
   for (const line of lines.slice(entry + 1)) {
     if (line.startsWith("- url:")) break;
@@ -49,6 +52,8 @@ export function readReleaseManifest(input: {
   readonly feed: { readonly owner: string; readonly repo: string };
   readonly forkReleaseJson: string;
   readonly latestMacYml: string;
+  /** Null when the release has no readable `latest.yml`. */
+  readonly latestYml: string | null;
 }): DesktopReleaseManifestResult {
   const release = decodeForkReleaseJson(input.forkReleaseJson);
   if (Option.isNone(release)) {
@@ -63,9 +68,18 @@ export function readReleaseManifest(input: {
   if (!FULL_COMMIT.test(release.value.commit)) {
     return { ok: false, reason: "fork-release.json does not name a full source commit." };
   }
-  const sha512 = parseLatestMacSha512(input.latestMacYml, release.value.zip);
+  const sha512 = parseFeedSha512(input.latestMacYml, release.value.zip);
   if (sha512 === null) {
     return { ok: false, reason: `latest-mac.yml does not list ${release.value.zip}.` };
+  }
+  const { exe, exeSha256 } = release.value;
+  let windowsArtifact: { readonly sha256: string; readonly sha512: string } | undefined;
+  if (exe !== undefined && exeSha256 !== undefined) {
+    const exeSha512 = input.latestYml === null ? null : parseFeedSha512(input.latestYml, exe);
+    if (exeSha512 === null) {
+      return { ok: false, reason: `latest.yml does not list ${exe}.` };
+    }
+    windowsArtifact = { sha256: exeSha256, sha512: exeSha512 };
   }
   return {
     ok: true,
@@ -74,6 +88,7 @@ export function readReleaseManifest(input: {
       commit: release.value.commit.toLowerCase(),
       artifactSha256: release.value.sha256,
       artifactSha512: sha512,
+      ...(windowsArtifact === undefined ? {} : { windowsArtifact }),
       feed: input.feed,
     },
   };
@@ -109,9 +124,14 @@ export const fetchReleaseManifest = Effect.fn("desktop.updates.fetchReleaseManif
         Effect.flatMap(HttpClientResponse.filterStatusOk),
         Effect.flatMap((response) => response.text),
       );
-  return yield* Effect.all([asset("fork-release.json"), asset("latest-mac.yml")]).pipe(
-    Effect.map(([forkReleaseJson, latestMacYml]) =>
-      readReleaseManifest({ version, feed, forkReleaseJson, latestMacYml }),
+  return yield* Effect.all([
+    asset("fork-release.json"),
+    asset("latest-mac.yml"),
+    // Releases before the Windows build have no latest.yml.
+    asset("latest.yml").pipe(Effect.orElseSucceed(() => null)),
+  ]).pipe(
+    Effect.map(([forkReleaseJson, latestMacYml, latestYml]) =>
+      readReleaseManifest({ version, feed, forkReleaseJson, latestMacYml, latestYml }),
     ),
     Effect.orElseSucceed((): DesktopReleaseManifestResult => ({
       ok: false,

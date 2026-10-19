@@ -10,6 +10,7 @@ import * as Hex from "effect/encoding/Hex";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
+import * as Path from "effect/Path";
 import * as PlatformError from "effect/PlatformError";
 import * as Schema from "effect/Schema";
 import * as SynchronizedRef from "effect/SynchronizedRef";
@@ -545,9 +546,15 @@ const buildObservabilityFragment = (observabilitySettings: BackendObservabilityS
   }),
 });
 
-/** The packaged `.app` bundle containing this executable, on macOS only. */
-const macAppBundlePath = (platform: string, isPackaged: boolean): Option.Option<string> => {
-  if (platform !== "darwin" || !isPackaged) return Option.none();
+/** The packaged app: the `.app` bundle on macOS, the install directory on Windows. */
+const packagedAppPath = (
+  platform: string,
+  isPackaged: boolean,
+  path: Path.Path,
+): Option.Option<string> => {
+  if (!isPackaged) return Option.none();
+  if (platform === "win32") return Option.some(path.dirname(process.execPath));
+  if (platform !== "darwin") return Option.none();
   const marker = process.execPath.lastIndexOf(".app/");
   return marker === -1 ? Option.none() : Option.some(process.execPath.slice(0, marker + 4));
 };
@@ -594,10 +601,13 @@ const resolvePrimaryStartConfig = Effect.fn("desktop.backendConfiguration.resolv
         onNone: () => ({}),
         onSome: (appCommitHash) => ({ appCommitHash }),
       }),
-      ...Option.match(macAppBundlePath(environment.platform, environment.isPackaged), {
-        onNone: () => ({}),
-        onSome: (appBundlePath) => ({ appBundlePath }),
-      }),
+      ...Option.match(
+        packagedAppPath(environment.platform, environment.isPackaged, environment.path),
+        {
+          onNone: () => ({}),
+          onSome: (appBundlePath) => ({ appBundlePath }),
+        },
+      ),
       ...buildObservabilityFragment(input.observabilitySettings),
     };
 

@@ -71,6 +71,8 @@ function sameIdentity(left: HostDeploymentRequest, right: HostDeploymentRequest)
     left.commit === right.commit &&
     left.artifactSha256 === right.artifactSha256 &&
     left.artifactSha512 === right.artifactSha512 &&
+    left.windowsArtifact?.sha256 === right.windowsArtifact?.sha256 &&
+    left.windowsArtifact?.sha512 === right.windowsArtifact?.sha512 &&
     left.feed.owner === right.feed.owner &&
     left.feed.repo === right.feed.repo
   );
@@ -213,6 +215,12 @@ const make = Effect.gen(function* () {
   /** Downloads (or re-prepares) the update and checks it is the approved artifact. */
   const prepare = (record: HostDeploymentRecord) =>
     Effect.gen(function* () {
+      const artifact = host.approvedArtifact(record.request);
+      if (artifact === null) {
+        return yield* new HostDeploymentBlocked({
+          reason: `Release ${record.request.version} has no build for this host's platform.`,
+        });
+      }
       const prepared = yield* desktopAppUpdate
         .run(() => Effect.void, { deployment: record.request.releaseId })
         .pipe(
@@ -223,7 +231,7 @@ const make = Effect.gen(function* () {
           reason: `The update feed now offers ${prepared.targetVersion}; this deployment is pinned to ${record.request.version}.`,
         });
       }
-      if (prepared.downloadedSha512 !== record.request.artifactSha512) {
+      if (prepared.downloadedSha512 !== artifact.sha512) {
         return yield* new HostDeploymentBlocked({
           reason:
             prepared.downloadedSha512 === undefined

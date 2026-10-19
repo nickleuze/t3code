@@ -160,6 +160,10 @@ function makeLayer(fakes: Fakes, environmentId: EnvironmentId = MINI) {
       HostDeploymentHost,
       HostDeploymentHost.of({
         runtimeIdentity: Effect.sync(() => fakes.runtime),
+        approvedArtifact: (request) => ({
+          sha256: request.artifactSha256,
+          sha512: request.artifactSha512,
+        }),
         preflight: () =>
           fakes.preflightBlock === undefined
             ? Effect.void

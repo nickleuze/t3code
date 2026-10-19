@@ -361,6 +361,10 @@ export const DesktopReleaseManifestSchema = Schema.Struct({
   commit: Schema.String,
   artifactSha256: Schema.String,
   artifactSha512: Schema.String,
+  /** The Windows installer, for releases that publish one. */
+  windowsArtifact: Schema.optionalKey(
+    Schema.Struct({ sha256: Schema.String, sha512: Schema.String }),
+  ),
   feed: Schema.Struct({ owner: Schema.String, repo: Schema.String }),
 });
 export type DesktopReleaseManifest = typeof DesktopReleaseManifestSchema.Type;

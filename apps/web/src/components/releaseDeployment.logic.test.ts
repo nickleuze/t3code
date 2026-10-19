@@ -96,12 +96,12 @@ describe("releaseDeploymentEligible", () => {
 });
 
 describe("buildReleaseDeploymentRequest", () => {
-  it("orders remotes before this Mac and pins the manifest identity", () => {
+  it("orders remotes before this machine and pins the manifest identity", () => {
     expect(request.releaseId).toBe("1.4.0");
     expect(request.automaticAcceptance).toBe(true);
     expect(request.commit).toBe(manifest.commit);
     expect(request.artifactSha512).toBe(manifest.artifactSha512);
-    expect(releaseTargetSequence(request.targets)).toBe("Mini → Studio → This Mac");
+    expect(releaseTargetSequence(request.targets)).toBe("Mini → Studio → This machine");
     expect(request.targets.map((target) => target.role)).toEqual(["remote", "remote", "local"]);
   });
 
@@ -162,7 +162,7 @@ describe("deploymentRows", () => {
       connectedIds: new Set([studio, mac]),
       runErrors: { [studio]: "Release 1.3.0 is already deploying on this host." },
     });
-    expect(rows.map((row) => row.label)).toEqual(["Mini", "Studio", "This Mac"]);
+    expect(rows.map((row) => row.label)).toEqual(["Mini", "Studio", "This machine"]);
     expect(rows[0]).toMatchObject({
       offline: "Mini is offline",
       reason: "Disk full.",
@@ -199,9 +199,9 @@ describe("localOnlyOverride", () => {
     );
     const override = localOnlyOverride({ request, records, connectedIds: new Set([mini, mac]) });
     expect(override?.evidence).toBe(
-      "Installed on this Mac without verified remotes: Mini is failed: Signature mismatch.; Studio is offline.",
+      "Installed on this machine without verified remotes: Mini is failed: Signature mismatch.; Studio is offline.",
     );
-    expect(override?.confirmation).toContain("Install 1.4.0 on this Mac without its remotes?");
+    expect(override?.confirmation).toContain("Install 1.4.0 on this machine without its remotes?");
   });
 
   it("needs the local host to wait at admission", () => {

@@ -109,7 +109,7 @@ export function useUpdateAllMachines(localState: DesktopUpdateState | null) {
         ...(hasLocalUpdate && localState
           ? [
               {
-                serverLabel: "This Mac",
+                serverLabel: "This machine",
                 fromVersion: localState.currentVersion,
                 targetVersion:
                   localState.downloadedVersion ??
@@ -145,7 +145,7 @@ export function useUpdateAllMachines(localState: DesktopUpdateState | null) {
         beforeInstall: (next) => {
           if (hasPendingServerUpdates()) {
             throw new Error(
-              "Another machine is still updating. Wait for it before installing on this Mac.",
+              "Another machine is still updating. Wait for it before installing on this machine.",
             );
           }
           installing = true;
@@ -177,7 +177,7 @@ export function useUpdateAllMachines(localState: DesktopUpdateState | null) {
         installLocal: async () => {
           const result = await bridge.installUpdate();
           if (!result.accepted || result.state.status === "error") {
-            throw new Error(result.state.message ?? "This Mac could not install the update.");
+            throw new Error(result.state.message ?? "This machine could not install the update.");
           }
         },
       });
@@ -195,7 +195,11 @@ export function useUpdateAllMachines(localState: DesktopUpdateState | null) {
       setRun((previous) =>
         previous ? { ...previous, local: "failed", localError: message } : previous,
       );
-      toastManager.add({ type: "error", title: "Could not update this Mac", description: message });
+      toastManager.add({
+        type: "error",
+        title: "Could not update this machine",
+        description: message,
+      });
     } finally {
       // Only failure/cancellation/remote-only completion can need this client again.
       if (!installing) {
