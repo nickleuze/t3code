@@ -119,7 +119,7 @@ describe("sidebar machine update details", () => {
     expect(markup).toContain("Remote timed out");
     expect(markup).toContain('role="alert"');
     expect(markup).toContain("Retry nick-mini");
-    expect(markup).toContain("Install on this Mac only");
+    expect(markup).toContain("Install on this machine only");
   });
   it("keeps recovery disabled while a machine is still running", () => {
     const markup = renderToStaticMarkup(
@@ -139,8 +139,8 @@ describe("sidebar machine update details", () => {
         tooltip="Machine update failed"
       />,
     );
-    expect(markup).not.toContain("This Mac:");
-    expect(markup).not.toContain("Install on this Mac only");
+    expect(markup).not.toContain("This machine:");
+    expect(markup).not.toContain("Install on this machine only");
     expect(markup).toContain("Retry nick-mini");
   });
   it("lists the actual version selected by the remote's feed", () => {

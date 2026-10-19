@@ -168,7 +168,7 @@ describe("pill update-all controller", () => {
     expect(bridge.installUpdate).not.toHaveBeenCalled();
     expect(value.pending).toBe(false);
   });
-  it("retains a named failure, then explicitly installs on this Mac only", async () => {
+  it("retains a named failure, then explicitly installs on this machine only", async () => {
     mock.updateRemote.mockResolvedValue({ status: "failed", message: "remote timed out" });
     await mount();
     await act(async () => {
@@ -215,7 +215,7 @@ describe("pill update-all controller", () => {
     expect(bridge.installUpdate).not.toHaveBeenCalled();
     expect(value.run?.localError).toContain("still updating");
   });
-  it("supports a remote-only pill while this Mac is up to date", async () => {
+  it("supports a remote-only pill while this machine is up to date", async () => {
     mock.updateRemote.mockResolvedValue({
       status: "succeeded",
       targetVersion: remote.targetVersion,

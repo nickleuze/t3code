@@ -19,13 +19,13 @@ export function prepareLocalDesktopUpdate(
       else resolve();
     };
     const timeout = setTimeout(
-      () => finish(new Error("This Mac's download timed out.")),
+      () => finish(new Error("This machine's download timed out.")),
       30 * 60_000,
     );
     const observe = (state: DesktopUpdateState) => {
       if (resolveDesktopUpdateButtonAction(state) === "install") finish();
       else if (state.status === "error")
-        finish(new Error(state.message ?? "This Mac's download failed."));
+        finish(new Error(state.message ?? "This machine's download failed."));
     };
     unsubscribe = bridge.onUpdateState(observe);
     void bridge
@@ -35,12 +35,12 @@ export function prepareLocalDesktopUpdate(
         if (resolveDesktopUpdateButtonAction(state) === "install") return finish();
         if (state.status === "downloading") return;
         if (resolveDesktopUpdateButtonAction(state) !== "download") {
-          return finish(new Error(state.message ?? "No update is ready on this Mac."));
+          return finish(new Error(state.message ?? "No update is ready on this machine."));
         }
         const result = await bridge.downloadUpdate();
         if (!result.accepted && result.state.status !== "downloading") {
           return finish(
-            new Error(result.state.message ?? "This Mac could not start the download."),
+            new Error(result.state.message ?? "This machine could not start the download."),
           );
         }
         observe(result.state);

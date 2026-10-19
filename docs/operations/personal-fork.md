@@ -172,7 +172,9 @@ an upstream build cannot stand in on either side of a connection. Verify T3
 Connect client configuration, the macOS signing identity, the built-in updater
 feed (`app-update.yml` points at the fork) and each host's
 installation/reconnection. The Windows build is unsigned and has no WSL
-runtime, so its agents run natively on Windows. Preserve the old app and a consistent
+runtime, so its agents run natively on Windows. It updates through the same
+built-in updater and "Update all" flow as the Macs; `fork/update*.sh` are
+macOS-only, so recovery on Windows means rerunning the release's `.exe`. Preserve the old app and a consistent
 state/settings backup before state-changing upgrades: an old binary may not
 read a new schema or event kind. Define the compatible restore path before
 shipping, and wait for active turns to finish before restarting either host.

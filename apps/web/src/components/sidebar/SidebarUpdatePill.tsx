@@ -123,8 +123,8 @@ export function SidebarMachineUpdateDetails({
       <p className="font-medium">{tooltip}</p>
       {machines.hasLocalUpdate && state ? (
         <p>
-          This Mac: {state.currentVersion} → {state.downloadedVersion ?? state.availableVersion} (
-          {machines.run?.local ?? state.status})
+          This machine: {state.currentVersion} → {state.downloadedVersion ?? state.availableVersion}{" "}
+          ({machines.run?.local ?? state.status})
         </p>
       ) : null}
       {machines.targets.map((target) => {
@@ -163,7 +163,7 @@ export function SidebarMachineUpdateDetails({
           disabled={machines.pending}
           onClick={() => void machines.start(undefined, true)}
         >
-          Install on this Mac only
+          Install on this machine only
         </Button>
       ) : null}
       <p>Remote update feeds decide their installed versions.</p>

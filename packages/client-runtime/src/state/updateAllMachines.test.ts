@@ -185,7 +185,7 @@ describe("update every machine", () => {
         continueThreadsAfterServerUpdate: true,
       },
       {
-        serverLabel: "This Mac",
+        serverLabel: "This machine",
         fromVersion: "nick.10",
         targetVersion: "nick.12",
         runningThreadCount: 1,
@@ -195,7 +195,7 @@ describe("update every machine", () => {
       "nick-mini: nick.10 → nick.12; 2 running threads. Running threads continue",
     );
     expect(message).toContain(
-      "This Mac: nick.10 → nick.12; 1 running thread. Running threads stop",
+      "This machine: nick.10 → nick.12; 1 running thread. Running threads stop",
     );
     expect(message).toContain("all remotes reconnect successfully");
   });
