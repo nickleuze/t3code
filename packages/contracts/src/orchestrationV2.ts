@@ -378,35 +378,17 @@ export type OrchestrationV2GoalStatus = typeof OrchestrationV2GoalStatus.Type;
 export const OrchestrationV2GoalStatusReason = Schema.Literals([
   "user",
   "agent",
-  "no_progress",
-  "burn_rate",
   "child_failed",
   "child_interrupted",
-  "check_error",
   "safety_cap",
-  "iteration_timeout",
   "parent_unavailable",
+  // No longer produced; saved goals may still carry them.
+  "no_progress",
+  "burn_rate",
+  "check_error",
+  "iteration_timeout",
 ]);
 export type OrchestrationV2GoalStatusReason = typeof OrchestrationV2GoalStatusReason.Type;
-
-/**
- * Pause the loop when any subscription usage window of the goal's provider
- * climbs more than `maxPercentPoints` within the trailing `windowMins`.
- */
-export const OrchestrationV2GoalBurnGuard = Schema.Struct({
-  maxPercentPoints: Schema.Number.check(Schema.isBetween({ minimum: 1, maximum: 100 })),
-  windowMins: PositiveInt,
-});
-export type OrchestrationV2GoalBurnGuard = typeof OrchestrationV2GoalBurnGuard.Type;
-
-/** The burn guard's latest reading of the goal provider's usage windows. */
-export const OrchestrationV2GoalUsageSample = Schema.Struct({
-  at: IsoDateTime,
-  windows: Schema.Array(Schema.Struct({ id: Schema.String, usedPercent: Schema.Number })),
-  /** Largest rise of any window over the guard's trailing window, in percentage points. */
-  risePoints: Schema.Number,
-});
-export type OrchestrationV2GoalUsageSample = typeof OrchestrationV2GoalUsageSample.Type;
 
 /** Iterations get at least this long; shorter saved limits read as this floor. */
 export const MIN_GOAL_ITERATION_TIMEOUT_MINS = 45;
@@ -421,13 +403,6 @@ export function goalIterationTimeoutMins(goal: {
     goal.iterationTimeoutMins ?? DEFAULT_GOAL_ITERATION_TIMEOUT_MINS,
   );
 }
-
-export const OrchestrationV2GoalUsageAccounting = Schema.Literals([
-  "exact",
-  "estimated",
-  "unavailable",
-]);
-export type OrchestrationV2GoalUsageAccounting = typeof OrchestrationV2GoalUsageAccounting.Type;
 
 export const OrchestrationV2GoalProgressNote = Schema.Struct({
   iteration: PositiveInt,
@@ -454,7 +429,6 @@ export const OrchestrationV2GoalCurrentIteration = Schema.Struct({
   iteration: PositiveInt,
   childThreadId: ThreadId,
   startedAt: IsoDateTime,
-  phase: Schema.Literals(["running", "checking"]),
   /** Workspace checkpoint captured before the child started; null outside a VCS. */
   baselineRef: Schema.NullOr(CheckpointRef),
   notesThisIteration: NonNegativeInt,
@@ -462,14 +436,6 @@ export const OrchestrationV2GoalCurrentIteration = Schema.Struct({
   /** The child is blocked on an approval or question the user must answer. */
   waitingOnRequest: Schema.NullOr(
     Schema.Struct({ requestId: RuntimeRequestId, kind: OrchestrationV2GoalRequestKind }),
-  ),
-  /** The child's results, held while the check command runs. */
-  finished: Schema.NullOr(
-    Schema.Struct({
-      tokens: NonNegativeInt,
-      uncachedTokens: Schema.optional(NonNegativeInt),
-      workspaceChanged: Schema.NullOr(Schema.Boolean),
-    }),
   ),
   /** Follow-up turns the loop started in this thread while its context had room. */
   continuations: Schema.optional(NonNegativeInt),
@@ -484,27 +450,16 @@ export const OrchestrationV2GoalCurrentIteration = Schema.Struct({
 });
 export type OrchestrationV2GoalCurrentIteration = typeof OrchestrationV2GoalCurrentIteration.Type;
 
-export const OrchestrationV2GoalCheckResult = Schema.Struct({
-  iteration: PositiveInt,
-  command: TrimmedNonEmptyString,
-  exitCode: Schema.NullOr(Schema.Int),
-  timedOut: Schema.Boolean,
-  passed: Schema.Boolean,
-  /** Last few KB of combined output, fed into the next iteration on failure. */
-  outputTail: Schema.String,
-  at: IsoDateTime,
-});
-export type OrchestrationV2GoalCheckResult = typeof OrchestrationV2GoalCheckResult.Type;
-
 export const OrchestrationV2GoalIterationOutcome = Schema.Literals([
   "continued",
   "claimed_complete",
-  "check_failed",
   "blocked",
   "failed",
   "interrupted",
   "usage_limited",
   "timed_out",
+  // No longer produced; saved history may still carry it.
+  "check_failed",
 ]);
 export type OrchestrationV2GoalIterationOutcome = typeof OrchestrationV2GoalIterationOutcome.Type;
 
@@ -532,7 +487,7 @@ export type OrchestrationV2GoalResumeNote = typeof OrchestrationV2GoalResumeNote
 /**
  * A long-horizon goal owned by a thread. Each iteration runs in a fresh
  * top-level iteration thread that sees only the objective and accumulated progress; the
- * server's goal loop starts iterations, checks results, and enforces limits.
+ * server's goal loop starts iterations and enforces the time limit.
  */
 export const OrchestrationV2ThreadGoal = Schema.Struct({
   /** Command id of the `thread.goal.set` that created this goal. */
@@ -540,28 +495,16 @@ export const OrchestrationV2ThreadGoal = Schema.Struct({
   objective: TrimmedNonEmptyString,
   status: OrchestrationV2GoalStatus,
   statusReason: Schema.NullOr(OrchestrationV2GoalStatusReason),
-  /** Shell command that must exit 0 before a completion claim is accepted. */
-  checkCommand: Schema.NullOr(TrimmedNonEmptyString),
-  burnGuard: Schema.NullOr(OrchestrationV2GoalBurnGuard),
-  /** Consecutive iterations with no note and no workspace change before pausing. */
-  noProgressLimit: PositiveInt,
-  consecutiveNoProgress: NonNegativeInt,
-  /** Hard ceiling on iterations, independent of the user-facing limits. */
-  safetyCap: PositiveInt,
   iteration: NonNegativeInt,
   /** Context tokens across iterations: input including cache reads, plus output. */
   tokensUsed: NonNegativeInt,
   /** Input not served from cache, plus output; absent on goals that predate it. */
   uncachedTokensUsed: Schema.optional(NonNegativeInt),
-  usageAccounting: OrchestrationV2GoalUsageAccounting,
-  /** Last usage reading the burn guard took; absent until it sees a usage window. */
-  usageSample: Schema.optional(Schema.NullOr(OrchestrationV2GoalUsageSample)),
   /** Frozen when the goal is set so later thread changes do not alter iterations. */
   modelSelection: ModelSelection,
   runtimeMode: RuntimeMode,
   progressNotes: Schema.Array(OrchestrationV2GoalProgressNote),
   current: Schema.NullOr(OrchestrationV2GoalCurrentIteration),
-  lastCheck: Schema.NullOr(OrchestrationV2GoalCheckResult),
   history: Schema.Array(OrchestrationV2GoalIterationRecord),
   /** When a usage-limited goal may start its next iteration. */
   resumeAt: Schema.NullOr(IsoDateTime),
@@ -620,7 +563,6 @@ export const OrchestrationV2GoalProposal = Schema.Struct({
   objective: TrimmedNonEmptyString,
   doneWhen: TrimmedNonEmptyString,
   background: Schema.NullOr(Schema.String),
-  checkCommand: Schema.NullOr(TrimmedNonEmptyString),
   permissions: Schema.NullOr(Schema.String),
   iterationTimeoutMins: Schema.NullOr(PositiveInt),
   /** Why the agent thinks this needs a goal rather than one more turn. */
@@ -649,14 +591,12 @@ export const OrchestrationV2GoalAdvanceStep = Schema.Union([
     ]),
     tokens: NonNegativeInt,
     uncachedTokens: Schema.optional(NonNegativeInt),
-    accounting: OrchestrationV2GoalUsageAccounting,
     workspaceChanged: Schema.NullOr(Schema.Boolean),
     /** When a usage-limited child's provider resets. */
     resumeAt: Schema.NullOr(IsoDateTime),
     /** Questions the user answered in the child, one "question: answer" line each. */
     userAnswers: Schema.optional(Schema.Array(Schema.String)),
   }),
-  Schema.Struct({ type: Schema.Literal("check_finished"), result: OrchestrationV2GoalCheckResult }),
   Schema.Struct({ type: Schema.Literal("paused"), reason: OrchestrationV2GoalStatusReason }),
   Schema.Struct({ type: Schema.Literal("resumed") }),
   Schema.Struct({ type: Schema.Literal("stopped"), reason: OrchestrationV2GoalStatusReason }),
@@ -665,7 +605,6 @@ export const OrchestrationV2GoalAdvanceStep = Schema.Union([
   Schema.Struct({ type: Schema.Literal("timed_out") }),
   /** The child's turn ended with context to spare, so the loop continued it in place. */
   Schema.Struct({ type: Schema.Literal("turn_continued") }),
-  Schema.Struct({ type: Schema.Literal("usage_sampled"), sample: OrchestrationV2GoalUsageSample }),
 ]);
 export type OrchestrationV2GoalAdvanceStep = typeof OrchestrationV2GoalAdvanceStep.Type;
 
@@ -3159,9 +3098,6 @@ export const OrchestrationV2Command = Schema.Union([
     commandId: CommandId,
     threadId: ThreadId,
     objective: TrimmedNonEmptyString,
-    checkCommand: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
-    burnGuard: Schema.optional(Schema.NullOr(OrchestrationV2GoalBurnGuard)),
-    noProgressLimit: Schema.optional(PositiveInt),
     modelSelection: Schema.optional(ModelSelection),
     runtimeMode: Schema.optional(RuntimeMode),
     doneWhen: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
@@ -3192,7 +3128,6 @@ export const OrchestrationV2Command = Schema.Union([
     threadId: ThreadId,
     goalId: CommandId,
     action: Schema.Literals(["pause", "resume", "stop", "clear"]),
-    burnGuard: Schema.optional(Schema.NullOr(OrchestrationV2GoalBurnGuard)),
   }),
   /**
    * Edits the brief of a paused or blocked goal. Omitted fields stay as they
@@ -3456,7 +3391,6 @@ const OrchestrationV2InternalCommand = Schema.Union([
     objective: TrimmedNonEmptyString,
     doneWhen: TrimmedNonEmptyString,
     background: Schema.NullOr(TrimmedNonEmptyString),
-    checkCommand: Schema.NullOr(TrimmedNonEmptyString),
     permissions: Schema.NullOr(TrimmedNonEmptyString),
     iterationTimeoutMins: Schema.NullOr(PositiveInt),
     reason: Schema.NullOr(TrimmedNonEmptyString),

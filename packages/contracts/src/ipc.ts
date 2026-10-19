@@ -355,6 +355,26 @@ export const DesktopUpdateCheckResultSchema = Schema.Struct({
   state: DesktopUpdateStateSchema,
 });
 
+/** A published fork release, read from its GitHub release assets for approval. */
+export const DesktopReleaseManifestSchema = Schema.Struct({
+  version: Schema.String,
+  commit: Schema.String,
+  artifactSha256: Schema.String,
+  artifactSha512: Schema.String,
+  /** The Windows installer, for releases that publish one. */
+  windowsArtifact: Schema.optionalKey(
+    Schema.Struct({ sha256: Schema.String, sha512: Schema.String }),
+  ),
+  feed: Schema.Struct({ owner: Schema.String, repo: Schema.String }),
+});
+export type DesktopReleaseManifest = typeof DesktopReleaseManifestSchema.Type;
+
+export const DesktopReleaseManifestResultSchema = Schema.Union([
+  Schema.Struct({ ok: Schema.Literal(true), manifest: DesktopReleaseManifestSchema }),
+  Schema.Struct({ ok: Schema.Literal(false), reason: Schema.String }),
+]);
+export type DesktopReleaseManifestResult = typeof DesktopReleaseManifestResultSchema.Type;
+
 // Stable id for the Windows-native primary backend. Desktop side wraps
 // this with a brand inside DesktopBackendManager; web side keeps it as
 // a plain string so the env-runtime can compare against it without
@@ -1238,6 +1258,9 @@ export interface DesktopBridge {
   checkForUpdate: () => Promise<DesktopUpdateCheckResult>;
   downloadUpdate: () => Promise<DesktopUpdateActionResult>;
   installUpdate: () => Promise<DesktopUpdateActionResult>;
+  /** The published release for a version, for release deployment approval.
+      Optional: older desktop builds lack it. */
+  getReleaseManifest?: (version: string) => Promise<DesktopReleaseManifestResult>;
   onUpdateState: (listener: (state: DesktopUpdateState) => void) => () => void;
   /** Settings → `t3` command. Optional: older desktop builds lack it. */
   cliCommand?: {

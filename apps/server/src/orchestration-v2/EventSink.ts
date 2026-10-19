@@ -31,6 +31,7 @@ import * as EffectOutbox from "./EffectOutbox.ts";
 import * as EventStore from "./EventStore.ts";
 import * as ProjectionStore from "./ProjectionStore.ts";
 import * as ProjectStore from "./ProjectStore.ts";
+import * as RunAdmissionGate from "./RunAdmissionGate.ts";
 import * as TurnItemPositionStore from "./TurnItemPositionStore.ts";
 
 /**
@@ -211,6 +212,8 @@ const layerBase: Layer.Layer<
     const projectionStore = yield* ProjectionStore.ProjectionStoreV2;
     const projectStore = yield* ProjectStore.ProjectStoreV2;
     const turnItemPositions = yield* TurnItemPositionStore.TurnItemPositionStoreV2;
+    // Optional so compositions without release deployment need no gate.
+    const admissionGate = yield* Effect.serviceOption(RunAdmissionGate.RunAdmissionGate);
     const liveEvents = yield* PubSub.unbounded<OrchestrationV2StoredEvent>();
     const liveEventsByType = new Map<
       OrchestrationV2DomainEvent["type"],
@@ -331,6 +334,10 @@ const layerBase: Layer.Layer<
 
     const applyStoredEvents = (storedEvents: ReadonlyArray<OrchestrationV2StoredEvent>) =>
       Effect.gen(function* () {
+        // Inside the write transaction, so a closed gate rolls the whole commit back.
+        if (Option.isSome(admissionGate)) {
+          yield* admissionGate.value.guard(storedEvents.map((stored) => stored.event));
+        }
         yield* Effect.forEach(storedEvents, (stored) => projectionStore.apply(stored.event), {
           concurrency: 1,
         });

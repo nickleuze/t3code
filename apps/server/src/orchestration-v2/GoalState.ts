@@ -12,30 +12,22 @@ import {
   type ModelSelection,
   type OrchestrationV2AppThread,
   type OrchestrationV2GoalAdvanceStep,
-  type OrchestrationV2GoalBurnGuard,
-  type OrchestrationV2GoalCheckResult,
   type OrchestrationV2GoalIterationOutcome,
   type OrchestrationV2GoalIterationRecord,
   type OrchestrationV2GoalProgressNote,
   type OrchestrationV2GoalProposal,
   type OrchestrationV2GoalStatus,
-  type OrchestrationV2GoalUsageAccounting,
   type OrchestrationV2ThreadGoal,
   type OrchestrationV2ThreadGoalSummary,
   type RuntimeMode,
   type ThreadId,
 } from "@t3tools/contracts";
 
-const DEFAULT_GOAL_NO_PROGRESS_LIMIT = 3;
-const DEFAULT_GOAL_SAFETY_CAP = 100;
-export const DEFAULT_GOAL_BURN_GUARD: OrchestrationV2GoalBurnGuard = {
-  maxPercentPoints: 20,
-  windowMins: 60,
-};
+/** A goal pauses after every this many iterations; resuming grants another run. */
+const GOAL_SAFETY_CAP = 100;
 const MAX_GOAL_NOTE_CHARS = 2_000;
 export const MAX_GOAL_NOTES_TOTAL_CHARS = 8_000;
 const MAX_GOAL_HISTORY = 20;
-export const MAX_GOAL_CHECK_OUTPUT_CHARS = 4_000;
 const MAX_GOAL_USER_MESSAGE_CHARS = 4_000;
 const SHELL_SUMMARY_CHARS = 200;
 const SHELL_OBJECTIVE_CHARS = 120;
@@ -57,9 +49,6 @@ export type GoalCommandInput =
       readonly type: "set";
       readonly commandId: CommandId;
       readonly objective: string;
-      readonly checkCommand: string | null;
-      readonly burnGuard: OrchestrationV2GoalBurnGuard | null | undefined;
-      readonly noProgressLimit: number | undefined;
       readonly modelSelection: ModelSelection;
       readonly runtimeMode: RuntimeMode;
       readonly doneWhen: string | null;
@@ -81,7 +70,6 @@ export type GoalCommandInput =
       readonly type: "control";
       readonly goalId: CommandId;
       readonly action: "pause" | "resume" | "stop" | "clear";
-      readonly burnGuard: OrchestrationV2GoalBurnGuard | null | undefined;
     }
   | {
       readonly type: "iteration.start";
@@ -205,20 +193,13 @@ export function applyGoalCommand(
       objective: command.objective,
       status: "active",
       statusReason: null,
-      checkCommand: command.checkCommand,
-      burnGuard: command.burnGuard === undefined ? DEFAULT_GOAL_BURN_GUARD : command.burnGuard,
-      noProgressLimit: command.noProgressLimit ?? DEFAULT_GOAL_NO_PROGRESS_LIMIT,
-      consecutiveNoProgress: 0,
-      safetyCap: DEFAULT_GOAL_SAFETY_CAP,
       iteration: 0,
       tokensUsed: 0,
       uncachedTokensUsed: 0,
-      usageAccounting: "exact",
       modelSelection: command.modelSelection,
       runtimeMode: command.runtimeMode,
       progressNotes: [],
       current: null,
-      lastCheck: null,
       history: [],
       resumeAt: null,
       completedSummary: null,
@@ -263,7 +244,6 @@ export function applyGoalCommand(
       if (goal.status !== "active") return reject("The goal is not active.");
       if (goal.current !== null) return reject("An iteration is already running.");
       if (command.iteration !== goal.iteration + 1) return reject("Stale iteration number.");
-      if (command.iteration > goal.safetyCap) return reject("The goal reached its safety cap.");
       if (thread.archivedAt !== null) return reject("Archived threads cannot run a goal.");
       return touch({
         ...goal,
@@ -274,12 +254,10 @@ export function applyGoalCommand(
           iteration: command.iteration,
           childThreadId: command.childThreadId,
           startedAt: now,
-          phase: "running",
           baselineRef: command.baselineRef,
           notesThisIteration: 0,
           claim: null,
           waitingOnRequest: null,
-          finished: null,
         },
       });
     }
@@ -289,7 +267,6 @@ export function applyGoalCommand(
         current === null ||
         current.iteration !== command.iteration ||
         current.childThreadId !== command.childThreadId ||
-        current.finished !== null ||
         (goal.status !== "active" && goal.status !== "paused")
       ) {
         return reject("This thread is not running the current goal iteration.");
@@ -339,7 +316,6 @@ function resumedGoal(
     ...goal,
     status: "active",
     statusReason: null,
-    consecutiveNoProgress: 0,
     resumeAt: null,
     completedSummary: null,
     resumeNote: withResumeNote(
@@ -348,9 +324,6 @@ function resumedGoal(
       goal.status === "blocked" ? goal.completedSummary : null,
       now,
     ),
-    // Resuming past the cap grants another full allowance.
-    safetyCap:
-      goal.iteration >= goal.safetyCap ? goal.iteration + DEFAULT_GOAL_SAFETY_CAP : goal.safetyCap,
   };
 }
 
@@ -379,12 +352,7 @@ function applyMessage(
 ): GoalCommandResult {
   if (!isLiveGoal(goal)) return reject("This goal has ended. Start a new one with /t3-goal.");
   const current = goal.current;
-  if (
-    goal.status === "active" &&
-    current !== null &&
-    current.phase === "running" &&
-    current.finished === null
-  ) {
+  if (goal.status === "active" && current !== null) {
     // The loop delivers it into the running iteration on its next pass.
     return touch({
       ...goal,
@@ -397,8 +365,8 @@ function applyMessage(
   if (goal.status === "paused" || goal.status === "blocked") {
     return touch(resumedGoal(goal, text, now));
   }
-  // Usage-limited goals resume on their own; between iterations or during a
-  // check, the message waits for the next iteration.
+  // Usage-limited goals resume on their own; between iterations the message
+  // waits for the next iteration.
   return touch({ ...goal, resumeNote: withResumeNote(goal, text, null, now) });
 }
 
@@ -418,10 +386,7 @@ function applyControl(
     case "resume":
       if (goal.status === "active") return accept(goal);
       if (!isLiveGoal(goal)) return reject("A finished goal cannot be resumed.");
-      return touch({
-        ...resumedGoal(goal, null, now),
-        ...(command.burnGuard === undefined ? {} : { burnGuard: command.burnGuard }),
-      });
+      return touch(resumedGoal(goal, null, now));
     case "stop":
       if (goal.status === "stopped") return accept(goal);
       if (!isLiveGoal(goal)) return reject("The goal has already ended.");
@@ -457,15 +422,12 @@ function applyAdvance(
       if (goal.status !== "usageLimited") return accept(goal);
       return touch({ ...goal, status: "active", statusReason: null, resumeAt: null });
     case "turn_continued": {
-      if (current === null || current.finished !== null) return reject("No iteration is running.");
+      if (current === null) return reject("No iteration is running.");
       return touch({
         ...goal,
         current: { ...current, continuations: (current.continuations ?? 0) + 1 },
       });
     }
-    case "usage_sampled":
-      // A reading is not a goal transition, so it leaves `updatedAt` alone.
-      return accept({ ...goal, usageSample: step.sample });
     case "messages_delivered": {
       if (current === null) return reject("No iteration is running.");
       return touch({
@@ -475,7 +437,7 @@ function applyAdvance(
     }
     case "wrap_up_sent":
     case "timed_out": {
-      if (current === null || current.finished !== null) return reject("No iteration is running.");
+      if (current === null) return reject("No iteration is running.");
       return touch({
         ...goal,
         current:
@@ -493,7 +455,7 @@ function applyAdvance(
       return touch({ ...goal, current: { ...current, waitingOnRequest } });
     }
     case "iteration_finished": {
-      if (current === null || current.finished !== null) return reject("No iteration is running.");
+      if (current === null) return reject("No iteration is running.");
       const withUsage = {
         ...goal,
         // Answers the user gave inside the child survive it even when it ends
@@ -512,98 +474,50 @@ function applyAdvance(
         ...(goal.uncachedTokensUsed === undefined
           ? {}
           : { uncachedTokensUsed: goal.uncachedTokensUsed + (step.uncachedTokens ?? 0) }),
-        usageAccounting:
-          goal.history.length === 0
-            ? step.accounting
-            : worseAccounting(goal.usageAccounting, step.accounting),
       };
-      const finished: Finished = {
-        tokens: step.tokens,
-        ...(step.uncachedTokens === undefined ? {} : { uncachedTokens: step.uncachedTokens }),
-        workspaceChanged: step.workspaceChanged,
-      };
-      const claim = current.claim;
-      if (
-        step.childOutcome === "completed" &&
-        claim?.status === "complete" &&
-        goal.checkCommand !== null &&
-        goal.status !== "stopped"
-      ) {
-        return touch({ ...withUsage, current: { ...current, phase: "checking", finished } });
-      }
-      return touch(finishIteration(withUsage, step, finished, now));
-    }
-    case "check_finished": {
-      if (current === null || current.phase !== "checking" || current.finished === null) {
-        return reject("No check is running.");
-      }
-      const result: OrchestrationV2GoalCheckResult = {
-        ...step.result,
-        outputTail: step.result.outputTail.slice(-MAX_GOAL_CHECK_OUTPUT_CHARS),
-      };
-      const withCheck = { ...goal, lastCheck: result };
-      if (result.passed) {
-        return touch(
-          closeIteration(withCheck, "claimed_complete", current.finished, now, {
-            status: goal.status === "stopped" ? "stopped" : "complete",
-            statusReason: goal.status === "stopped" ? goal.statusReason : null,
-            completedSummary: current.claim?.summary ?? null,
-          }),
-        );
-      }
-      return touch(
-        withNoProgressRule(
-          closeIteration(withCheck, "check_failed", current.finished, now, {}),
-          madeProgress(current.notesThisIteration, current.finished.workspaceChanged),
-        ),
-      );
+      return touch(finishIteration(withUsage, step, now));
     }
   }
 }
 
 function finishIteration(
   goal: OrchestrationV2ThreadGoal,
-  step: Extract<OrchestrationV2GoalAdvanceStep, { readonly type: "iteration_finished" }>,
-  finished: Finished,
+  step: FinishedStep,
   now: string,
 ): Omit<OrchestrationV2ThreadGoal, "updatedAt"> {
   const current = goal.current!;
-  // A pause or stop the user (or a guard) already chose outranks whatever the
-  // child's ending would otherwise decide.
+  // A pause or stop the user already chose outranks whatever the child's
+  // ending would otherwise decide.
   const settled = goal.status !== "active";
   switch (step.childOutcome) {
     case "failed":
       return closeIteration(
         goal,
         "failed",
-        finished,
+        step,
         now,
         settled ? {} : { status: "paused", statusReason: "child_failed" },
       );
     case "interrupted":
-      // Running out of time is routine: the next iteration picks up from the
-      // notes, and only repeated timeouts without progress pause the goal.
+      // Running out of time is routine: the next iteration picks up from the notes.
       if (current.timedOutAt != null) {
-        return withNoProgressRule(
-          closeIteration(goal, "timed_out", finished, now, {}),
-          madeProgress(current.notesThisIteration, finished.workspaceChanged),
-        );
+        return closeIteration(goal, "timed_out", step, now, {});
       }
       return closeIteration(
         goal,
         "interrupted",
-        finished,
+        step,
         now,
         settled ? {} : { status: "paused", statusReason: "child_interrupted" },
       );
     case "restarted":
       // The user did not stop it, so the next iteration simply carries on.
-      return closeIteration(goal, "interrupted", finished, now, {});
+      return closeIteration(goal, "interrupted", step, now, {});
     case "usage_limited":
       return closeIteration(
         goal,
         "usage_limited",
-        finished,
+        step,
         now,
         settled ? {} : { status: "usageLimited", statusReason: null, resumeAt: step.resumeAt },
       );
@@ -613,7 +527,7 @@ function finishIteration(
         return closeIteration(
           goal,
           "blocked",
-          finished,
+          step,
           now,
           goal.status === "stopped"
             ? {}
@@ -624,27 +538,27 @@ function finishIteration(
         return closeIteration(
           goal,
           "claimed_complete",
-          finished,
+          step,
           now,
           goal.status === "stopped"
             ? {}
             : { status: "complete", statusReason: null, completedSummary: claim.summary },
         );
       }
-      return withNoProgressRule(
-        closeIteration(goal, "continued", finished, now, {}),
-        madeProgress(current.notesThisIteration, finished.workspaceChanged),
-      );
+      return closeIteration(goal, "continued", step, now, {});
     }
   }
 }
 
-type Finished = NonNullable<NonNullable<OrchestrationV2ThreadGoal["current"]>["finished"]>;
+type FinishedStep = Extract<
+  OrchestrationV2GoalAdvanceStep,
+  { readonly type: "iteration_finished" }
+>;
 
 function closeIteration(
   goal: OrchestrationV2ThreadGoal,
   outcome: OrchestrationV2GoalIterationOutcome,
-  finished: Finished,
+  step: FinishedStep,
   now: string,
   overrides: Partial<OrchestrationV2ThreadGoal>,
 ): OrchestrationV2ThreadGoal {
@@ -653,9 +567,9 @@ function closeIteration(
     iteration: current.iteration,
     childThreadId: current.childThreadId,
     outcome,
-    tokens: finished.tokens,
-    ...(finished.uncachedTokens === undefined ? {} : { uncachedTokens: finished.uncachedTokens }),
-    workspaceChanged: finished.workspaceChanged,
+    tokens: step.tokens,
+    ...(step.uncachedTokens === undefined ? {} : { uncachedTokens: step.uncachedTokens }),
+    workspaceChanged: step.workspaceChanged,
     ...(current.continuations ? { continuations: current.continuations } : {}),
     finishedAt: now,
   };
@@ -670,38 +584,10 @@ function closeIteration(
     history: [...goal.history, record].slice(-MAX_GOAL_HISTORY),
     ...overrides,
   };
-  if (next.status === "active" && next.iteration >= next.safetyCap) {
+  if (next.status === "active" && next.iteration % GOAL_SAFETY_CAP === 0) {
     return { ...next, status: "paused", statusReason: "safety_cap" };
   }
   return next;
-}
-
-function withNoProgressRule(
-  goal: OrchestrationV2ThreadGoal,
-  progressed: boolean,
-): OrchestrationV2ThreadGoal {
-  const consecutiveNoProgress = progressed ? 0 : goal.consecutiveNoProgress + 1;
-  if (goal.status === "active" && consecutiveNoProgress >= goal.noProgressLimit) {
-    return { ...goal, consecutiveNoProgress, status: "paused", statusReason: "no_progress" };
-  }
-  return { ...goal, consecutiveNoProgress };
-}
-
-function madeProgress(notes: number, workspaceChanged: boolean | null): boolean {
-  return notes > 0 || workspaceChanged === true;
-}
-
-const ACCOUNTING_RANK: Record<OrchestrationV2GoalUsageAccounting, number> = {
-  exact: 0,
-  estimated: 1,
-  unavailable: 2,
-};
-
-function worseAccounting(
-  left: OrchestrationV2GoalUsageAccounting,
-  right: OrchestrationV2GoalUsageAccounting,
-): OrchestrationV2GoalUsageAccounting {
-  return ACCOUNTING_RANK[left] >= ACCOUNTING_RANK[right] ? left : right;
 }
 
 /** Appends a note and drops the oldest ones once the total exceeds the cap. */

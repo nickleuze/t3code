@@ -1,4 +1,11 @@
 import type { Ticket, TicketEvent, TicketLink, ThreadId } from "@t3tools/contracts";
+export function isClosedProjectOrigin(ticket: Pick<Ticket, "status" | "workState">) {
+  return (
+    ticket.status === "done" &&
+    ticket.workState?.decisions.some((decision) => decision.text.startsWith("[Project origin ")) ===
+      true
+  );
+}
 export function resumeTicketLinks(
   links: readonly TicketLink[],
   machine: string | null,
@@ -16,9 +23,10 @@ export function resumeTicketLinks(
     );
 }
 export function ticketActivity(
-  ticket: Ticket,
+  ticket: Pick<Ticket, "status" | "workState">,
   threads: readonly { status: string; pendingRuntimeRequest: unknown }[],
 ) {
+  if (isClosedProjectOrigin(ticket)) return "Project origin";
   if (threads.some((t) => t.pendingRuntimeRequest !== null)) return "Needs your input";
   if (threads.some((t) => t.status === "running" || t.status === "active")) return "Running";
   if (ticket.workState?.blocked) return "Blocked";

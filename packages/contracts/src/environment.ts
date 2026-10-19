@@ -217,6 +217,10 @@ export const ExecutionEnvironmentCapabilities = Schema.Struct({
       "server"`) and streams them over `/api/preview-stream`. Clients
       without a local browser runtime open server tabs here. */
   serverBrowser: Schema.optionalKey(Schema.Boolean),
+  /** Server runs approved release deployments (`deployments.*`): it waits for
+      idle, backs up state and installs the desktop app's update itself.
+      Clients keep the plain Update all path for hosts without it. */
+  hostDeployments: Schema.optionalKey(Schema.Boolean),
 });
 export type ExecutionEnvironmentCapabilities = typeof ExecutionEnvironmentCapabilities.Type;
 
@@ -225,6 +229,8 @@ export const ExecutionEnvironmentDescriptor = Schema.Struct({
   label: TrimmedNonEmptyString,
   platform: ExecutionEnvironmentPlatform,
   serverVersion: TrimmedNonEmptyString,
+  /** Build commit of the desktop app supervising this server, when known. */
+  serverCommit: Schema.optionalKey(TrimmedNonEmptyString),
   /** Absent on hosts from before explicit orchestration protocol negotiation. */
   orchestrationProtocolVersion: Schema.optionalKey(Schema.Int),
   capabilities: ExecutionEnvironmentCapabilities,

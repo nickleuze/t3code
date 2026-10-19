@@ -366,6 +366,8 @@ export const resolveServerConfig = (
     const desktopBrowserFd = bootstrap?.desktopBrowserFd;
     const desktopBrowserControlFd = bootstrap?.desktopBrowserControlFd;
     const resourceMonitorPath = bootstrap?.resourceMonitorPath;
+    const appCommitHash = bootstrap?.appCommitHash;
+    const appBundlePath = bootstrap?.appBundlePath;
     const autoBootstrapProjectFromCwd = Option.getOrElse(
       resolveOptionPrecedence(
         Option.fromUndefinedOr(options?.forceAutoBootstrapProjectFromCwd),
@@ -475,6 +477,8 @@ export const resolveServerConfig = (
       desktopBrowserFd,
       desktopBrowserControlFd,
       resourceMonitorPath,
+      ...(appCommitHash === undefined ? {} : { appCommitHash }),
+      ...(appBundlePath === undefined ? {} : { appBundlePath }),
       autoBootstrapProjectFromCwd,
       logWebSocketEvents,
       tailscaleServeEnabled,

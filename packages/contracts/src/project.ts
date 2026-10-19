@@ -10,6 +10,7 @@ import {
   NonNegativeInt,
   PositiveInt,
   ProjectId,
+  TicketId,
   TrimmedNonEmptyString,
   TrimmedString,
   type UnknownUnionMember,
@@ -525,8 +526,47 @@ export const ProjectEnsureScratchResult = Schema.Struct({
 export type ProjectEnsureScratchResult = typeof ProjectEnsureScratchResult.Type;
 
 /** A project started from just a name, in a new folder the server makes. */
+export const WorkModelProjectDetails = Schema.Struct({
+  area: TrimmedNonEmptyString.check(Schema.isPattern(/^[a-z0-9]+(?:-[a-z0-9]+)*$/)),
+  slug: TrimmedNonEmptyString.check(
+    Schema.isMaxLength(64),
+    Schema.isPattern(/^[a-z0-9]+(?:-[a-z0-9]+)*$/),
+  ),
+  purpose: TrimmedNonEmptyString.check(Schema.isMaxLength(10000)),
+  goal: Schema.optionalKey(TrimmedNonEmptyString.check(Schema.isMaxLength(2000))),
+  sourceIdeaId: Schema.optionalKey(TicketId),
+  adoptExisting: Schema.Boolean,
+});
+export type WorkModelProjectDetails = typeof WorkModelProjectDetails.Type;
+
+export const WorkModelProjectDraft = Schema.Struct({
+  name: TrimmedNonEmptyString.check(Schema.isMaxLength(200)),
+  ...WorkModelProjectDetails.fields,
+});
+export type WorkModelProjectDraft = typeof WorkModelProjectDraft.Type;
+
+export const WorkModelProjectOptions = Schema.Struct({
+  projectsRoot: Schema.String,
+  initializerAvailable: Schema.Boolean,
+  areas: Schema.Array(
+    Schema.Struct({ name: Schema.String, scope: Schema.Literals(["personal", "company"]) }),
+  ),
+});
+export type WorkModelProjectOptions = typeof WorkModelProjectOptions.Type;
+
+export const WorkModelProjectPreview = Schema.Struct({
+  workspaceRoot: Schema.String,
+  projectKey: Schema.String,
+  scope: Schema.Literals(["personal", "company"]),
+  existingHome: Schema.Boolean,
+  registeredProjectId: Schema.NullOr(ProjectId),
+  files: Schema.Array(Schema.String),
+});
+export type WorkModelProjectPreview = typeof WorkModelProjectPreview.Type;
+
 export const ProjectCreateNewInput = Schema.Struct({
   name: TrimmedNonEmptyString.check(Schema.isMaxLength(200)),
+  workModel: Schema.optionalKey(WorkModelProjectDetails),
 });
 export type ProjectCreateNewInput = typeof ProjectCreateNewInput.Type;
 

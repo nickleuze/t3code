@@ -302,6 +302,9 @@ export const DesktopUpdateStatusReport = Schema.Struct({
   // Terminal marker for a server-triggered run; absent while it is working.
   outcome: Schema.optionalKey(DesktopUpdateRemoteOutcome),
   reason: Schema.optionalKey(TrimmedNonEmptyString),
+  // Feed sha512 of the prepared download, sent with `ready-to-install` so a
+  // release deployment can match it against the approved artifact.
+  downloadedSha512: Schema.optionalKey(TrimmedNonEmptyString),
   state: DesktopUpdateStateSchema,
 });
 export type DesktopUpdateStatusReport = typeof DesktopUpdateStatusReport.Type;

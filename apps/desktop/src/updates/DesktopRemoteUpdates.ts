@@ -66,7 +66,11 @@ export const listen: Effect.Effect<
 
   const publishReport = (
     state: DesktopUpdateState,
-    terminal?: { readonly outcome: DesktopUpdateRemoteOutcome; readonly reason?: string },
+    terminal?: {
+      readonly outcome: DesktopUpdateRemoteOutcome;
+      readonly reason?: string;
+      readonly downloadedSha512?: string;
+    },
     explicitRequestId?: string,
   ): Effect.Effect<void> => {
     const reason = normalizeRemoteUpdateReason(terminal?.reason);
@@ -82,6 +86,7 @@ export const listen: Effect.Effect<
               : {}),
           ...(terminal === undefined ? {} : { outcome: terminal.outcome }),
           ...(reason ? { reason } : {}),
+          ...(terminal?.downloadedSha512 ? { downloadedSha512: terminal.downloadedSha512 } : {}),
           state,
         }),
       ),
@@ -256,7 +261,17 @@ export const listen: Effect.Effect<
                       (yield* Clock.currentTimeMillis) + Duration.toMillis(PREPARED_UPDATE_TTL),
                   }),
                 );
-                yield* publishReport(state, { outcome: "ready-to-install" }, request.requestId);
+                const artifact = yield* updates.downloadedArtifact;
+                yield* publishReport(
+                  state,
+                  {
+                    outcome: "ready-to-install",
+                    ...(artifact?.version === state.downloadedVersion && artifact.sha512 !== null
+                      ? { downloadedSha512: artifact.sha512 }
+                      : {}),
+                  },
+                  request.requestId,
+                );
                 yield* logInfo("remote update prepared", { requestId: request.requestId });
                 return true;
               }

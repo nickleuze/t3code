@@ -1,4 +1,5 @@
 import { OrchestrationDispatchCommandError } from "@t3tools/contracts";
+import type { HostDeployment as HostDeploymentRecord } from "@t3tools/contracts";
 import * as Crypto from "effect/Crypto";
 import * as Orchestrator from "./orchestration-v2/Orchestrator.ts";
 
@@ -104,6 +105,7 @@ import {
   CoreWsRpcGroup,
   TicketRecordRpcGroup,
   AgentToolsRpcGroup,
+  HostDeploymentRpcGroup,
 } from "@t3tools/contracts";
 import { resolveServerBackgroundActivitySettings } from "@t3tools/shared/backgroundActivitySettings";
 import {
@@ -127,6 +129,7 @@ import * as ThreadMessageIntake from "./orchestration-v2/ThreadMessageIntake.ts"
 import * as IdAllocator from "@t3tools/provider-core/server/IdAllocator";
 import * as TicketLaunchService from "./tickets/TicketLaunchService.ts";
 import * as Tickets from "./tickets/TicketService.ts";
+import * as HostDeployment from "./deploy/HostDeployment.ts";
 import * as ScheduledTasks from "./scheduledTasks/ScheduledTaskService.ts";
 import * as SecretRequests from "./secrets/SecretRequests.ts";
 import {
@@ -209,6 +212,7 @@ import * as ReviewService from "./review/ReviewService.ts";
 import * as ProjectEnrichmentService from "./project/ProjectEnrichmentService.ts";
 import * as ProjectService from "./project/ProjectService.ts";
 import * as ManagedProjectFolders from "./project/ManagedProjectFolders.ts";
+import * as WorkModelProjects from "./project/WorkModelProjects.ts";
 import { projectMutationOperation } from "./project/ProjectMutation.ts";
 import * as ProjectSetupScriptRunner from "./project/ProjectSetupScriptRunner.ts";
 import * as ProjectCloneTracker from "./project/ProjectCloneTracker.ts";
@@ -550,6 +554,23 @@ const ServerWsRpcGroup = WsRpcGroup.middleware(RpcInstrumentation);
 const ServerCoreWsRpcGroup = CoreWsRpcGroup.middleware(RpcInstrumentation);
 const ServerTicketRecordRpcGroup = TicketRecordRpcGroup.middleware(RpcInstrumentation);
 const ServerAgentToolsRpcGroup = AgentToolsRpcGroup.middleware(RpcInstrumentation);
+const ServerHostDeploymentRpcGroup = HostDeploymentRpcGroup.middleware(RpcInstrumentation);
+const layerHostDeploymentRpc = ServerHostDeploymentRpcGroup.toLayer(
+  Effect.gen(function* () {
+    const deployments = yield* HostDeployment.HostDeployment;
+    const mutation = <E>(effect: Effect.Effect<HostDeploymentRecord, E>) =>
+      effect.pipe(Effect.map((deployment) => ({ deployment })));
+    return {
+      [WS_METHODS.deploymentsRequest]: (input) => mutation(deployments.request(input.request)),
+      [WS_METHODS.deploymentsAdmit]: (input) => mutation(deployments.admit(input)),
+      [WS_METHODS.deploymentsRetry]: (input) => mutation(deployments.retry(input.releaseId)),
+      [WS_METHODS.deploymentsCancel]: (input) => mutation(deployments.cancel(input.releaseId)),
+      [WS_METHODS.deploymentsRecordAcceptance]: (input) =>
+        mutation(deployments.recordAcceptance(input)),
+      [WS_METHODS.deploymentsSubscribe]: () => deployments.subscribe,
+    };
+  }),
+);
 const layerTicketRecordRpc = ServerTicketRecordRpcGroup.toLayer(
   Effect.gen(function* () {
     const tickets = yield* Tickets.TicketService;
@@ -1247,6 +1268,7 @@ const layerWsRpc = (
       const projectStore = yield* ProjectStore.ProjectStoreV2;
       const projectService = yield* ProjectService.ProjectService;
       const managedFolders = yield* ManagedProjectFolders.ManagedProjectFolders;
+      const workModelProjects = yield* WorkModelProjects.WorkModelProjects;
       const threadSearch = yield* ThreadSearch.ThreadSearch;
 
       const providerSessionsV2 = yield* ProviderSessionManager.ProviderSessionManagerV2;
@@ -2640,8 +2662,32 @@ const layerWsRpc = (
             ),
           ),
         [WS_METHODS.projectsCreateNew]: (input) =>
-          managedFolders
-            .createNamedProject(input)
+          input.workModel
+            ? workModelProjects
+                .create({ name: input.name, ...input.workModel })
+                .pipe(
+                  Effect.mapError(
+                    (cause) =>
+                      new OrchestrationDispatchCommandError({ message: cause.message, cause }),
+                  ),
+                )
+            : managedFolders
+                .createNamedProject(input)
+                .pipe(
+                  Effect.mapError(
+                    (cause) =>
+                      new OrchestrationDispatchCommandError({ message: cause.message, cause }),
+                  ),
+                ),
+        [WS_METHODS.projectsWorkModelOptions]: () =>
+          workModelProjects.options.pipe(
+            Effect.mapError(
+              (cause) => new OrchestrationDispatchCommandError({ message: cause.message, cause }),
+            ),
+          ),
+        [WS_METHODS.projectsWorkModelPreview]: (input) =>
+          workModelProjects
+            .preview(input)
             .pipe(
               Effect.mapError(
                 (cause) => new OrchestrationDispatchCommandError({ message: cause.message, cause }),
@@ -3186,6 +3232,7 @@ export const layer = Layer.unwrap(
     const previewAutomationBroker = yield* PreviewAutomationBroker.PreviewAutomationBroker;
     const serverBrowser = yield* ServerBrowser.ServerBrowser;
     const serverSelfUpdate = yield* ServerSelfUpdate.ServerSelfUpdate;
+    const hostDeployment = yield* HostDeployment.HostDeployment;
     const pullRequests = yield* PullRequestService.PullRequestService;
     const sql = yield* SqlClient.SqlClient;
     const serverSettingsService = yield* ServerSettings.ServerSettingsService;
@@ -3251,6 +3298,11 @@ export const layer = Layer.unwrap(
             ).pipe(
               Layer.merge(layerTicketRecordRpc),
               Layer.merge(layerAgentToolsRpc),
+              Layer.merge(
+                layerHostDeploymentRpc.pipe(
+                  Layer.provide(Layer.succeed(HostDeployment.HostDeployment, hostDeployment)),
+                ),
+              ),
               Layer.provideMerge(RpcSerialization.layerJson),
               // Request fibers run in the handlers' context, so this reporter sees
               // their defects, not the rest of the server's.

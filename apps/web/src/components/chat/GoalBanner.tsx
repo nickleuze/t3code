@@ -151,7 +151,6 @@ export function goalProposalBannerItem(props: GoalProposalBannerProps): Composer
     title: `Proposed goal: ${proposal.objective}`,
     description: [
       `Done when: ${proposal.doneWhen}`,
-      ...(proposal.checkCommand ? [`Check: ${proposal.checkCommand}`] : []),
       ...(proposal.reason ? [proposal.reason] : []),
     ].join(" · "),
     actions: <GoalProposalActions key={proposal.id} {...props} />,

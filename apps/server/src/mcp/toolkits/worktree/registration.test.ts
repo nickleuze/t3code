@@ -38,6 +38,7 @@ import * as McpSessionRegistry from "../../McpSessionRegistry.ts";
 import * as PreviewAutomationBroker from "../../PreviewAutomationBroker.ts";
 import * as PreviewBrowser from "../../../preview/PreviewBrowser.ts";
 import * as SkillLibrary from "../../../skills/SkillLibrary.ts";
+import * as HostDeployment from "../../../deploy/HostDeployment.ts";
 
 const layerStubServices = Layer.mergeAll(
   Layer.mock(Defaults.ProjectLaunchDefaults)({}),
@@ -67,6 +68,7 @@ const layerStubServices = Layer.mergeAll(
   Layer.mock(SourceControlRepositoryService.SourceControlRepositoryService)({}),
   Layer.mock(ThreadLaunchService.ThreadLaunchService)({}),
   Layer.mock(ThreadSearch.ThreadSearch)({}),
+  Layer.mock(HostDeployment.HostDeployment)({}),
 );
 
 const ToolsListPayload = Schema.fromJsonString(
@@ -156,6 +158,8 @@ it.effect("production mcp layer lists worktree tools over http", () =>
       expect(toolNames).toContain("t3_ticket_create");
       expect(toolNames).toContain("t3_ticket_update");
       expect(toolNames).toContain("t3_ticket_link_thread");
+      expect(toolNames).toContain("t3_deployment_status");
+      expect(toolNames).toContain("t3_deployment_record_acceptance");
       expect(tools.find((tool) => tool.name === "t3_ticket_list")?.annotations?.readOnlyHint).toBe(
         true,
       );

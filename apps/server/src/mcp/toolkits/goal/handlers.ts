@@ -41,7 +41,6 @@ export const layer = McpToolAccess.toLayer(GoalToolkit, {
         objective: input.objective,
         doneWhen: input.doneWhen,
         background: trimmedOrNull(input.background),
-        checkCommand: trimmedOrNull(input.checkCommand),
         permissions: trimmedOrNull(input.preApprovedActions),
         iterationTimeoutMins: input.minutesPerIteration ?? null,
         reason: trimmedOrNull(input.reason),

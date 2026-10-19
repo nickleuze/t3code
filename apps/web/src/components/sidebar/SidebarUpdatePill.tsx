@@ -6,6 +6,12 @@ import { isElectron } from "../../env";
 import { useMediaQuery } from "../../hooks/useMediaQuery";
 import { cn } from "../../lib/utils";
 import { useUpdateAllMachines } from "../../hooks/useUpdateAllMachines";
+import { useReleaseDeployment } from "../../hooks/useReleaseDeployment";
+import {
+  ReleaseAcceptanceDialog,
+  ReleaseApprovalDialog,
+  ReleaseDeploymentDetails,
+} from "../ReleaseDeployment";
 import { Button } from "../ui/button";
 import { useDesktopUpdateState } from "../../state/desktopUpdate";
 import { stackedThreadToast, toastManager } from "../ui/toast";
@@ -113,10 +119,13 @@ export function SidebarMachineUpdateDetails({
   machines,
   state,
   tooltip,
+  pinnedRelease = false,
 }: {
   readonly machines: ReturnType<typeof useUpdateAllMachines>;
   readonly state: DesktopUpdateState | null;
   readonly tooltip: string;
+  /** The approved-release path pins one version instead of following each feed. */
+  readonly pinnedRelease?: boolean;
 }) {
   return (
     <div className="flex max-w-80 flex-col gap-2 text-xs">
@@ -166,7 +175,11 @@ export function SidebarMachineUpdateDetails({
           Install on this machine only
         </Button>
       ) : null}
-      <p>Remote update feeds decide their installed versions.</p>
+      <p>
+        {pinnedRelease
+          ? "Approve the release to install it on each machine, remotes first."
+          : "Remote update feeds decide their installed versions."}
+      </p>
     </div>
   );
 }
@@ -174,7 +187,11 @@ export function SidebarMachineUpdateDetails({
 function SidebarUpdateControl() {
   const state = useDesktopUpdateState();
   const machines = useUpdateAllMachines(state);
-  const hasMachineDetails = machines.targets.length > 0 || machines.run !== null;
+  const deployment = useReleaseDeployment(state, machines.hasLocalUpdate);
+  const deploymentActive = deployment.request !== null;
+  const hasMachineDetails =
+    deploymentActive || machines.targets.length > 0 || machines.run !== null;
+  const machinesPending = machines.pending || deployment.preparing;
   const [isActionPending, setIsActionPending] = useState(false);
   const [checkAnimationKey, setCheckAnimationKey] = useState(0);
   const [isCheckAnimationLatched, setIsCheckAnimationLatched] = useState(false);
@@ -204,27 +221,29 @@ function SidebarUpdateControl() {
     isDownloading,
     showCheckIcon,
   });
-  const tooltip = machines.pending
-    ? "Updating machines…"
-    : machines.run &&
-        Object.values(machines.run.remotes).some((remote) => remote.status === "failed")
-      ? "Machine update failed"
-      : (machines.label ??
-        (showUpdateDetails
-          ? state
-            ? getDesktopUpdateButtonTooltip(state)
-            : "Update available"
-          : showCheckIcon
-            ? "Checking for updates…"
-            : "Check for updates"));
+  const tooltip = deployment.summary
+    ? deployment.summary
+    : machines.pending
+      ? "Updating machines…"
+      : machines.run &&
+          Object.values(machines.run.remotes).some((remote) => remote.status === "failed")
+        ? "Machine update failed"
+        : (machines.label ??
+          (showUpdateDetails
+            ? state
+              ? getDesktopUpdateButtonTooltip(state)
+              : "Update available"
+            : showCheckIcon
+              ? "Checking for updates…"
+              : "Check for updates"));
   const disabled = hasMachineDetails
-    ? machines.pending
+    ? machinesPending
     : showCheckIcon
       ? true
       : showUpdateDetails
         ? isDesktopUpdateButtonDisabled(state)
         : !canCheckForUpdate(state);
-  const isInteractionDisabled = disabled || isActionPending || machines.pending;
+  const isInteractionDisabled = disabled || isActionPending || machinesPending;
   const showReleaseNotesPopover =
     hasMachineDetails || shouldUseSidebarUpdateReleaseNotesPopover(showUpdateDetails, state);
 
@@ -247,9 +266,17 @@ function SidebarUpdateControl() {
 
     setIsActionPending(true);
 
+    if (deploymentActive) {
+      // A release is already approved; the popover is where it is managed.
+      setIsActionPending(false);
+      releaseNotesPopoverHandle.open(releaseNotesTriggerId);
+      return;
+    }
+
     if (action !== "none" || isDownloading || hasMachineDetails) {
       setIsActionPending(false);
-      await machines.start();
+      if (deployment.eligible) await deployment.beginApproval();
+      else await machines.start();
       return;
     }
 
@@ -282,11 +309,15 @@ function SidebarUpdateControl() {
       .finally(() => setIsActionPending(false));
   }, [
     action,
+    deployment,
+    deploymentActive,
     isDownloading,
     hasMachineDetails,
     isInteractionDisabled,
     machines,
     prefersReducedMotion,
+    releaseNotesPopoverHandle,
+    releaseNotesTriggerId,
     state,
   ]);
 
@@ -344,7 +375,13 @@ function SidebarUpdateControl() {
         downloadPercent={state?.downloadPercent ?? null}
         isCheckAnimating={showCheckIcon && !prefersReducedMotion}
         onCheckAnimationIteration={handleCheckAnimationIteration}
-        status={hasMachineDetails ? (machines.pending ? "downloading" : "available") : iconStatus}
+        status={
+          hasMachineDetails
+            ? machines.pending || deployment.running
+              ? "downloading"
+              : "available"
+            : iconStatus
+        }
       />
     </button>
   );
@@ -408,8 +445,15 @@ function SidebarUpdateControl() {
             side="top"
             tooltipStyle
           >
-            {hasMachineDetails ? (
-              <SidebarMachineUpdateDetails machines={machines} state={state} tooltip={tooltip} />
+            {deploymentActive ? (
+              <ReleaseDeploymentDetails deployment={deployment} />
+            ) : hasMachineDetails ? (
+              <SidebarMachineUpdateDetails
+                machines={machines}
+                pinnedRelease={deployment.eligible}
+                state={state}
+                tooltip={tooltip}
+              />
             ) : null}
             {state && shouldUseSidebarUpdateReleaseNotesPopover(showUpdateDetails, state) ? (
               <SidebarUpdateReleaseNotes
@@ -421,6 +465,20 @@ function SidebarUpdateControl() {
           </PopoverPopup>
         ) : null}
       </Popover>
+      {deployment.approval ? (
+        <ReleaseApprovalDialog
+          approval={deployment.approval}
+          onApprove={(scope) => void deployment.approve(scope)}
+          onCancel={deployment.dismissApproval}
+        />
+      ) : null}
+      {deployment.acceptance ? (
+        <ReleaseAcceptanceDialog
+          target={deployment.acceptance}
+          onSubmit={deployment.recordAcceptance}
+          onCancel={deployment.dismissAcceptance}
+        />
+      ) : null}
     </SidebarMenuItem>
   );
 }

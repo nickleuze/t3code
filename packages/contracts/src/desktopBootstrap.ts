@@ -33,6 +33,10 @@ export const DesktopBackendBootstrap = Schema.Struct({
   /** Server -> desktop: commands for those tabs. */
   desktopBrowserControlFd: Schema.optionalKey(PositiveInt),
   resourceMonitorPath: Schema.optionalKey(TrimmedNonEmptyString),
+  /** Build commit stamped into the packaged app; verifies a release deployment. */
+  appCommitHash: Schema.optionalKey(TrimmedNonEmptyString),
+  /** The running `.app` bundle (macOS) or install directory (Windows); release deployment checks its feed. */
+  appBundlePath: Schema.optionalKey(TrimmedNonEmptyString),
 });
 
 export type DesktopBackendBootstrap = typeof DesktopBackendBootstrap.Type;

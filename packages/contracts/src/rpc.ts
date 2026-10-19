@@ -1,4 +1,13 @@
 import {
+  HostDeploymentAcceptanceInput,
+  HostDeploymentAdmitInput,
+  HostDeploymentError,
+  HostDeploymentListResult,
+  HostDeploymentMutationResult,
+  HostDeploymentReleaseInput,
+  HostDeploymentRequestInput,
+} from "./hostDeployment.ts";
+import {
   TicketActionInput,
   TicketSetupCheck,
   TicketMachineLabelInput,
@@ -240,6 +249,9 @@ import {
   OrchestrationV2ThreadLaunchError,
 } from "./orchestrationV2.ts";
 import {
+  WorkModelProjectDraft,
+  WorkModelProjectOptions,
+  WorkModelProjectPreview,
   ProjectCreateNewInput,
   ProjectCreateNewResult,
   ProjectEnsureScratchResult,
@@ -421,6 +433,8 @@ export const WS_METHODS = {
   projectsMutate: "projects.mutate",
   projectsEnsureScratch: "projects.ensureScratch",
   projectsCreateNew: "projects.createNew",
+  projectsWorkModelOptions: "projects.workModelOptions",
+  projectsWorkModelPreview: "projects.workModelPreview",
 
   // Shell methods
   shellOpenInEditor: "shell.openInEditor",
@@ -555,6 +569,14 @@ export const WS_METHODS = {
   serverGetBackgroundPolicy: "server.getBackgroundPolicy",
   serverGetUsageSummary: "server.getUsageSummary",
   serverRefreshUsageRates: "server.refreshUsageRates",
+
+  // Release deployments
+  deploymentsRequest: "deployments.request",
+  deploymentsAdmit: "deployments.admit",
+  deploymentsRetry: "deployments.retry",
+  deploymentsCancel: "deployments.cancel",
+  deploymentsRecordAcceptance: "deployments.recordAcceptance",
+  deploymentsSubscribe: "deployments.subscribe",
 
   // Tickets
   ticketsStart: "tickets.start",
@@ -1345,7 +1367,17 @@ const WsProjectsEnsureScratchRpc = Rpc.make(WS_METHODS.projectsEnsureScratch, {
   error: Schema.Union([OrchestrationDispatchCommandError, EnvironmentAuthorizationError]),
 });
 
-// Makes a folder under ServerConfig.newProjectsRoot with a first commit, then the project.
+// Work Model setup is available only on servers with existing Areas.
+const WsProjectsWorkModelOptionsRpc = Rpc.make(WS_METHODS.projectsWorkModelOptions, {
+  payload: Schema.Struct({}),
+  success: WorkModelProjectOptions,
+  error: Schema.Union([OrchestrationDispatchCommandError, EnvironmentAuthorizationError]),
+});
+const WsProjectsWorkModelPreviewRpc = Rpc.make(WS_METHODS.projectsWorkModelPreview, {
+  payload: WorkModelProjectDraft,
+  success: WorkModelProjectPreview,
+  error: Schema.Union([OrchestrationDispatchCommandError, EnvironmentAuthorizationError]),
+});
 const WsProjectsCreateNewRpc = Rpc.make(WS_METHODS.projectsCreateNew, {
   payload: ProjectCreateNewInput,
   success: ProjectCreateNewResult,
@@ -1855,6 +1887,40 @@ const WsSubscribeServerLifecycleRpc = Rpc.make(WS_METHODS.subscribeServerLifecyc
   stream: true,
 });
 
+const HostDeploymentRpcError = Schema.Union([HostDeploymentError, EnvironmentAuthorizationError]);
+const WsDeploymentsRequestRpc = Rpc.make(WS_METHODS.deploymentsRequest, {
+  payload: HostDeploymentRequestInput,
+  success: HostDeploymentMutationResult,
+  error: HostDeploymentRpcError,
+});
+const WsDeploymentsAdmitRpc = Rpc.make(WS_METHODS.deploymentsAdmit, {
+  payload: HostDeploymentAdmitInput,
+  success: HostDeploymentMutationResult,
+  error: HostDeploymentRpcError,
+});
+const WsDeploymentsRetryRpc = Rpc.make(WS_METHODS.deploymentsRetry, {
+  payload: HostDeploymentReleaseInput,
+  success: HostDeploymentMutationResult,
+  error: HostDeploymentRpcError,
+});
+const WsDeploymentsCancelRpc = Rpc.make(WS_METHODS.deploymentsCancel, {
+  payload: HostDeploymentReleaseInput,
+  success: HostDeploymentMutationResult,
+  error: HostDeploymentRpcError,
+});
+const WsDeploymentsRecordAcceptanceRpc = Rpc.make(WS_METHODS.deploymentsRecordAcceptance, {
+  payload: HostDeploymentAcceptanceInput,
+  success: HostDeploymentMutationResult,
+  error: HostDeploymentRpcError,
+});
+/** This host's deployment records: a snapshot on subscribe, then the list after every change. */
+const WsDeploymentsSubscribeRpc = Rpc.make(WS_METHODS.deploymentsSubscribe, {
+  payload: Schema.Struct({}),
+  success: HostDeploymentListResult,
+  error: HostDeploymentRpcError,
+  stream: true,
+});
+
 const WsTicketsStartRpc = Rpc.make(WS_METHODS.ticketsStart, {
   payload: TicketStartInput,
   success: TicketStartResult,
@@ -2090,6 +2156,16 @@ export const AgentToolsRpcGroup = RpcGroup.make(
   WsMcpServersListToolsRpc,
 ).middleware(RpcScopeAuthorization);
 
+// Release deployment RPCs, split out like TicketRecordRpcGroup.
+export const HostDeploymentRpcGroup = RpcGroup.make(
+  WsDeploymentsRequestRpc,
+  WsDeploymentsAdmitRpc,
+  WsDeploymentsRetryRpc,
+  WsDeploymentsCancelRpc,
+  WsDeploymentsRecordAcceptanceRpc,
+  WsDeploymentsSubscribeRpc,
+).middleware(RpcScopeAuthorization);
+
 export const CoreWsRpcGroup = RpcGroup.make(
   WsServerProbeRpc,
   WsServerGetConfigRpc,
@@ -2206,6 +2282,8 @@ export const CoreWsRpcGroup = RpcGroup.make(
   WsProjectsSearchEntriesRpc,
   WsProjectsEnsureScratchRpc,
   WsProjectsCreateNewRpc,
+  WsProjectsWorkModelOptionsRpc,
+  WsProjectsWorkModelPreviewRpc,
   WsProjectsWriteFileRpc,
   WsProjectsMutateRpc,
   WsShellOpenInEditorRpc,
@@ -2289,4 +2367,8 @@ export const CoreWsRpcGroup = RpcGroup.make(
   WsOrchestrationV2SubscribeThreadRpc,
 ).middleware(RpcScopeAuthorization);
 
-export const WsRpcGroup = CoreWsRpcGroup.merge(TicketRecordRpcGroup, AgentToolsRpcGroup);
+export const WsRpcGroup = CoreWsRpcGroup.merge(
+  TicketRecordRpcGroup,
+  AgentToolsRpcGroup,
+  HostDeploymentRpcGroup,
+);

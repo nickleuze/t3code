@@ -1,5 +1,7 @@
 "use client";
 
+import { openWorkModelProject } from "../workModelProject";
+
 import { openTicketCapture } from "../ticketCapture";
 import { useTicketsSupported } from "../state/tickets";
 import { TicketIcon } from "lucide-react";
@@ -116,7 +118,6 @@ import { sourceControlEnvironment } from "../state/sourceControl";
 import { useAtomCommand } from "../state/use-atom-command";
 import { useAtomQueryRunner } from "../state/use-atom-query-runner";
 import { useScratchProject } from "../hooks/useScratchProject";
-import { useNewProject } from "../hooks/useNewProject";
 import { isScratchProject } from "@t3tools/client-runtime/state/projects";
 import { useEnvironments, usePrimaryEnvironmentId } from "../state/environments";
 import { useProjects, useServerConfigs, useThreadShells, waitForProject } from "../state/entities";
@@ -915,7 +916,6 @@ function OpenCommandPaletteDialog(props: {
   const [isCreatingNewProject, setIsCreatingNewProject] = useState(false);
   // State lags a render behind, so a repeated Enter could start a second create.
   const newProjectSubmittingRef = useRef(false);
-  const createNewProject = useNewProject();
   const cloneLookupGeneration = useRef(0);
   const [isRemoteProjectLookingUp, setIsRemoteProjectLookingUp] = useState(false);
   const [isRemoteProjectCloning, setIsRemoteProjectCloning] = useState(false);
@@ -2607,12 +2607,12 @@ function OpenCommandPaletteDialog(props: {
     newProjectSubmittingRef.current = true;
     setIsCreatingNewProject(true);
     try {
-      const created = await createNewProject({
+      openWorkModelProject({
         environmentId: newProjectFlow.environmentId,
         name: newProjectName,
         github: newProjectPublishesToGitHub ? newProjectGitHubTarget : null,
       });
-      if (created) setOpen(false);
+      setOpen(false);
     } finally {
       newProjectSubmittingRef.current = false;
       setIsCreatingNewProject(false);
@@ -3403,7 +3403,7 @@ function OpenCommandPaletteDialog(props: {
               size="xs"
               tabIndex={-1}
               className="absolute inset-e-2.5 top-1/2 -translate-y-1/2"
-              aria-label="Create (Enter)"
+              aria-label="Continue (Enter)"
               disabled={!canSubmitNewProject}
               onMouseDown={(event) => {
                 event.preventDefault();
@@ -3414,12 +3414,12 @@ function OpenCommandPaletteDialog(props: {
             />
           }
         >
-          <span>{isCreatingNewProject ? "Creating" : "Create"}</span>
+          <span>Continue</span>
           <KbdGroup className="pointer-events-none -me-0.5">
             <Kbd>Enter</Kbd>
           </KbdGroup>
         </TooltipTrigger>
-        <TooltipPopup side="top">Create (Enter)</TooltipPopup>
+        <TooltipPopup side="top">Continue (Enter)</TooltipPopup>
       </Tooltip>
     ) : addProjectCloneFlow?.step === "repository" ? (
       <Tooltip>
@@ -3500,7 +3500,7 @@ function OpenCommandPaletteDialog(props: {
   const footerActionLabel =
     newProjectFlow !== null
       ? highlightedItemValue === null
-        ? "Create"
+        ? "Continue"
         : highlightedItemValue === newProjectGitHubToggleValue
           ? "Toggle"
           : "Select"
@@ -3586,8 +3586,8 @@ function OpenCommandPaletteDialog(props: {
               </span>
               <span className="truncate text-muted-foreground/85 text-xs">
                 {newProjectName.length > 0
-                  ? `Creates ${newProjectPathPreview}`
-                  : `Goes in ${newProjectsRoot}`}
+                  ? "Review the Area and Project Home next"
+                  : "Choose a name, then review the Project Home"}
                 {newProjectEnvironmentLabel === null ? null : ` on ${newProjectEnvironmentLabel}`}
               </span>
             </span>

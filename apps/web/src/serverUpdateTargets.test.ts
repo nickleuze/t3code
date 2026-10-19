@@ -53,7 +53,7 @@ function row(overrides: Partial<EnvironmentPresentation> = {}) {
 }
 
 describe("shared update targets", () => {
-  it("finds a remote on the same old build before this Mac updates", () => {
+  it("finds a remote on the same old build before this machine updates", () => {
     expect(savedServerUpdateTargets([row()], "0.0.45-nick.11", true)).toEqual([
       expect.objectContaining({
         serverLabel: "nick-mini",

@@ -3301,10 +3301,15 @@ it.effect("emits run_interrupt_result when superseded attempt still has a hard-s
       key: "stop-then-steer-supersede",
       shouldFinalizeRun: () => Effect.succeed(false),
       hasUnpairedRunInterruptRequest: () => Effect.succeed(true),
+      interruptReason: () => Effect.succeed("Stopped by user"),
     });
     assert.deepEqual(
       written.map((item) => item.type),
       ["run_interrupt_result"],
+    );
+    assert.equal(
+      written[0]?.type === "run_interrupt_result" && written[0].message,
+      "Stopped by user",
     );
     assert.deepEqual(observed, ["pull-requests-refreshed"]);
     const ids = backgroundScenarioIds("stop-then-steer-supersede");
@@ -3361,6 +3366,11 @@ it.effect("emits run_interrupt_result when hard-stop finalizes the active attemp
     assert.deepEqual(
       written.map((item) => item.type),
       ["run_interrupt_result"],
+    );
+    // No recorded reason: say what happened without guessing who did it.
+    assert.equal(
+      written[0]?.type === "run_interrupt_result" && written[0].message,
+      "Run interrupted",
     );
     assert.deepEqual(observed, ["run:interrupted", "pull-requests-refreshed"]);
     assert.deepEqual(
@@ -3497,6 +3507,7 @@ function captureRootRunTermination(input: {
   readonly shouldFinalizeRun: () => Effect.Effect<boolean, ProjectionStore.ProjectionStoreV2Error>;
   readonly rejectTerminalWrite?: boolean;
   readonly hasUnpairedRunInterruptRequest?: () => Effect.Effect<boolean, never>;
+  readonly interruptReason?: () => Effect.Effect<string | null, never>;
   readonly seedOpenSubagent?: boolean;
   readonly events?: (
     ids: BackgroundScenarioIds,
@@ -3653,6 +3664,7 @@ function captureRootRunTermination(input: {
           : {
               hasUnpairedRunInterruptRequest: input.hasUnpairedRunInterruptRequest,
             }),
+        ...(input.interruptReason === undefined ? {} : { interruptReason: input.interruptReason }),
         message: {
           messageId: MessageId.make(`message:${input.key}`),
           text: "interrupt projection",

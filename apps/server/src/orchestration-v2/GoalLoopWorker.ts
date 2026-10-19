@@ -2,8 +2,7 @@
  * Drives `/t3-goal` loops. A scheduler sweep reconciles every thread whose goal
  * needs attention: it starts the next iteration in a fresh child thread,
  * continues the child in place while its context has room, records its
- * outcome, runs the completion check, and enforces the burn guard and
- * iteration timeout. All decisions about what a finished iteration means live
+ * outcome, and enforces the iteration time limit. All decisions about what a finished iteration means live
  * in `GoalState.ts`; this worker only observes and reports, so restarts resume
  * from durable state.
  *
@@ -16,10 +15,6 @@ import {
   MessageId,
   type OrchestrationV2AppThread,
   type OrchestrationV2GoalAdvanceStep,
-  type OrchestrationV2GoalBurnGuard,
-  type OrchestrationV2GoalStatusReason,
-  type OrchestrationV2GoalUsageAccounting,
-  type OrchestrationV2GoalUsageSample,
   type OrchestrationV2ProviderThread,
   type OrchestrationV2ProviderTurn,
   type OrchestrationV2Run,
@@ -27,23 +22,18 @@ import {
   type OrchestrationV2ThreadGoal,
   type OrchestrationV2ThreadShell,
   type OrchestrationV2TurnItem,
-  type ServerProviderUsageWindow,
 } from "@t3tools/contracts";
-import * as HostProcess from "@t3tools/shared/HostProcess";
 import { randomUuidV4 } from "@t3tools/provider-core/server/randomUuid";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Base64Url from "effect/encoding/Base64Url";
-import * as FiberMap from "effect/FiberMap";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 
-import * as ProcessRunner from "../processRunner.ts";
-import * as ProviderRegistry from "../provider/ProviderRegistry.ts";
 import * as Scheduler from "../scheduling/Scheduler.ts";
 import * as VcsDriverRegistry from "../vcs/VcsDriverRegistry.ts";
 import * as EffectOutbox from "./EffectOutbox.ts";
-import { goalIterationTitle, isLiveGoal, MAX_GOAL_CHECK_OUTPUT_CHARS } from "./GoalState.ts";
+import { goalIterationTitle, isLiveGoal } from "./GoalState.ts";
 import { buildGoalIterationPrompt } from "./GoalPrompt.ts";
 import * as Orchestrator from "./Orchestrator.ts";
 import * as ProjectionStore from "./ProjectionStore.ts";
@@ -56,15 +46,7 @@ const WRAP_UP_LEAD_FRACTION = 0.1;
 const CONTEXT_ROLLOVER_FRACTION = 0.6;
 /** How long to wait when a usage limit reports no reset time (or one already past). */
 const USAGE_LIMIT_FALLBACK_BACKOFF_MS = 15 * 60 * 1000;
-const CHECK_TIMEOUT = "10 minutes";
-const CHECK_MAX_OUTPUT_BYTES = 256 * 1024;
 const GOAL_REFS_PREFIX = "refs/t3/goals";
-
-/** Guard pauses that should stop the running child rather than let it finish. */
-const INTERRUPTING_PAUSE_REASONS: ReadonlySet<OrchestrationV2GoalStatusReason> = new Set([
-  "burn_rate",
-  "iteration_timeout",
-]);
 
 /** When an iteration gets its wrap-up nudge and when it is stopped, in ms after it started. */
 export function iterationDeadlines(timeoutMins: number) {
@@ -80,33 +62,16 @@ export function iterationDeadlines(timeoutMins: number) {
  */
 export function childIterationTokens(
   providerTurns: ReadonlyArray<Pick<OrchestrationV2ProviderTurn, "turnTokenUsage">>,
-): {
-  readonly tokens: number;
-  readonly uncachedTokens: number;
-  readonly accounting: OrchestrationV2GoalUsageAccounting;
-} {
+): { readonly tokens: number; readonly uncachedTokens: number } {
   let tokens = 0;
   let uncachedTokens = 0;
-  let reported = 0;
-  let complete = true;
   for (const turn of providerTurns) {
-    const usage = turn.turnTokenUsage;
-    if (
-      usage === undefined ||
-      (usage.inputTokens === undefined && usage.outputTokens === undefined)
-    ) {
-      complete = false;
-      continue;
-    }
-    reported += 1;
-    const input = usage.inputTokens ?? 0;
-    const output = usage.outputTokens ?? 0;
+    const input = turn.turnTokenUsage?.inputTokens ?? 0;
+    const output = turn.turnTokenUsage?.outputTokens ?? 0;
     tokens += input + output;
-    uncachedTokens += Math.max(0, input - (usage.cachedInputTokens ?? 0)) + output;
-    if (usage.usageStatus !== "complete") complete = false;
+    uncachedTokens += Math.max(0, input - (turn.turnTokenUsage?.cachedInputTokens ?? 0)) + output;
   }
-  if (reported === 0) return { tokens: 0, uncachedTokens: 0, accounting: "unavailable" };
-  return { tokens, uncachedTokens, accounting: complete ? "exact" : "estimated" };
+  return { tokens, uncachedTokens };
 }
 
 /**
@@ -124,64 +89,6 @@ export function childContextFraction(
   const maxTokens = usage?.maxTokens ?? threadUsage?.maxTokens;
   if (usedTokens === undefined || maxTokens == null || maxTokens <= 0) return null;
   return usedTokens / maxTokens;
-}
-
-export interface GoalUsageSample {
-  readonly atMs: number;
-  readonly windows: ReadonlyArray<Pick<ServerProviderUsageWindow, "id" | "usedPercent">>;
-}
-
-/**
- * The usage window that rose most across the samples, which callers keep
- * trimmed to the guard's trailing window. A drop between samples is a
- * provider reset and restarts that window's baseline.
- */
-export function largestUsageRise(
-  samples: ReadonlyArray<GoalUsageSample>,
-): { readonly windowId: string; readonly risePoints: number } | null {
-  const latest = samples.at(-1);
-  if (latest === undefined) return null;
-  let largest: { readonly windowId: string; readonly risePoints: number } | null = null;
-  for (const window of latest.windows) {
-    let low: number | null = null;
-    let previous: number | null = null;
-    for (const sample of samples) {
-      const value = sample.windows.find((entry) => entry.id === window.id)?.usedPercent;
-      if (value === undefined) continue;
-      if (low === null || (previous !== null && value < previous)) low = value;
-      else low = Math.min(low, value);
-      previous = value;
-    }
-    const risePoints = low === null ? 0 : window.usedPercent - low;
-    if (largest === null || risePoints > largest.risePoints) {
-      largest = { windowId: window.id, risePoints };
-    }
-  }
-  return largest;
-}
-
-export function burnGuardTripped(
-  samples: ReadonlyArray<GoalUsageSample>,
-  guard: OrchestrationV2GoalBurnGuard,
-): { readonly windowId: string; readonly risePoints: number } | null {
-  const rise = largestUsageRise(samples);
-  return rise !== null && rise.risePoints > guard.maxPercentPoints ? rise : null;
-}
-
-/** Whether a reading differs enough from the stored one to be worth persisting. */
-function usageSampleChanged(
-  stored: OrchestrationV2GoalUsageSample | null | undefined,
-  next: OrchestrationV2GoalUsageSample,
-): boolean {
-  if (stored == null || stored.windows.length !== next.windows.length) return true;
-  if (Math.round(stored.risePoints) !== Math.round(next.risePoints)) return true;
-  return next.windows.some((window, index) => {
-    const previous = stored.windows[index]!;
-    return (
-      previous.id !== window.id ||
-      Math.round(previous.usedPercent) !== Math.round(window.usedPercent)
-    );
-  });
 }
 
 /**
@@ -238,19 +145,13 @@ const isLiveRun = (run: OrchestrationV2Run) =>
 const goalRef = (goal: OrchestrationV2ThreadGoal, iteration: number, edge: "start" | "end") =>
   CheckpointRef.make(`${GOAL_REFS_PREFIX}/${Base64Url.encode(goal.id)}/${iteration}/${edge}`);
 
-/** The loop's sweep, plus a way to wait for in-flight completion checks. */
+/** The loop's sweep. */
 export const make = Effect.gen(function* () {
   const orchestrator = yield* Orchestrator.OrchestratorV2;
   const projections = yield* ProjectionStore.ProjectionStoreV2;
   const projects = yield* ProjectStore.ProjectStoreV2;
   const vcs = yield* VcsDriverRegistry.VcsDriverRegistry;
-  const processRunner = yield* ProcessRunner.ProcessRunner;
-  const providers = yield* ProviderRegistry.ProviderRegistry;
   const outbox = yield* EffectOutbox.EffectOutboxV2;
-  const checks = yield* FiberMap.make<string, void, never>();
-  // Usage samples live in memory: after a restart the guard re-warms over its
-  // window instead of judging a rise it did not observe.
-  const usageSamples = new Map<CommandId, Array<GoalUsageSample>>();
   // Every dispatch gets a fresh command id. The goal reducer already rejects
   // stale steps, while a reused id would replay a stored rejection forever and
   // wedge the loop after one transient failure.
@@ -368,90 +269,6 @@ export const make = Effect.gen(function* () {
         );
     });
 
-  const runCheck = (thread: OrchestrationV2AppThread, goal: OrchestrationV2ThreadGoal) =>
-    Effect.gen(function* () {
-      const command = goal.checkCommand!;
-      const cwd = yield* workspaceCwd(thread);
-      const environment = yield* HostProcess.Environment;
-      const shell = (yield* HostProcess.isWindows)
-        ? { command: "cmd.exe", args: ["/d", "/s", "/c", command] }
-        : { command: environment.SHELL ?? "/bin/sh", args: ["-lc", command] };
-      const output = yield* processRunner
-        .run({
-          ...shell,
-          cwd: cwd ?? undefined,
-          timeout: CHECK_TIMEOUT,
-          maxOutputBytes: CHECK_MAX_OUTPUT_BYTES,
-          outputMode: "truncate",
-          timeoutBehavior: "timedOutResult",
-        })
-        .pipe(Effect.option);
-      if (Option.isNone(output)) {
-        return yield* advance(thread, goal, "check-error", {
-          type: "paused",
-          reason: "check_error",
-        });
-      }
-      const { stdout, stderr, code, timedOut } = output.value;
-      const exitCode = code === null ? null : Number(code);
-      const combined = [stdout, stderr].filter((text) => text.trim().length > 0).join("\n");
-      yield* advance(thread, goal, "check", {
-        type: "check_finished",
-        result: {
-          iteration: goal.iteration,
-          command,
-          exitCode,
-          timedOut,
-          passed: !timedOut && exitCode === 0,
-          outputTail: combined.slice(-MAX_GOAL_CHECK_OUTPUT_CHARS),
-          at: DateTime.formatIso(yield* DateTime.now),
-        },
-      });
-    });
-
-  const burnGuardCheck = (
-    thread: OrchestrationV2AppThread,
-    goal: OrchestrationV2ThreadGoal,
-    nowMs: number,
-  ) =>
-    Effect.gen(function* () {
-      const guard = goal.burnGuard;
-      if (guard === null) return null;
-      const provider = (yield* providers.getProviders).find(
-        (candidate) => candidate.instanceId === goal.modelSelection.instanceId,
-      );
-      const windows = (provider?.usageLimits?.windows ?? []).map(({ id, usedPercent }) => ({
-        id,
-        usedPercent,
-      }));
-      if (windows.length === 0) {
-        yield* Effect.logDebug("orchestration-v2.goal-loop.usage-unavailable", {
-          threadId: thread.id,
-          instanceId: goal.modelSelection.instanceId,
-        });
-        return null;
-      }
-      const cutoff = nowMs - guard.windowMins * 60_000;
-      const samples = (usageSamples.get(goal.id) ?? []).filter((sample) => sample.atMs >= cutoff);
-      samples.push({ atMs: nowMs, windows });
-      usageSamples.set(goal.id, samples);
-      const rise = largestUsageRise(samples);
-      const sample: OrchestrationV2GoalUsageSample = {
-        at: DateTime.formatIso(DateTime.makeUnsafe(nowMs)),
-        windows,
-        risePoints: rise?.risePoints ?? 0,
-      };
-      yield* Effect.logDebug("orchestration-v2.goal-loop.usage-sample", {
-        threadId: thread.id,
-        samples: samples.length,
-        ...sample,
-      });
-      if (usageSampleChanged(goal.usageSample, sample)) {
-        yield* advance(thread, goal, "usage-sampled", { type: "usage_sampled", sample });
-      }
-      return burnGuardTripped(samples, guard);
-    });
-
   /**
    * Starts another turn in the iteration's thread when its last turn ended
    * cleanly, recorded progress, and left both time and context to spare, so
@@ -546,43 +363,6 @@ export const make = Effect.gen(function* () {
   ) =>
     Effect.gen(function* () {
       const current = goal.current!;
-      if (current.phase === "checking") {
-        if (goal.status === "stopped") {
-          // Stop the process before retiring the durable check. A late passing
-          // result must not keep running after Stop or owner deletion.
-          yield* FiberMap.remove(checks, `${goal.id}:${goal.iteration}`);
-          return yield* advance(thread, goal, "check", {
-            type: "check_finished",
-            result: {
-              iteration: goal.iteration,
-              command: goal.checkCommand ?? "check",
-              exitCode: null,
-              timedOut: false,
-              passed: false,
-              outputTail: "The goal was stopped before the check ran.",
-              at: DateTime.formatIso(yield* DateTime.now),
-            },
-          });
-        }
-        if (goal.status === "paused" && goal.statusReason === "check_error") return;
-        yield* FiberMap.run(
-          checks,
-          `${goal.id}:${goal.iteration}`,
-          runCheck(thread, goal).pipe(
-            Effect.catchCause((cause) =>
-              Effect.logWarning("orchestration-v2.goal-loop.check-failed", {
-                threadId: thread.id,
-                cause,
-              }),
-            ),
-          ),
-          {
-            onlyIfMissing: true,
-          },
-        );
-        return;
-      }
-
       const child = yield* orchestrator
         .getThreadRecords(
           current.childThreadId,
@@ -634,7 +414,6 @@ export const make = Effect.gen(function* () {
         return yield* finish({
           childOutcome: "interrupted",
           tokens: 0,
-          accounting: "unavailable",
           workspaceChanged: yield* workspaceChanged(thread, goal, current.baselineRef),
           resumeAt: null,
         });
@@ -658,12 +437,7 @@ export const make = Effect.gen(function* () {
       const stillWorking =
         progress.state !== "result_available" ||
         records.runs.some((run) => run.status === "queued" && run.queueHeld !== true);
-      const interrupting =
-        goal.status === "stopped" ||
-        current.timedOutAt != null ||
-        (goal.status === "paused" &&
-          goal.statusReason !== null &&
-          INTERRUPTING_PAUSE_REASONS.has(goal.statusReason));
+      const interrupting = goal.status === "stopped" || current.timedOutAt != null;
       if (stillWorking) {
         const liveRuns = records.runs.filter(isLiveRun);
         if (interrupting) {
@@ -744,19 +518,6 @@ export const make = Effect.gen(function* () {
               });
               yield* advance(thread, goal, "wrap-up-sent", { type: "wrap_up_sent" });
             }
-            const tripped = yield* burnGuardCheck(thread, goal, nowMs);
-            if (tripped !== null) {
-              yield* Effect.logInfo("orchestration-v2.goal-loop.burn-guard-tripped", {
-                threadId: thread.id,
-                maxPercentPoints: goal.burnGuard?.maxPercentPoints,
-                windowMins: goal.burnGuard?.windowMins,
-                ...tripped,
-              });
-              return yield* advance(thread, goal, "paused:burn", {
-                type: "paused",
-                reason: "burn_rate",
-              });
-            }
           }
           return;
         }
@@ -803,7 +564,6 @@ export const make = Effect.gen(function* () {
         childOutcome: outcome,
         tokens: usage.tokens,
         uncachedTokens: usage.uncachedTokens,
-        accounting: usage.accounting,
         workspaceChanged: yield* workspaceChanged(thread, goal, current.baselineRef),
         resumeAt,
         userAnswers: childUserAnswers(records.turnItems),
@@ -814,7 +574,6 @@ export const make = Effect.gen(function* () {
     Effect.gen(function* () {
       const goal = thread.goal;
       if (goal == null) return;
-      if (goal.status !== "active") usageSamples.delete(goal.id);
       if ((thread.archivedAt !== null || thread.deletedAt !== null) && isLiveGoal(goal)) {
         return yield* advance(thread, goal, "stopped:parent", {
           type: "stopped",
@@ -836,10 +595,6 @@ export const make = Effect.gen(function* () {
   const sweep = Effect.fn("GoalLoopWorker.sweep")(function* () {
     const threads = yield* projections.getGoalThreads();
     const nowMs = DateTime.toEpochMillis(yield* DateTime.now);
-    const liveGoalIds = new Set(threads.flatMap((thread) => (thread.goal ? [thread.goal.id] : [])));
-    for (const goalId of usageSamples.keys()) {
-      if (!liveGoalIds.has(goalId)) usageSamples.delete(goalId);
-    }
     yield* Effect.forEach(
       threads,
       (thread) =>
@@ -854,7 +609,7 @@ export const make = Effect.gen(function* () {
       { concurrency: 4, discard: true },
     );
   });
-  return { sweep, awaitChecks: FiberMap.awaitEmpty(checks) };
+  return { sweep };
 });
 
 // Due work is derived from goals persisted on threads, so a restart resumes

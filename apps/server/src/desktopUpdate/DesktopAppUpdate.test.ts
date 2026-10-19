@@ -154,6 +154,31 @@ it.layer(NodeServices.layer)("desktop app update", (it) => {
     }),
   );
 
+  it.effect("reports the downloaded digest and refuses others while a deployment holds it", () =>
+    Effect.gen(function* () {
+      const { service } = yield* makeHarness({
+        reports: (requestId) => [
+          {
+            ...report(requestId, makeState({ status: "downloaded", downloadedVersion: "1.2.4" }), {
+              outcome: "ready-to-install",
+            }),
+            downloadedSha512: "sha512-of-zip",
+          },
+        ],
+      });
+      yield* service.reserve("1.2.4");
+      const refused = yield* service.run(() => Effect.void).pipe(Effect.flip);
+      expect(refused.reason).toContain("Release deployment 1.2.4 is installing");
+      expect(
+        (yield* service.commit("token", undefined, { deployment: "other" }).pipe(Effect.flip))
+          .reason,
+      ).toContain("Release deployment 1.2.4 is installing");
+
+      const prepared = yield* service.run(() => Effect.void, { deployment: "1.2.4" });
+      expect(prepared.downloadedSha512).toBe("sha512-of-zip");
+    }),
+  );
+
   it.effect("maps up-to-date and failed outcomes to readable errors", () =>
     Effect.gen(function* () {
       const upToDate = yield* makeHarness({

@@ -124,6 +124,7 @@ import { ProviderSessionManagerV2 } from "./ProviderSessionManager.ts";
 import { ProviderSwitchServiceV2 } from "./ProviderSwitchService.ts";
 import { isAutomaticCompletionRun, queuedRunsInDeliveryOrder } from "./QueuedRunOrder.ts";
 import { RuntimePolicyV2 } from "./RuntimePolicy.ts";
+import { isRunAdmissionClosed, RunAdmissionGate } from "./RunAdmissionGate.ts";
 import {
   makeSubagentChildThread,
   subagentResultForRun,
@@ -819,6 +820,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
   const commandPolicy = yield* CommandPolicyV2;
   const contextHandoffService = yield* ContextHandoffServiceV2;
   const eventSink = yield* EventSinkV2;
+  const admissionGate = yield* Effect.serviceOption(RunAdmissionGate);
   const commandReceipts = yield* CommandReceiptStoreV2;
   const idAllocator = yield* IdAllocator.IdAllocatorV2;
   const projects = yield* ProjectStore.ProjectStoreV2;
@@ -1285,6 +1287,11 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
 
   const startNextQueuedRun = (threadId: ThreadId, options?: { readonly failedRunId?: RunId }) =>
     Effect.gen(function* () {
+      // A release deployment holds new admissions; the run stays queued and
+      // starts when the gate reopens or after the restart.
+      if (Option.isSome(admissionGate) && (yield* admissionGate.value.closedReason) !== undefined) {
+        return;
+      }
       // Every terminal run checks the queue. Only a deliverable queued run
       // needs the transcript for provider handoff and legacy import context.
       if (!(yield* projectionStore.canStartQueuedRun(threadId))) return;
@@ -1887,7 +1894,12 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           },
         ],
       );
-    }).pipe(Effect.catch((cause) => failQueuedRunStart(threadId, cause)));
+    }).pipe(
+      Effect.catch((cause) =>
+        // The gate closed after the check above; leave the run queued.
+        isRunAdmissionClosed(cause) ? Effect.void : failQueuedRunStart(threadId, cause),
+      ),
+    );
 
   const resumeQueuedRuns = Effect.gen(function* () {
     const threadIds = yield* projectionStore.getRecoveryThreadIds("queued-runs");
@@ -6552,9 +6564,6 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
             type: "set",
             commandId: command.commandId,
             objective: command.objective,
-            checkCommand: command.checkCommand ?? null,
-            burnGuard: command.burnGuard,
-            noProgressLimit: command.noProgressLimit,
             modelSelection: command.modelSelection ?? thread.modelSelection,
             runtimeMode: command.runtimeMode ?? thread.runtimeMode,
             doneWhen: command.doneWhen ?? null,
@@ -6580,7 +6589,6 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
             type: "control",
             goalId: command.goalId,
             action: command.action,
-            burnGuard: command.burnGuard,
           };
         case "thread.goal.report":
           return {
@@ -6666,7 +6674,6 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
               objective: command.objective,
               doneWhen: command.doneWhen,
               background: command.background,
-              checkCommand: command.checkCommand,
               permissions: command.permissions,
               iterationTimeoutMins: command.iterationTimeoutMins,
               reason: command.reason,
@@ -8755,6 +8762,21 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         attempt.status !== "running"
       )
         return;
+      // A settle after Stop repeats the reason the earlier interrupt request recorded.
+      const interruptReason =
+        input.command.type === "run.interrupt"
+          ? (input.command.reason ?? null)
+          : RunExecutionService.interruptRequestReason(
+              yield* projectionStore
+                .getTurnItem({
+                  threadId: run.threadId,
+                  itemId: idAllocator.derive.runSignalTurnItem({
+                    runId: run.id,
+                    signal: "interrupt-request",
+                  }),
+                })
+                .pipe(Effect.orElseSucceed(() => null)),
+            );
       const emitEvent = emit(input.events, input.command);
       const base = {
         threadId: input.command.threadId,
@@ -8871,6 +8893,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
             rootNode,
             providerThread,
             completedAt: input.now,
+            reason: interruptReason,
           }),
         });
       }
@@ -8970,7 +8993,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         completedAt: now,
         updatedAt: now,
         type: "run_interrupt_request",
-        message: command.reason ?? "Interrupt requested",
+        message: command.reason ?? RunExecutionService.INTERRUPT_REQUEST_DEFAULT_MESSAGE,
       },
     });
   });
@@ -9286,7 +9309,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         completedAt: now,
         updatedAt: now,
         type: "run_interrupt_request",
-        message: command.reason ?? "Interrupt requested",
+        message: command.reason ?? RunExecutionService.INTERRUPT_REQUEST_DEFAULT_MESSAGE,
       };
 
       // Background work can outlive a provider switch, such as a Codex dev

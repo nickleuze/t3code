@@ -16,6 +16,7 @@ import * as AgentSessionScanner from "../project/AgentSessionScanner.ts";
 import * as ProjectService from "../project/ProjectService.ts";
 import * as ProjectSetupScriptRunner from "../project/ProjectSetupScriptRunner.ts";
 import * as ManagedProjectFolders from "../project/ManagedProjectFolders.ts";
+import * as WorkModelProjects from "../project/WorkModelProjects.ts";
 import * as CheckpointCaptureService from "./CheckpointCaptureService.ts";
 import * as CheckpointService from "./CheckpointService.ts";
 import * as CheckpointRollbackService from "./CheckpointRollbackService.ts";
@@ -45,6 +46,7 @@ import * as ProviderTurnControlService from "./ProviderTurnControlService.ts";
 import * as ProviderTurnStartService from "./ProviderTurnStartService.ts";
 import * as RunExecutionService from "./RunExecutionService.ts";
 import * as RunFinalizationService from "./RunFinalizationService.ts";
+import * as RunAdmissionGate from "./RunAdmissionGate.ts";
 import * as RuntimePolicy from "./RuntimePolicy.ts";
 import * as RuntimeRequestService from "./RuntimeRequestService.ts";
 import * as ThreadManagementService from "./ThreadManagementService.ts";
@@ -88,6 +90,8 @@ const layerStores = Layer.mergeAll(
   layerCommandReceiptStoreProvided,
   EffectOutbox.layer,
   TurnItemPositionStore.layer,
+  // One instance shared by the event sink, the orchestrator and release deployment.
+  RunAdmissionGate.layer,
 );
 
 export const layerEventSink = EventSink.layerFromStores.pipe(Layer.provide(layerStores));
@@ -359,7 +363,14 @@ const layerTickets = TicketService.layer.pipe(
 );
 
 export const layerProduction = Layer.mergeAll(
+  WorkModelProjects.layer().pipe(
+    Layer.provide(Layer.mergeAll(layerProjectService, layerTickets, ProcessRunner.layer)),
+  ),
   layer.pipe(Layer.provide(layerProjectService)),
+  // Same layer references as layerStores, so release deployment shares the
+  // event sink and its admission gate.
+  RunAdmissionGate.layer,
+  layerEventSinkProvided,
   layerProjectService,
   layerManagedProjectFoldersProvided,
   layerThreadLaunchProvided,
@@ -387,7 +398,6 @@ export const layerProduction = Layer.mergeAll(
         layerOrchestratorProvided,
         ProjectionStore.layer,
         ProjectStore.layer,
-        ProcessRunner.layer,
         EffectOutbox.layer,
       ),
     ),

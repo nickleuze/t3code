@@ -22,7 +22,7 @@ import * as ProjectStore from "../orchestration-v2/ProjectStore.ts";
 import { projectTicket } from "./TicketRecord.ts";
 import * as TicketSync from "./TicketSyncService.ts";
 import * as Tickets from "./TicketService.ts";
-import { readmeFrontmatter } from "./TicketTriage.ts";
+import { readmeFrontmatter } from "../project/ProjectHome.ts";
 
 export type SnapshotTicket = {
   readonly ticket: Ticket;

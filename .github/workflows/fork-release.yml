@@ -309,10 +309,12 @@ jobs:
           cd release
           sha256sum "${zip}" "${exe}" > SHA256SUMS
           sha="$(sha256sum "${zip}" | cut -d' ' -f1)"
-          # fork/update.sh reads the macOS zip from this manifest.
-          printf '{"version":"%s","commit":"%s","zip":"%s","sha256":"%s","builtAt":"%s"}\n' \
-            "${VERSION}" "${GITHUB_SHA}" "${zip}" "${sha}" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
-            > fork-release.json
+          exe_sha="$(sha256sum "${exe}" | cut -d' ' -f1)"
+          # fork/update.sh reads the macOS zip from this manifest; release
+          # deployments also pin the Windows installer.
+          printf '{"version":"%s","commit":"%s","zip":"%s","sha256":"%s","exe":"%s","exeSha256":"%s","builtAt":"%s"}\n' \
+            "${VERSION}" "${GITHUB_SHA}" "${zip}" "${sha}" "${exe}" "${exe_sha}" \
+            "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > fork-release.json
           notes="Built from ${GITHUB_SHA} on nick/v2.
 
           macOS: ${zip}. Windows: ${exe} (unsigned, so SmartScreen asks once).

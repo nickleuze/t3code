@@ -214,6 +214,9 @@ export const make = Effect.gen(function* () {
       ...(machine === null ? {} : { machine }),
     },
     serverVersion: packageJson.version,
+    ...(serverConfig.appCommitHash === undefined
+      ? {}
+      : { serverCommit: serverConfig.appCommitHash }),
     orchestrationProtocolVersion: ORCHESTRATION_PROTOCOL_VERSION,
     capabilities: {
       repositoryIdentity: true,
@@ -261,7 +264,7 @@ export const make = Effect.gen(function* () {
       ...(serverSelfUpdate === "boot-service" || desktopAppUpdate
         ? { serverSelfUpdateProgress: true }
         : {}),
-      ...(desktopAppUpdate ? { desktopAppUpdate: true } : {}),
+      ...(desktopAppUpdate ? { desktopAppUpdate: true, hostDeployments: true } : {}),
       serverBrowser: true,
     },
   };

@@ -14,9 +14,8 @@ import { cn } from "../../lib/utils";
 import { useThreadProjection } from "../../state/entities";
 import { buildThreadRouteParams } from "../../threadRoutes";
 import {
-  formatGoalBurnGuard,
   formatGoalTokens,
-  formatGoalUsage,
+  formatGoalTokensWithUncached,
   GOAL_ITERATION_OUTCOME_LABELS,
   goalStatusLabel,
   goalSummaryFromGoal,
@@ -75,20 +74,6 @@ export function ThreadGoalPanel(props: {
               : "Waiting for the next iteration"}
           </GoalFact>
         ) : null}
-        {goal.lastCheck ? (
-          <details className="text-2xs text-muted-foreground">
-            <summary className="cursor-pointer">
-              <code>{goal.lastCheck.command}</code>{" "}
-              {goal.lastCheck.passed ? "passed" : goal.lastCheck.timedOut ? "timed out" : "failed"}{" "}
-              after iteration {goal.lastCheck.iteration}
-            </summary>
-            {goal.lastCheck.outputTail ? (
-              <pre className="mt-1 max-h-40 overflow-auto whitespace-pre-wrap">
-                {goal.lastCheck.outputTail}
-              </pre>
-            ) : null}
-          </details>
-        ) : null}
         {goal.progressNotes.length > 0 ? (
           <ul className="m-0 flex list-none flex-col gap-1 p-0">
             {goal.progressNotes.slice(-NOTES_SHOWN).map((note) => (
@@ -104,7 +89,7 @@ export function ThreadGoalPanel(props: {
           {goal.current !== null ? (
             <IterationRow
               label={`Iteration ${goal.current.iteration}`}
-              detail={goal.current.phase === "checking" ? "Running check" : "Running"}
+              detail="Running"
               onOpen={() => openThread(goal.current!.childThreadId)}
             />
           ) : null}
@@ -126,8 +111,7 @@ function goalFacts(goal: OrchestrationV2ThreadGoal): string {
   return [
     goalStatusLabel(goalSummaryFromGoal(goal)),
     goal.iteration === 1 ? "1 iteration" : `${goal.iteration} iterations`,
-    formatGoalUsage(goal),
-    formatGoalBurnGuard(goal),
+    formatGoalTokensWithUncached(goal.tokensUsed, goal.uncachedTokensUsed),
     `${goalIterationTimeoutMins(goal)} min per iteration`,
   ].join(" · ");
 }
