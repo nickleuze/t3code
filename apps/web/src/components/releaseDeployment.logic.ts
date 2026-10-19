@@ -13,10 +13,13 @@ import {
 } from "@t3tools/client-runtime/state/hostDeployments";
 import * as Schema from "effect/Schema";
 
+import { compareUpdateVersions } from "../versionSkew";
+
 const LOCAL_DEPLOYMENT_LABEL = "This machine";
 /** A finished release stays visible in the update popover for a day. */
 const RECENT_RELEASE_MS = 24 * 60 * 60 * 1000;
 const STOPPED: ReadonlySet<HostDeploymentStatus> = new Set(["blocked", "failed", "cancelled"]);
+const MOVING: ReadonlySet<HostDeploymentStatus> = new Set(["preparing", "waiting", "installing"]);
 
 /**
  * The approved path replaces Update all only when every host it would touch
@@ -125,6 +128,22 @@ export function currentReleaseRequest(
       now - Date.parse(record.updatedAt) < RECENT_RELEASE_MS,
   );
   return active ? latest.request : null;
+}
+
+/**
+ * A newer published version replaces a release no host is still moving on.
+ * Its stopped hosts can never pass the pinned-version check again, so the
+ * update control offers the newer release instead of an endless retry.
+ */
+export function releaseSuperseded(
+  request: HostDeploymentRequest,
+  records: ReadonlyMap<string, HostDeployment>,
+  newestVersion: string,
+): boolean {
+  return (
+    compareUpdateVersions(newestVersion, request.version) > 0 &&
+    ![...records.values()].some((record) => MOVING.has(record.status))
+  );
 }
 
 /** Each target's own record for the release, keyed by environment id. */

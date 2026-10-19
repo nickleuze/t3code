@@ -30,6 +30,7 @@ import {
   releaseDeploymentEligible,
   releaseDeploymentSummary,
   releaseRecords,
+  releaseSuperseded,
   releaseToResume,
 } from "../components/releaseDeployment.logic";
 import { toastManager } from "../components/ui/toast";
@@ -101,7 +102,12 @@ export function useReleaseDeployment(
     .toSorted()
     .join(",");
   const recordsAtom = useMemo(() => deploymentRecordsAtom(capableIdsKey), [capableIdsKey]);
-  const { records: recordsByEnvironment, request } = useAtomValue(recordsAtom);
+  const { records: recordsByEnvironment, request: latestRequest } = useAtomValue(recordsAtom);
+  const request =
+    latestRequest !== null &&
+    releaseSuperseded(latestRequest, releaseRecords(latestRequest, recordsByEnvironment), version)
+      ? null
+      : latestRequest;
 
   const supports = (environmentId: EnvironmentId) =>
     environments.find((environment) => environment.environmentId === environmentId)?.serverConfig

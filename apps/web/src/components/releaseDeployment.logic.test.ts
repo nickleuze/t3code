@@ -11,6 +11,7 @@ import {
   orderReleaseTargets,
   releaseDeploymentEligible,
   releaseRecords,
+  releaseSuperseded,
   releaseTargetSequence,
   releaseToResume,
 } from "./releaseDeployment.logic";
@@ -129,6 +130,26 @@ describe("currentReleaseRequest", () => {
     expect(currentReleaseRequest(new Map([[mac, [old]]]), now)).toBeNull();
     const recent = record(mac, { status: "accepted", updatedAt: "2026-10-17T11:00:00.000Z" });
     expect(currentReleaseRequest(new Map([[mac, [recent]]]), now)?.releaseId).toBe("1.4.0");
+  });
+});
+
+describe("releaseSuperseded", () => {
+  const stopped = releaseRecords(
+    request,
+    new Map([
+      [mini, [record(mini, { status: "verified" })]],
+      [mac, [record(mac, { status: "blocked", reason: "The update feed now offers 1.4.1." })]],
+    ]),
+  );
+
+  it("lets a newer published version replace a release no host is moving on", () => {
+    expect(releaseSuperseded(request, stopped, "1.4.1")).toBe(true);
+    expect(releaseSuperseded(request, stopped, "1.4.0")).toBe(false);
+  });
+
+  it("keeps a release while any host is still deploying it", () => {
+    const moving = new Map(stopped).set(studio, record(studio, { status: "installing" }));
+    expect(releaseSuperseded(request, moving, "1.4.1")).toBe(false);
   });
 });
 
