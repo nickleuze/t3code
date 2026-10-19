@@ -2,12 +2,14 @@ import * as NodeServices from "@effect/platform-node/NodeServices";
 import { expect, it } from "@effect/vitest";
 import type { DesktopUpdateState, DesktopUpdateStatusReport } from "@t3tools/contracts";
 import * as Deferred from "effect/Deferred";
+import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Stream from "effect/Stream";
+import * as TestClock from "effect/testing/TestClock";
 
 import * as ServerConfig from "../config.ts";
 import * as DesktopTelemetryReceiver from "../resourceTelemetry/DesktopTelemetryReceiver.ts";
@@ -79,6 +81,7 @@ const makeHarness = Effect.fn("test.make_desktop_app_update_harness")(function* 
       : { desktopTelemetryControlFd: 5 }),
   };
   const reportsForRun = options.reports ?? (() => []);
+  const cancelled: string[] = [];
   const changes = Stream.unwrap(
     Deferred.await(requestIdDeferred).pipe(
       Effect.map((requestId) => {
@@ -94,6 +97,7 @@ const makeHarness = Effect.fn("test.make_desktop_app_update_harness")(function* 
         DesktopTelemetryReceiver.layerTest({
           requestDesktopUpdate: (requestId) =>
             Deferred.succeed(requestIdDeferred, requestId).pipe(Effect.asVoid),
+          cancelDesktopUpdate: (requestId) => Effect.sync(() => void cancelled.push(requestId)),
           desktopUpdates: Effect.succeed({
             latest: Option.none<DesktopUpdateStatusReport>(),
             changes,
@@ -103,7 +107,7 @@ const makeHarness = Effect.fn("test.make_desktop_app_update_harness")(function* 
       ),
     ),
   );
-  return { service };
+  return { service, cancelled, requestId: Deferred.await(requestIdDeferred) };
 });
 
 it.layer(NodeServices.layer)("desktop app update", (it) => {
@@ -238,6 +242,51 @@ it.layer(NodeServices.layer)("desktop app update", (it) => {
       });
       expect((yield* service.run(() => Effect.void).pipe(Effect.flip)).reason).toBe(
         "The desktop app stopped reporting its update.",
+      );
+    }),
+  );
+
+  it.effect("fails fast when the desktop app never answers the request", () =>
+    Effect.gen(function* () {
+      const { service, cancelled, requestId } = yield* makeHarness({
+        reports: () => [],
+        keepOpen: true,
+      });
+      const run = yield* Effect.forkChild(service.run(() => Effect.void).pipe(Effect.flip), {
+        startImmediately: true,
+      });
+      yield* TestClock.adjust(Duration.seconds(60));
+      expect((yield* Fiber.join(run)).reason).toContain(
+        "desktop app on this machine is not responding",
+      );
+      // An app that unblocks later must not start the abandoned update.
+      expect(cancelled).toEqual([yield* requestId]);
+
+      // The failure releases the in-flight guard for a retry.
+      const retry = yield* Effect.forkChild(service.run(() => Effect.void).pipe(Effect.flip), {
+        startImmediately: true,
+      });
+      yield* TestClock.adjust(Duration.seconds(60));
+      expect((yield* Fiber.join(retry)).reason).not.toBe(
+        "A desktop app update is already in progress.",
+      );
+    }),
+  );
+
+  it.effect("keeps waiting on a slow update once the desktop app has answered", () =>
+    Effect.gen(function* () {
+      const { service } = yield* makeHarness({
+        reports: (requestId) => [report(requestId, makeState({ status: "downloading" }))],
+        keepOpen: true,
+      });
+      const run = yield* Effect.forkChild(service.run(() => Effect.void).pipe(Effect.flip), {
+        startImmediately: true,
+      });
+      yield* TestClock.adjust(Duration.minutes(10));
+      expect(run.pollUnsafe()).toBeUndefined();
+      yield* TestClock.adjust(Duration.minutes(10));
+      expect((yield* Fiber.join(run)).reason).toBe(
+        "The desktop app did not finish the update in time.",
       );
     }),
   );

@@ -184,6 +184,9 @@ export const listen: Effect.Effect<
         yield* Ref.set(activeRequestIdRef, Option.some(request.requestId));
         yield* logInfo("remote update requested", { requestId: request.requestId });
         const { latest, changes } = yield* updates.subscribe;
+        // Answer at once, even when the run only rides along with an action
+        // already in flight: the server reads silence as an unresponsive app.
+        yield* publishReport(latest);
         const disabledReason = Option.getOrNull(yield* updates.disabledReason);
         let attempts: RemoteDesktopUpdateAttempts = { checks: 0, downloads: 0 };
         // The updater admits one action at a time. A state event can land
