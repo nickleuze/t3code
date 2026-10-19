@@ -468,7 +468,7 @@ function SidebarUpdateControl() {
       {deployment.approval ? (
         <ReleaseApprovalDialog
           approval={deployment.approval}
-          onApprove={(scope) => void deployment.approve(scope)}
+          onApprove={() => void deployment.approve()}
           onCancel={deployment.dismissApproval}
         />
       ) : null}

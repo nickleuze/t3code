@@ -37,6 +37,8 @@ export const HostDeploymentRequest = Schema.Struct({
   feed: HostDeploymentFeed,
   /** What the feature acceptance receipt on each host must confirm. */
   acceptanceScope: TrimmedNonEmptyString,
+  /** Omitted on older requests, which keep their manual feature acceptance. */
+  automaticAcceptance: Schema.optional(Schema.Boolean),
   /** Remotes first; at most one local target. */
   targets: Schema.NonEmptyArray(HostDeploymentTarget),
   approvedAt: IsoDateTime,

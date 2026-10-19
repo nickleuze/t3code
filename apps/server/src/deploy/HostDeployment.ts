@@ -374,7 +374,16 @@ const make = Effect.gen(function* () {
       const at = yield* nowIso;
       return yield* update(releaseId, (record) => ({
         ...record,
-        status: "verified",
+        status: record.request.automaticAcceptance ? "accepted" : "verified",
+        acceptance: record.request.automaticAcceptance
+          ? {
+              scope: record.request.acceptanceScope,
+              summary:
+                reason ?? "Restart checks passed: version, commit, signing, data and settings.",
+              evidence: null,
+              at,
+            }
+          : record.acceptance,
         step: "verify",
         reason,
         runtime,
@@ -382,6 +391,7 @@ const make = Effect.gen(function* () {
           ...record.milestones,
           installedAt: record.milestones.installedAt ?? at,
           verifiedAt: at,
+          acceptedAt: record.request.automaticAcceptance ? at : record.milestones.acceptedAt,
         },
       }));
     });

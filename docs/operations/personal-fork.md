@@ -169,9 +169,8 @@ promotion and installation as separate approval gates.
 
 Build once from the accepted commit and use the same artifact/version on both
 Macs. Install it as an approved release deployment from Update all: approval
-pins the version, commit, artifact digests, feed, target hosts and the feature
-acceptance scope. Each host's server checks disk, backup access, signing and
-feed, downloads while work continues, waits until no run is active, then
+pins the version, commit, artifact digests, feed and target hosts. Each host's
+server checks disk, backup access, signing and feed, downloads while work continues, waits until no run is active, then
 refuses new runs while it takes a verified state/settings backup and a copy of
 the old app under `<T3 home>/deploy-backups` and hands off to the desktop
 updater. Running work is never interrupted. The two newest verified backups
@@ -179,7 +178,8 @@ stay; older ones move to the Trash. The Mini must restart verified on the
 release before this Mac is admitted; a remote failure blocks the local install
 unless the user chooses the local-only override. After the restart each host
 checks its version, commit, signing and preserved data, and the release is done
-once every target records its acceptance receipt.
+once every target passes those automatic checks. Older approvals with an explicit
+feature acceptance scope still require their acceptance receipt.
 
 An old binary may not read a new schema or event kind, so the restore path is
 the backup's database, settings and app, with `fork/update.sh` for recovery.

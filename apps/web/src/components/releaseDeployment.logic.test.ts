@@ -36,7 +36,6 @@ const request: HostDeploymentRequest = buildReleaseDeploymentRequest({
     ],
     mac,
   ),
-  acceptanceScope: "Tickets open from the board",
   approvedAt: "2026-10-17T10:00:00.000Z",
 });
 
@@ -99,18 +98,18 @@ describe("releaseDeploymentEligible", () => {
 describe("buildReleaseDeploymentRequest", () => {
   it("orders remotes before this Mac and pins the manifest identity", () => {
     expect(request.releaseId).toBe("1.4.0");
+    expect(request.automaticAcceptance).toBe(true);
     expect(request.commit).toBe(manifest.commit);
     expect(request.artifactSha512).toBe(manifest.artifactSha512);
     expect(releaseTargetSequence(request.targets)).toBe("Mini → Studio → This Mac");
     expect(request.targets.map((target) => target.role)).toEqual(["remote", "remote", "local"]);
   });
 
-  it("rejects a blank acceptance scope", () => {
+  it("rejects an empty target list", () => {
     expect(() =>
       buildReleaseDeploymentRequest({
         manifest,
-        targets: request.targets,
-        acceptanceScope: "   ",
+        targets: [],
         approvedAt: request.approvedAt,
       }),
     ).toThrow();

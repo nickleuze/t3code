@@ -37,11 +37,9 @@ export function ReleaseApprovalDialog({
   onCancel,
 }: {
   readonly approval: ReleaseApproval;
-  readonly onApprove: (acceptanceScope: string) => void;
+  readonly onApprove: () => void;
   readonly onCancel: () => void;
 }) {
-  const id = useId();
-  const [scope, setScope] = useState("");
   const { manifest, targets } = approval;
   return (
     <Dialog
@@ -55,47 +53,41 @@ export function ReleaseApprovalDialog({
           className="flex min-h-0 flex-col"
           onSubmit={(event) => {
             event.preventDefault();
-            if (scope.trim() !== "") onApprove(scope);
+            onApprove();
           }}
         >
           <DialogHeader>
-            <DialogTitle>Approve release {manifest.version}</DialogTitle>
+            <DialogTitle>Update to {manifest.version}?</DialogTitle>
             <DialogDescription>
-              Approving authorizes this exact release to install on each host in order. Each host
-              waits until it is idle and backs up its state before installing.
+              Update order: {releaseTargetSequence(targets)}. Each Mac updates when idle and backs
+              up its state first.
             </DialogDescription>
           </DialogHeader>
           <DialogPanel>
-            <dl className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-1 text-sm">
-              <dt className="text-muted-foreground">Commit</dt>
-              <dd className="font-mono">{shortReleaseDigest(manifest.commit)}</dd>
-              <dt className="text-muted-foreground">SHA-256</dt>
-              <dd className="font-mono">{shortReleaseDigest(manifest.artifactSha256)}</dd>
-              <dt className="text-muted-foreground">Feed</dt>
-              <dd>
-                {manifest.feed.owner}/{manifest.feed.repo}
-              </dd>
-              <dt className="text-muted-foreground">Order</dt>
-              <dd>{releaseTargetSequence(targets)}</dd>
-            </dl>
-            <div className="flex flex-col gap-2">
-              <Label htmlFor={`${id}-scope`}>
-                What should each host&apos;s acceptance check confirm?
-              </Label>
-              <Textarea
-                id={`${id}-scope`}
-                required
-                value={scope}
-                onChange={(event) => setScope(event.target.value)}
-              />
-            </div>
+            <details>
+              <summary className="cursor-pointer text-sm">Details</summary>
+              <dl className="mt-3 grid grid-cols-[auto_1fr] gap-x-4 gap-y-1 text-sm">
+                <dt className="text-muted-foreground">Commit</dt>
+                <dd className="font-mono">{shortReleaseDigest(manifest.commit)}</dd>
+                <dt className="text-muted-foreground">SHA-256</dt>
+                <dd className="font-mono">{shortReleaseDigest(manifest.artifactSha256)}</dd>
+                <dt className="text-muted-foreground">Feed</dt>
+                <dd>
+                  {manifest.feed.owner}/{manifest.feed.repo}
+                </dd>
+              </dl>
+            </details>
           </DialogPanel>
           <DialogFooter>
             <Button type="button" variant="outline" onClick={onCancel}>
               Cancel
             </Button>
-            <Button type="submit" disabled={scope.trim() === ""}>
-              Approve
+            <Button type="submit">
+              {targets.length === 1
+                ? "Update Mac"
+                : targets.length === 2
+                  ? "Update both Macs"
+                  : "Update all Macs"}
             </Button>
           </DialogFooter>
         </form>
@@ -269,9 +261,7 @@ export function ReleaseDeploymentDetails({
           Install on this Mac only
         </Button>
       ) : null}
-      {deployment.done ? (
-        <p className="font-medium">Done: every host accepted this release.</p>
-      ) : null}
+      {deployment.done ? <p className="font-medium">Update complete on every Mac.</p> : null}
     </div>
   );
 }

@@ -78,11 +78,10 @@ export function shortReleaseDigest(value: string): string {
 
 const decodeRequest = Schema.decodeUnknownSync(HostDeploymentRequest);
 
-/** Validates through the contract schema, so a blank scope or empty target list throws. */
+/** Pins the release and uses the host's built-in installation checks. */
 export function buildReleaseDeploymentRequest(input: {
   readonly manifest: DesktopReleaseManifest;
   readonly targets: ReadonlyArray<ReleaseApprovalTarget>;
-  readonly acceptanceScope: string;
   readonly approvedAt: string;
 }): HostDeploymentRequest {
   return decodeRequest({
@@ -92,7 +91,8 @@ export function buildReleaseDeploymentRequest(input: {
     artifactSha256: input.manifest.artifactSha256,
     artifactSha512: input.manifest.artifactSha512,
     feed: input.manifest.feed,
-    acceptanceScope: input.acceptanceScope.trim(),
+    acceptanceScope: "The approved release starts with preserved data and readable settings.",
+    automaticAcceptance: true,
     targets: input.targets.map((target) => ({
       environmentId: target.environmentId,
       label: target.label.trim(),

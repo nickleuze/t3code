@@ -490,6 +490,35 @@ it.effect("verifies a committed install after the restart, then records acceptan
   }).pipe(Effect.provide(makeLayer(fakes)));
 });
 
+it.effect("completes an update automatically after restart checks pass", () => {
+  const fakes = makeFakes({ runtime: TARGET });
+  return Effect.gen(function* () {
+    yield* seed({ request: makeRequest({ automaticAcceptance: true }) });
+    yield* Effect.gen(function* () {
+      const accepted = yield* awaitRecord((record) => record.status === "accepted");
+      assert.deepEqual(accepted.runtime, TARGET);
+      assert.isNotNull(accepted.milestones.installedAt);
+      assert.strictEqual(accepted.milestones.acceptedAt, accepted.milestones.verifiedAt);
+      assert.strictEqual(accepted.acceptance?.scope, accepted.request.acceptanceScope);
+      assert.include(accepted.acceptance?.summary ?? "", "Restart checks passed");
+      assert.strictEqual(fakes.commits, 0);
+    }).pipe(Effect.provide(HostDeployment.layer));
+  }).pipe(Effect.provide(makeLayer(fakes)));
+});
+
+it.effect("does not automatically accept an update when restart checks fail", () => {
+  const fakes = makeFakes({ runtime: TARGET, liveCounts: { threadCount: 3, projectCount: 2 } });
+  return Effect.gen(function* () {
+    yield* seed({ request: makeRequest({ automaticAcceptance: true }) });
+    yield* Effect.gen(function* () {
+      const failed = yield* awaitRecord((record) => record.status === "failed");
+      assert.isNull(failed.acceptance);
+      assert.isNull(failed.milestones.acceptedAt);
+      assert.include(failed.reason ?? "", "3 threads and 2 projects remain");
+    }).pipe(Effect.provide(HostDeployment.layer));
+  }).pipe(Effect.provide(makeLayer(fakes)));
+});
+
 it.effect("fails a restart onto the wrong version without committing again", () => {
   const fakes = makeFakes({ runtime: FROM });
   return Effect.gen(function* () {

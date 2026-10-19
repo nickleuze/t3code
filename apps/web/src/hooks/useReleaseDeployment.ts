@@ -254,14 +254,13 @@ export function useReleaseDeployment(
     }
   };
 
-  const approve = async (acceptanceScope: string) => {
+  const approve = async () => {
     if (approval === null) return;
     let next: HostDeploymentRequest;
     try {
       next = buildReleaseDeploymentRequest({
         manifest: approval.manifest,
         targets: approval.targets,
-        acceptanceScope,
         approvedAt: new Date().toISOString(),
       });
     } catch (error) {
