@@ -6,7 +6,6 @@ type Request = {
   name?: string;
   purpose?: string;
   sourceIdeaId?: TicketId;
-  github?: { readonly account: string | null } | null;
 };
 export const useWorkModelProject = create<{ request: Request | null }>(() => ({ request: null }));
 export function openWorkModelProject(request: Request) {

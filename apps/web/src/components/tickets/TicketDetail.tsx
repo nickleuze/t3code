@@ -4,12 +4,14 @@ import { ProjectId, type TicketStatus } from "@t3tools/contracts";
 import type { EnvironmentTicket } from "@t3tools/client-runtime/state/ticket-board";
 import { TICKET_STATUS_LABELS } from "@t3tools/client-runtime/state/ticket-board";
 import { deriveTicketStatus } from "@t3tools/shared/ticket";
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { useProjects, useThreadShells } from "../../state/entities";
 import { ticketEnvironment } from "../../state/tickets";
 import { useAtomCommand } from "../../state/use-atom-command";
 import { useMediaQuery } from "../../hooks/useMediaQuery";
 import { Button } from "../ui/button";
+import { Menu, MenuTrigger, MenuPopup, MenuItem } from "../ui/menu";
+import { useCopyToClipboard } from "../../hooks/useCopyToClipboard";
 import { Input } from "../ui/input";
 import { Textarea } from "../ui/textarea";
 import { Sheet, SheetPopup, SheetHeader, SheetTitle, SheetDescription } from "../ui/sheet";
@@ -52,6 +54,12 @@ export function TicketDetail({
   const [edited, setEdited] = useState({ title: false, body: false, project: false });
   const narrow = useMediaQuery("(max-width: 480px)");
   const [busy, setBusy] = useState(false);
+  const composerRef = useRef<HTMLTextAreaElement>(null);
+  const readableId = ticket.readableId ?? ticket.id;
+  const { copyToClipboard, isCopied } = useCopyToClipboard({
+    target: "Ticket ID",
+    onError: () => toastManager.add({ type: "error", title: "Could not copy Ticket ID" }),
+  });
   const upsert = useAtomCommand(ticketEnvironment.upsertTicket);
   const remove = useAtomCommand(ticketEnvironment.deleteTicket);
   const restore = useAtomCommand(ticketEnvironment.restoreTicket);
@@ -103,6 +111,17 @@ export function TicketDetail({
     >
       <SheetPopup variant="wide">
         <SheetHeader>
+          <div className="flex min-w-0 items-center gap-2 pr-8">
+            <span className="min-w-0 text-xs font-mono wrap-anywhere">{readableId}</span>
+            <Button
+              size={narrow ? "touch" : "xs"}
+              variant="ghost"
+              aria-label="Copy Ticket ID"
+              onClick={() => copyToClipboard(readableId)}
+            >
+              {isCopied ? "Copied" : "Copy ID"}
+            </Button>
+          </div>
           <SheetTitle>{ticket.title}</SheetTitle>
           <SheetDescription>
             {ticket.projectName ?? ticket.projectKey ?? "No project"} ·{" "}
@@ -141,10 +160,47 @@ export function TicketDetail({
                 });
               }}
             >
-              Create Project from Idea
+              New project from Idea
             </Button>
           ) : null}
-          {activity !== "Project origin" ? <TicketStartWork entry={entry} /> : null}
+          <div className="flex flex-wrap items-center gap-2">
+            {activity !== "Project origin" ? <TicketStartWork entry={entry} /> : null}
+            <Button
+              size={narrow ? "touch" : "sm"}
+              variant="outline"
+              disabled={!canWrite || busy}
+              onClick={() => {
+                composerRef.current?.scrollIntoView({ block: "center" });
+                composerRef.current?.focus({ preventScroll: true });
+              }}
+            >
+              Add entry
+            </Button>
+            <Menu>
+              <MenuTrigger
+                render={
+                  <Button
+                    size={narrow ? "touch" : "sm"}
+                    variant="ghost"
+                    aria-label="More ticket actions"
+                    disabled={busy}
+                  />
+                }
+              >
+                More
+              </MenuTrigger>
+              <MenuPopup>
+                <MenuItem
+                  disabled={!canWrite || busy}
+                  onClick={() => {
+                    void deleteTicket();
+                  }}
+                >
+                  Delete ticket
+                </MenuItem>
+              </MenuPopup>
+            </Menu>
+          </div>
         </SheetHeader>
         <div className="min-h-0 flex-1 overflow-auto px-6 py-3">
           <div className="flex flex-col gap-4">
@@ -158,7 +214,7 @@ export function TicketDetail({
                   <Input
                     size={narrow ? "touch" : "default"}
                     aria-label="Ticket title"
-                    disabled={busy}
+                    disabled={busy || !canWrite}
                     value={edited.title ? title : ticket.title}
                     onChange={(e) => {
                       setTitle(e.target.value);
@@ -170,7 +226,7 @@ export function TicketDetail({
                   <span>Body</span>
                   <Textarea
                     aria-label="Ticket body"
-                    disabled={busy}
+                    disabled={busy || !canWrite}
                     value={edited.body ? body : ticket.body}
                     onChange={(e) => {
                       setBody(e.target.value);
@@ -180,7 +236,7 @@ export function TicketDetail({
                 </label>
                 <TicketPicker
                   label="Project"
-                  disabled={busy}
+                  disabled={busy || !canWrite}
                   value={
                     edited.project
                       ? projectId
@@ -199,7 +255,7 @@ export function TicketDetail({
                 />
                 <TicketPicker
                   label="Status"
-                  disabled={busy}
+                  disabled={busy || !canWrite}
                   value={pickedStatus ?? status}
                   options={Object.entries(TICKET_STATUS_LABELS).map(([value, label]) => ({
                     value,
@@ -223,20 +279,8 @@ export function TicketDetail({
                 {ticket.projectName ?? ticket.projectKey} · Map a local project to start work.
               </p>
             ) : null}
-            <TicketTimeline entry={entry} />
+            <TicketTimeline entry={entry} composerRef={composerRef} />
           </div>
-        </div>
-        <div className="flex justify-end p-6">
-          <Button
-            size={narrow ? "touch" : "default"}
-            variant="destructive"
-            disabled={!canWrite || busy}
-            onClick={() => {
-              void deleteTicket();
-            }}
-          >
-            Delete ticket
-          </Button>
         </div>
       </SheetPopup>
     </Sheet>

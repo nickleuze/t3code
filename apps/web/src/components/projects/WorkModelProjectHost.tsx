@@ -1,21 +1,32 @@
 import { useAtomValue } from "@effect/atom-react";
-import { AsyncResult } from "effect/reactivity";
-import { useMemo, useRef, useState } from "react";
+import { useRef, useState } from "react";
 import { useNavigate } from "@tanstack/react-router";
 import { scopeProjectRef } from "@t3tools/client-runtime/environment";
+import {
+  getNewProjectGitHubRepository,
+  getNewProjectGitHubTarget,
+  getNewProjectPathPreview,
+} from "@t3tools/client-runtime/operations/projects";
 import { newProjectFolderName } from "@t3tools/shared/path";
-import type { ProjectCreateNewResult, WorkModelProjectPreview } from "@t3tools/contracts";
+import {
+  EnvironmentId,
+  type ProjectCreateNewResult,
+  type WorkModelProjectPreview,
+} from "@t3tools/contracts";
 import { squashAtomCommandFailure } from "@t3tools/client-runtime/state/runtime";
 import { useWorkModelProject } from "../../workModelProject";
 import { useNewProject } from "../../hooks/useNewProject";
 import { useMediaQuery } from "../../hooks/useMediaQuery";
 import { projectEnvironment } from "../../state/projects";
+import { sourceControlEnvironment } from "../../state/sourceControl";
+import { useEnvironmentQuery } from "../../state/query";
 import { useAtomCommand } from "../../state/use-atom-command";
 import { useEnvironments } from "../../state/environments";
 import { openTicketCapture } from "../../ticketCapture";
 import { useSettingsProjectGroups } from "../settings/useSettingsProjectGroups";
 import { TicketPicker } from "../tickets/TicketPicker";
 import { Button } from "../ui/button";
+import { Checkbox } from "../ui/checkbox";
 import { Input } from "../ui/input";
 import { Textarea } from "../ui/textarea";
 import {
@@ -37,16 +48,30 @@ function ProjectDialog() {
   const request = useWorkModelProject((state) => state.request)!;
   const narrow = useMediaQuery("(max-width: 480px)");
   const { environments } = useEnvironments();
-  const environmentId = request.environmentId;
-  const query = useMemo(
-    () => projectEnvironment.workModelOptions({ environmentId, input: {} }),
-    [environmentId],
+  const [environmentId, setEnvironmentId] = useState(request.environmentId);
+  const environment = environments.find((e) => e.environmentId === environmentId);
+  const machine = environment?.label ?? "Selected machine";
+  const connected = environment?.connection.phase === "connected";
+  const options = useEnvironmentQuery(
+    projectEnvironment.workModelOptions({ environmentId, input: {} }),
   );
-  const options = useAtomValue(query);
-  const available = AsyncResult.isSuccess(options) ? options.value : null;
-  const [basicCreation, setBasicCreation] = useState(false);
+  // A failed refresh must not silently reuse a stale setup result.
+  const available = options.error ? null : options.data;
   const inArea = (available?.areas.length ?? 0) > 0;
+  const [basicCreation, setBasicCreation] = useState(false);
+  const [basicReviewed, setBasicReviewed] = useState(false);
   const canCreate = useAtomValue(projectEnvironment.createNew.permissionAtom(environmentId));
+  const canPublish = useAtomValue(
+    sourceControlEnvironment.publishRepository.permissionAtom(environmentId),
+  );
+  const discovery = useEnvironmentQuery(
+    sourceControlEnvironment.discovery({ environmentId, input: {} }),
+  );
+  const githubTarget = discovery.error ? null : getNewProjectGitHubTarget(discovery.data);
+  const [publish, setPublish] = useState(false);
+  const [reviewedGitHub, setReviewedGitHub] = useState<{ readonly account: string | null } | null>(
+    null,
+  );
   const [name, setName] = useState(request.name ?? "");
   const [slug, setSlug] = useState<string | null>(null);
   const [area, setArea] = useState("");
@@ -69,43 +94,71 @@ function ProjectDialog() {
       )
     : null;
   const close = () => useWorkModelProject.setState({ request: null });
-  const selectedArea = area;
   const details = {
-    area: selectedArea,
+    area,
     slug: slug ?? newProjectFolderName(name),
     purpose: purpose.trim(),
     ...(goal.trim() ? { goal: goal.trim() } : {}),
     ...(request.sourceIdeaId ? { sourceIdeaId: request.sourceIdeaId } : {}),
     adoptExisting: preview?.existingHome ?? false,
   };
+  const basicRoot = environment?.serverConfig?.newProjectsRoot;
+  const basicPath = basicRoot ? getNewProjectPathPreview(basicRoot, name) : null;
+  const isReviewed = preview !== null || basicReviewed;
+  const reviewMatchesSetup = (!preview || inArea) && (!basicReviewed || !inArea);
   const valid =
     canCreate &&
-    (!!available || basicCreation) &&
+    reviewMatchesSetup &&
+    connected &&
     !!name.trim() &&
-    (!inArea || (!!selectedArea && !!purpose.trim())) &&
-    (!request.sourceIdeaId || inArea);
+    !options.isPending &&
+    (inArea
+      ? !!area && available!.areas.some((a) => a.name === area) && !!purpose.trim()
+      : basicCreation && !!basicRoot && !request.sourceIdeaId);
+  const back = () => {
+    setPreview(null);
+    setBasicReviewed(false);
+    setError(null);
+  };
   const submit = async () => {
     if (!valid || submitting.current) return;
     submitting.current = true;
     setBusy(true);
     setError(null);
     try {
-      if (inArea && !preview) {
-        const result = await review({ environmentId, input: { name: name.trim(), ...details } });
-        if (result._tag === "Failure") {
-          const cause = squashAtomCommandFailure(result);
-          setError(
-            cause instanceof Error
-              ? cause.message
-              : "Could not review the Home. Your input is kept.",
+      if (!isReviewed) {
+        if (inArea) {
+          const result = await review({ environmentId, input: { name: name.trim(), ...details } });
+          if (result._tag === "Failure") {
+            const cause = squashAtomCommandFailure(result);
+            setError(
+              cause instanceof Error
+                ? cause.message
+                : "Could not review the Home. Your input is kept.",
+            );
+            return;
+          }
+          setPreview(result.value);
+          setReviewedGitHub(
+            publish && canPublish && !result.value.existingHome ? githubTarget : null,
           );
-        } else setPreview(result.value);
+        } else {
+          setBasicReviewed(true);
+          setReviewedGitHub(publish && canPublish ? githubTarget : null);
+        }
+        return;
+      }
+      if (
+        reviewedGitHub &&
+        (!canPublish || !githubTarget || githubTarget.account !== reviewedGitHub.account)
+      ) {
+        setError("GitHub availability changed. Go back and review the publication option again.");
         return;
       }
       const result = await create({
         environmentId,
         name: name.trim(),
-        github: request.github ?? null,
+        github: reviewedGitHub,
         ...(inArea ? { workModel: details } : {}),
       });
       if (result) {
@@ -113,9 +166,12 @@ function ProjectDialog() {
         else close();
       } else {
         setError(
-          "Creation did not finish. Your input and any created files are kept. Review the Home to resume.",
+          inArea
+            ? "Creation did not finish. Your input and any created files are kept. Review the same Home to resume."
+            : "Basic creation did not finish. Check the project list before retrying; retrying may create a numbered copy.",
         );
         setPreview(null);
+        setBasicReviewed(false);
       }
     } finally {
       submitting.current = false;
@@ -123,6 +179,7 @@ function ProjectDialog() {
     }
   };
   const size = narrow ? ("touch" as const) : ("default" as const);
+  const reviewedPath = preview?.workspaceRoot ?? basicPath;
   return (
     <Dialog
       open
@@ -140,11 +197,10 @@ function ProjectDialog() {
         >
           <DialogHeader>
             <DialogTitle>
-              {created ? "Project ready" : preview ? "Review Project Home" : "New Project"}
+              {created ? "Project ready" : isReviewed ? "Review project setup" : "New project"}
             </DialogTitle>
             <DialogDescription>
-              {environments.find((e) => e.environmentId === environmentId)?.label ??
-                "Selected environment"}
+              {`Machine: ${machine}`}
               {request.sourceIdeaId ? " · From Idea" : ""}
             </DialogDescription>
           </DialogHeader>
@@ -152,52 +208,134 @@ function ProjectDialog() {
             {created ? (
               <div className="grid gap-4">
                 <h3 className="text-lg font-medium">{group?.displayName ?? name}</h3>
-                <p className="break-all text-sm text-muted-foreground">{created.workspaceRoot}</p>
-                {request.sourceIdeaId ? <p>The Idea is closed as this Project’s origin.</p> : null}
-                <p>Create the first actionable Ticket when you are ready.</p>
+                <p className="break-all text-sm">Project Home: {created.workspaceRoot}</p>
+                <p className="text-sm">
+                  Registered in T3 on {machine}. Its Home and durable identity remain independent of
+                  this registration.
+                </p>
+                {request.sourceIdeaId ? (
+                  <p>The Idea is closed as this Project’s origin. Its history is preserved.</p>
+                ) : null}
+                <p>Create the first actionable Ticket when you are ready. No work has started.</p>
+                {!group ? (
+                  <p role="status">
+                    Waiting for this client to receive the registration. You can close this dialog
+                    and find it in the project list when connected.
+                  </p>
+                ) : null}
+                <p className="text-sm text-muted-foreground">
+                  To remove this machine’s registration later, use Project settings. Removing it
+                  keeps the Project Home files.
+                </p>
               </div>
-            ) : preview ? (
+            ) : isReviewed ? (
               <div className="grid gap-4">
                 <h3 className="text-lg font-medium">{name}</h3>
-                {!preview.existingHome ? <p>{purpose}</p> : null}
+                {preview && !preview.existingHome ? <p>{purpose}</p> : null}
                 <dl className="grid gap-2 text-sm">
                   <div>
-                    <dt className="text-muted-foreground">Area and scope</dt>
+                    <dt className="text-muted-foreground">Destination machine</dt>
+                    <dd>{machine}</dd>
+                  </div>
+                  <div>
+                    <dt className="text-muted-foreground">
+                      {preview ? "Project Home" : "Basic project folder"}
+                    </dt>
+                    <dd className="break-all">{reviewedPath}</dd>
+                  </div>
+                  {preview ? (
+                    <>
+                      <div>
+                        <dt className="text-muted-foreground">Area and scope</dt>
+                        <dd>
+                          {area} · {preview.scope}
+                        </dd>
+                      </div>
+                      <div>
+                        <dt className="text-muted-foreground">Project identity (README)</dt>
+                        <dd className="break-all">
+                          {preview.projectIdentity ?? "Not reported by this server"}
+                        </dd>
+                      </div>
+                      <div>
+                        <dt className="text-muted-foreground">Ticket ID prefix</dt>
+                        <dd className="break-all">{preview.projectKey}</dd>
+                      </div>
+                      <div>
+                        <dt className="text-muted-foreground">Registration on this machine</dt>
+                        <dd>
+                          {preview.registeredProjectId
+                            ? "Reuse existing T3 registration"
+                            : "Add this Home to T3"}
+                        </dd>
+                      </div>
+                      {goal && !preview.existingHome ? (
+                        <div>
+                          <dt className="text-muted-foreground">Current Goal</dt>
+                          <dd>{goal}</dd>
+                        </div>
+                      ) : null}
+                    </>
+                  ) : null}
+                  <div>
+                    <dt className="text-muted-foreground">GitHub publication</dt>
                     <dd>
-                      {selectedArea} · {preview.scope}
+                      {preview?.existingHome
+                        ? "Not offered when adopting. Use Publish Repository in the Git menu if needed."
+                        : reviewedGitHub && reviewedPath
+                          ? `Create private repository: ${getNewProjectGitHubRepository(reviewedGitHub, reviewedPath)}`
+                          : "None"}
                     </dd>
                   </div>
-                  <div>
-                    <dt className="text-muted-foreground">Home</dt>
-                    <dd className="break-all">{preview.workspaceRoot}</dd>
-                  </div>
-                  <div>
-                    <dt className="text-muted-foreground">Ticket key</dt>
-                    <dd>{preview.projectKey}</dd>
-                  </div>
-                  {goal && !preview.existingHome ? (
-                    <div>
-                      <dt className="text-muted-foreground">Current Goal</dt>
-                      <dd>{goal}</dd>
-                    </div>
-                  ) : null}
                 </dl>
-                {preview.existingHome ? (
+                {preview?.existingHome ? (
                   <p>
-                    Adopt this existing Home. Its files, purpose, Goal and identity are preserved.
+                    Adopt this existing Home. Its files, purpose, Goal, identity and Ticket ID
+                    prefix are preserved.
+                  </p>
+                ) : preview ? (
+                  <p>
+                    Creates README, STATUS, AGENTS, TOOLS and a local Git repository. GitHub
+                    publication is optional.
                   </p>
                 ) : (
-                  <p>Creates README, STATUS, AGENTS, TOOLS and a Git repository.</p>
+                  <p>
+                    Creates a basic Git repository and opens a thread draft. It has no Work Model
+                    Area or Project Home setup. If the folder name is taken, T3 chooses a numbered
+                    name.
+                  </p>
                 )}
                 {request.sourceIdeaId ? (
                   <p>
                     The original Idea will close as the Project’s origin. Its history stays
-                    available.
+                    available; the first work Ticket is a separate step.
                   </p>
                 ) : null}
+                <p className="text-sm text-muted-foreground">
+                  Go back to change setup, or cancel before anything is created.
+                </p>
               </div>
             ) : (
               <div className="grid gap-4">
+                {!request.sourceIdeaId && environments.length > 1 ? (
+                  <TicketPicker
+                    label="Destination machine"
+                    value={environmentId}
+                    options={environments.map((e) => ({
+                      value: e.environmentId,
+                      label: `${e.label}${e.connection.phase === "connected" ? "" : " · Offline"}`,
+                    }))}
+                    onChange={(id) => {
+                      setEnvironmentId(EnvironmentId.make(id));
+                      setArea("");
+                      setBasicCreation(false);
+                      setPublish(false);
+                      setReviewedGitHub(null);
+                      back();
+                    }}
+                    disabled={busy}
+                  />
+                ) : null}
                 <label className="grid gap-1.5">
                   <span>Name</span>
                   <Input
@@ -210,35 +348,16 @@ function ProjectDialog() {
                 </label>
                 {available === null ? (
                   <p role="status">
-                    {AsyncResult.isFailure(options)
-                      ? "Project setup could not be loaded from this machine."
+                    {options.error
+                      ? "Project setup could not be loaded from this machine. It may be unavailable or unsupported by this server."
                       : "Loading project setup…"}
                   </p>
-                ) : null}
-                {AsyncResult.isFailure(options) && !request.sourceIdeaId ? (
-                  <div className="grid gap-2">
-                    <p className="text-sm text-muted-foreground">
-                      {basicCreation
-                        ? "Creates in this machine’s standard T3 projects folder."
-                        : "Older servers support basic creation in their standard T3 projects folder."}
-                    </p>
-                    {!basicCreation ? (
-                      <Button
-                        type="button"
-                        variant="outline"
-                        size={size}
-                        onClick={() => setBasicCreation(true)}
-                      >
-                        Use basic creation
-                      </Button>
-                    ) : null}
-                  </div>
                 ) : null}
                 {inArea ? (
                   <>
                     <TicketPicker
                       label="Area"
-                      value={selectedArea}
+                      value={area}
                       options={[
                         { value: "", label: "Choose an Area" },
                         ...available!.areas.map((a) => ({
@@ -275,18 +394,92 @@ function ProjectDialog() {
                       />
                     </label>
                     <p className="break-all text-sm text-muted-foreground">
-                      {available!.projectsRoot}/{selectedArea}/{details.slug}
+                      Project Home: {available!.projectsRoot}/{area || "<area>"}/{details.slug}
                     </p>
+                    {!available!.initializerAvailable ? (
+                      <p role="status">
+                        This machine is missing project-init. Set it up on {machine} to create a new
+                        Home. You can still review and adopt an existing Home.
+                      </p>
+                    ) : null}
                   </>
                 ) : available ? (
-                  <p className="text-sm text-muted-foreground">
-                    {request.sourceIdeaId
-                      ? "Choose a machine with existing Work Model Areas to create a Project from this Idea."
-                      : "This machine has no Work Model Areas. It will use its standard T3 projects folder."}
+                  <p role="status">
+                    This machine has no Work Model Areas. Set up an Area on {machine} or choose
+                    another machine to create a Project Home.
                   </p>
                 ) : null}
+                {options.error || (available && (!inArea || !available.initializerAvailable)) ? (
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size={size}
+                    disabled={busy || !connected || options.isPending}
+                    onClick={() => {
+                      back();
+                      options.refresh();
+                    }}
+                  >
+                    Retry setup
+                  </Button>
+                ) : null}
+                {!inArea && (available || options.error) && !request.sourceIdeaId && basicRoot ? (
+                  <div className="grid gap-2">
+                    <p className="text-sm text-muted-foreground">
+                      Basic creation makes a Git repository in T3’s standard folder without a Work
+                      Model Area or Home setup.
+                    </p>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size={size}
+                      disabled={busy}
+                      onClick={() => setBasicCreation((value) => !value)}
+                    >
+                      {basicCreation ? "Use Work Model setup" : "Use basic creation"}
+                    </Button>
+                    {basicCreation ? (
+                      <p className="break-all text-sm">Basic project folder: {basicPath}</p>
+                    ) : null}
+                  </div>
+                ) : null}
+                {request.sourceIdeaId && !inArea ? (
+                  <p>
+                    The Idea stays unchanged. Project creation from an Idea requires Work Model
+                    setup on its machine.
+                  </p>
+                ) : null}
+                {githubTarget && canPublish ? (
+                  <label className="flex items-center gap-2 text-sm">
+                    <Checkbox
+                      checked={publish}
+                      onCheckedChange={(checked) => setPublish(Boolean(checked))}
+                      disabled={busy}
+                    />
+                    Create private repository on GitHub (optional)
+                  </label>
+                ) : (
+                  <p className="text-sm text-muted-foreground">
+                    {canPublish
+                      ? "GitHub publication is optional. Configure it in Source Control settings on this machine to enable it."
+                      : "This connection cannot publish repositories. GitHub publication is optional."}
+                  </p>
+                )}
               </div>
             )}
+            {!created && !reviewMatchesSetup ? (
+              <p role="status">Setup changed since review. Go back and review again.</p>
+            ) : null}
+            {!created && !connected ? (
+              <p role="status" className="mt-4">
+                Connect {machine} to review or create here. Your input is kept.
+              </p>
+            ) : null}
+            {!created && !canCreate ? (
+              <p role="status" className="mt-4">
+                This connection cannot create or register projects.
+              </p>
+            ) : null}
             {error ? (
               <p role="alert" className="mt-4 text-sm text-destructive">
                 {error}
@@ -314,7 +507,7 @@ function ProjectDialog() {
                     }
                   }}
                 >
-                  Open Project
+                  Project settings
                 </Button>
                 <Button
                   type="button"
@@ -332,25 +525,30 @@ function ProjectDialog() {
               </>
             ) : (
               <>
-                <Button
-                  type="button"
-                  variant="outline"
-                  size={size}
-                  disabled={busy}
-                  onClick={() => (preview ? setPreview(null) : close())}
-                >
-                  {preview ? "Back" : "Cancel"}
+                <Button type="button" variant="outline" size={size} disabled={busy} onClick={close}>
+                  Cancel
                 </Button>
+                {isReviewed ? (
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size={size}
+                    disabled={busy}
+                    onClick={back}
+                  >
+                    Back
+                  </Button>
+                ) : null}
                 <Button type="submit" size={size} disabled={busy || !valid}>
                   {busy
                     ? "Working…"
                     : preview
                       ? preview.existingHome
                         ? "Adopt existing Home"
-                        : "Create Project"
-                      : inArea
-                        ? "Review"
-                        : "Create Project"}
+                        : "Create project"
+                      : basicReviewed
+                        ? "Create basic project"
+                        : "Review setup"}
                 </Button>
               </>
             )}

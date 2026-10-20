@@ -14,11 +14,16 @@ import { ticketStartPrompt } from "@t3tools/shared/ticket";
 import * as Crypto from "effect/Crypto";
 import * as Receipts from "../orchestration-v2/CommandReceiptStore.ts";
 import * as Context from "effect/Context";
+import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
+import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
+import * as Path from "effect/Path";
+import * as Schema from "effect/Schema";
 import * as Projects from "../project/ProjectService.ts";
 import * as Defaults from "../project/ProjectLaunchDefaults.ts";
+import { readmeFrontmatter } from "../project/ProjectHome.ts";
 import * as GitWorkflow from "../git/GitWorkflowService.ts";
 import * as Threads from "../orchestration-v2/ThreadManagementService.ts";
 import * as Launches from "../orchestration-v2/ThreadLaunchService.ts";
@@ -27,6 +32,8 @@ import {
   type DispatchModes,
 } from "../orchestration-v2/DispatchModeLimit.ts";
 import * as Tickets from "./TicketService.ts";
+
+const quote = Schema.encodeSync(Schema.fromJsonString(Schema.String));
 
 /** Only these failures prove that the prelink cannot name a committed thread. */
 export function rejectedBeforeLaunch(error: unknown): boolean {
@@ -64,7 +71,78 @@ const make = Effect.gen(function* () {
   const launches = yield* Launches.ThreadLaunchService;
   const crypto = yield* Crypto.Crypto;
   const receipts = yield* Receipts.CommandReceiptStoreV2;
+  const fs = yield* FileSystem.FileSystem;
+  const path = yield* Path.Path;
   const locks = yield* KeyedLock.make<string>();
+  const inspectFile = (file: string, metadata = false) =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        if ((yield* fs.stat(file)).type !== "File")
+          return { status: "not a regular file", metadata: readmeFrontmatter("") };
+        yield* fs.access(file, { readable: true });
+        // Only metadata is inspected; documents and host configuration stay out of the prompt.
+        const prefix = metadata
+          ? yield* (yield* fs.open(file)).readAlloc(16_384)
+          : Option.none<Uint8Array>();
+        return {
+          status: "readable at launch",
+          metadata: readmeFrontmatter(
+            Option.isSome(prefix) ? new TextDecoder().decode(prefix.value) : "",
+          ),
+        };
+      }),
+    ).pipe(
+      Effect.catchTags({
+        PlatformError: (error) =>
+          Effect.succeed({
+            status: error.reason._tag === "NotFound" ? "missing" : "unavailable to read",
+            metadata: readmeFrontmatter(""),
+          }),
+      }),
+    );
+  const projectBrief = Effect.fn("TicketLaunchService.projectBrief")(function* (
+    workspaceRoot: string,
+  ) {
+    // The Project is resolved on the destination server. Never derive paths from a
+    // synced Ticket, a linked Run's worktree, or the browser's/source host's Home.
+    const home = path.resolve(workspaceRoot);
+    const homeStatus = yield* fs.stat(home).pipe(
+      Effect.map((info) => (info.type === "Directory" ? "available at launch" : "not a directory")),
+      Effect.catchTags({
+        PlatformError: (error) =>
+          Effect.succeed(error.reason._tag === "NotFound" ? "missing" : "unavailable to read"),
+      }),
+    );
+    const readmePath = path.join(home, "README.md");
+    const statusPath = path.join(home, "STATUS.md");
+    const areaPath = path.join(path.dirname(home), "AREA.md");
+    const readme = yield* inspectFile(readmePath, true);
+    const status = yield* inspectFile(statusPath);
+    const areaFile = yield* inspectFile(areaPath, true);
+    const declaredArea = readme.metadata.area;
+    const area =
+      declaredArea &&
+      declaredArea.length <= 64 &&
+      /^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(declaredArea) &&
+      (!areaFile.metadata.area || areaFile.metadata.area === declaredArea)
+        ? declaredArea
+        : undefined;
+    return [
+      `Project and Area Brief (destination references checked ${DateTime.formatIso(yield* DateTime.now)}):`,
+      `Project Home: ${quote(home)} (${homeStatus}).`,
+      `README: ${quote(readmePath)} (${readme.status}).`,
+      `STATUS: ${quote(statusPath)} (${status.status}).`,
+      area
+        ? `Area: ${area} (declared in README frontmatter). Area context: ${quote(areaPath)} (${areaFile.status}${areaFile.metadata.area === area ? "; matching Area metadata" : "; Area metadata unverified"}).`
+        : "Area: unavailable; README has no valid Area metadata or conflicts with the adjacent AREA.md. Do not infer a bank from the folder or Ticket key.",
+      "Read the available README/STATUS before working. These are Project context references; work in the Run's selected workspace and preserve differing or uncommitted context there. Report missing/unreadable context without inventing or creating it.",
+      area
+        ? `Governed memory references: Area bank ${quote(area)} and shared bank "shared".`
+        : 'Governed memory references: Area bank unresolved; shared bank "shared".',
+      'Memory capability is not verified at launch. In the Run, use only available governed recall tools and permitted banks for relevant Area/shared context, retaining memory IDs. If absent or denied, record that context as unavailable; do not copy credentials, install integrations or use another bank as a substitute. Keep IMR context company-only. Retrieve the vault note "Agent OS/Memory & Knowledge Policy.md" through the governed knowledge tools when available.',
+      "These references grant no permissions or implementation approval; plan mode remains plan mode.",
+    ].join("\n");
+  });
   const start: TicketLaunchService["Service"]["start"] = (input, options) =>
     locks.withLock(
       input.ticketId,
@@ -198,14 +276,21 @@ const make = Effect.gen(function* () {
               .pipe(Effect.mapError(fail("read-thread")))
           : undefined;
         const firstRun = records?.runs.find((run) => run.ordinal === 1);
+        const recordedPrompt =
+          input.mode === "goal" && records?.thread.goal?.id === `ticket-goal:${input.commandId}`
+            ? records.thread.goal.objective
+            : records?.messages.find((message) => message.id === firstRun?.userMessageId)?.text;
         const prompt =
-          records?.messages.find((message) => message.id === firstRun?.userMessageId)?.text ??
-          ticketStartPrompt(
-            ticket,
-            shells
-              .filter(({ link }) => link.role !== "origin")
-              .flatMap(({ shell }) => shell?.branch ?? []),
-          );
+          recordedPrompt ??
+          [
+            ticketStartPrompt(
+              ticket,
+              shells
+                .filter(({ link }) => link.role !== "origin")
+                .flatMap(({ shell }) => shell?.branch ?? []),
+            ),
+            yield* projectBrief(project.workspaceRoot),
+          ].join("\n\n");
         const branchHash = Array.from(
           yield* crypto
             .digest("SHA-256", new TextEncoder().encode(input.threadId))

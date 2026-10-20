@@ -3144,7 +3144,7 @@ const SidebarProjectsContent = memo(function SidebarProjectsContent(
                   <Button
                     size="icon-xs"
                     variant="ghost-muted"
-                    aria-label="Add project"
+                    aria-label="New or existing project"
                     data-testid="sidebar-add-project-trigger"
                     onClick={openAddProject}
                   />
@@ -3152,7 +3152,7 @@ const SidebarProjectsContent = memo(function SidebarProjectsContent(
               >
                 <FolderPlusIcon className="size-3.5" />
               </TooltipTrigger>
-              <TooltipPopup side="right">Add project</TooltipPopup>
+              <TooltipPopup side="right">New or existing project</TooltipPopup>
             </Tooltip>
           </div>
         </div>

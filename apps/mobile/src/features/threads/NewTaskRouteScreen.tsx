@@ -118,7 +118,7 @@ function NewTaskHeader(props: {
         props.canAddProject
           ? [
               {
-                accessibilityLabel: "Add project",
+                accessibilityLabel: "New or existing project",
                 icon: "plus",
                 onPress: () => navigation.dispatch(StackActions.push("AddProject")),
               },

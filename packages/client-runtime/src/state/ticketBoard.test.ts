@@ -215,3 +215,38 @@ describe("work summaries", () => {
     expect(ticketThreadStatus({ ...shell, deletedAt: "2026-10-11T00:00:00Z" })).toBe("not started");
   });
 });
+
+it("finds readable and full IDs case-insensitively, including exact closed history without weakening ownership filters", () => {
+  const record = {
+    ...ticket,
+    id: TicketId.make("01M526Z0MBQJWBN5NXPG42VG3K"),
+    readableId: "t3code-42VG3K",
+    status: "done" as const,
+    updatedAt: "2026-09-01T00:00:00Z",
+  };
+  const entries = [{ environmentId: env, ticket: record }];
+  const base = { now, threadById: () => undefined };
+  for (const search of ["t3code-42vg3k", "  T3CODE-42VG3K  ", record.id.toLowerCase()]) {
+    expect(groupTicketBoard(entries, { ...base, search }).done).toEqual(entries);
+    expect(groupTicketBoard(entries, { ...base, search, environmentId: other }).done).toEqual([]);
+    expect(groupTicketBoard(entries, { ...base, search, projectId: "missing" }).done).toEqual([]);
+  }
+  expect(groupTicketBoard(entries, { ...base, search: "42vg3k", showAllDone: true }).done).toEqual(
+    entries,
+  );
+  expect(groupTicketBoard(entries, { ...base, search: "Details" }).done).toEqual([]);
+  expect(groupTicketBoard(entries, { ...base, search: "t3", showAllDone: true }).done).toEqual([]);
+  expect(
+    groupTicketBoard(entries, { ...base, search: "t3code-42", showAllDone: true }).done,
+  ).toEqual(entries);
+  const dropped = [{ environmentId: env, ticket: { ...record, status: "dropped" as const } }];
+  expect(groupTicketBoard(dropped, { ...base, search: record.readableId }).dropped).toEqual(
+    dropped,
+  );
+  expect(
+    groupTicketBoard([{ environmentId: env, ticket: { ...record, deletedAt: record.updatedAt } }], {
+      ...base,
+      search: record.readableId,
+    }).done,
+  ).toEqual([]);
+});

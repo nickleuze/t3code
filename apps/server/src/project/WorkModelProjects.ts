@@ -183,7 +183,7 @@ const make = (settings: { readonly projectsRoot: string; readonly initializer: s
           return yield* fail("invalid-area");
         const workspaceRoot = path.join(root, input.area, input.slug);
         const existingHome = yield* fs.exists(workspaceRoot);
-        let key = input.slug;
+        let identity = input.slug;
         if (existingHome) {
           const home = yield* metadata(path.join(workspaceRoot, "README.md"));
           const git = yield* runner.run({
@@ -200,7 +200,7 @@ const make = (settings: { readonly projectsRoot: string; readonly initializer: s
             path.resolve(git.stdout.trim()) !== (yield* fs.realPath(workspaceRoot))
           )
             return yield* fail("invalid-home", workspaceRoot);
-          key = home.id;
+          identity = home.id;
         } else {
           if (input.adoptExisting) return yield* fail("missing-home", workspaceRoot);
           yield* initialize(input, false);
@@ -212,7 +212,7 @@ const make = (settings: { readonly projectsRoot: string; readonly initializer: s
         const oldMapping = Option.isSome(registered)
           ? registry.find((entry) => entry.projectId === registered.value.id)
           : undefined;
-        key = oldMapping?.key ?? key;
+        const key = oldMapping?.key ?? identity;
         const conflict = registry.find(
           (entry) =>
             entry.key === key &&
@@ -240,6 +240,7 @@ const make = (settings: { readonly projectsRoot: string; readonly initializer: s
         }
         return {
           workspaceRoot,
+          projectIdentity: identity,
           projectKey: key,
           scope: area.scope,
           existingHome,

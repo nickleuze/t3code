@@ -33,7 +33,7 @@ export function NoProjectsHero() {
               <div className="mt-6 flex justify-center gap-2">
                 <Button size="sm" onClick={openAddProject}>
                   <PlusIcon className="size-4" />
-                  Add project
+                  New or existing project
                 </Button>
                 {scratchTargetEnvironmentId === null ? null : (
                   <Button

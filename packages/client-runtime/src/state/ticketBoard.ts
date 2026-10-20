@@ -119,13 +119,24 @@ export function groupTicketBoard(
       environmentId !== options.projectEnvironmentId
     )
       continue;
-    if (query && !`${ticket.title}\n${ticket.body}`.toLowerCase().includes(query)) continue;
+    const exactId =
+      query !== "" && [ticket.id, ticket.readableId].some((id) => id?.toLowerCase() === query);
+    const readable = ticket.readableId?.toLowerCase();
+    if (
+      query &&
+      !exactId &&
+      !(query.includes("-") && readable?.startsWith(query)) &&
+      !readable?.endsWith(`-${query}`) &&
+      !`${ticket.title}\n${ticket.body}`.toLowerCase().includes(query)
+    )
+      continue;
     const status = deriveTicketStatus(ticket, (id) => options.threadById(environmentId, id));
-    if (!options.deleted && status === "dropped" && !options.showDropped) continue;
+    if (!options.deleted && status === "dropped" && !options.showDropped && !exactId) continue;
     if (
       !options.deleted &&
       status === "done" &&
       !options.showAllDone &&
+      !exactId &&
       Date.parse(ticket.updatedAt) < options.now - 14 * 86400000
     )
       continue;

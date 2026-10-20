@@ -111,7 +111,7 @@ export function PullRequestListEmptyState({
         <EmptyContent>
           <Button size="sm" onClick={() => openCommandPalette({ open: "add-project" })}>
             <PlusIcon className="size-3.5" />
-            Add project
+            New or existing project
           </Button>
         </EmptyContent>
       </Empty>

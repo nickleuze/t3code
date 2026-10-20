@@ -56,6 +56,7 @@ import * as ThreadForkService from "./ThreadForkService.ts";
 import * as TurnItemPositionStore from "./TurnItemPositionStore.ts";
 import * as TicketObservations from "../tickets/TicketObservations.ts";
 import * as TicketHandoffNudge from "../tickets/TicketHandoffNudge.ts";
+import * as TicketPlanOutcome from "../tickets/TicketPlanOutcome.ts";
 import * as TicketSnapshot from "../tickets/TicketSnapshot.ts";
 import * as TicketTriage from "../tickets/TicketTriage.ts";
 import * as TicketSyncService from "../tickets/TicketSyncService.ts";
@@ -415,6 +416,16 @@ export const layerProduction = Layer.mergeAll(
         layerEventSinkProvided,
         layerTickets,
         layerRuntimePolicyProvided,
+      ),
+    ),
+  ),
+  TicketPlanOutcome.layer.pipe(
+    Layer.provide(
+      Layer.mergeAll(
+        layerOrchestratorProvided,
+        layerEventSinkProvided,
+        layerTickets,
+        layerEventStoreProvided,
       ),
     ),
   ),

@@ -108,7 +108,7 @@ const ListTool = Tool.make("t3_ticket_list", {
 const UpdateTool = Tool.make("t3_ticket_update", {
   ...shared,
   description:
-    "Patch an existing ticket's title, body, status or project. Omitted fields are preserved; an empty body clears it and null projectId unassigns it. Explicit status writes a stage event. Activity never changes the stage.",
+    "Patch an existing ticket's title, body, status or project. Omitted fields are preserved; an empty body clears it and null projectId unassigns it. Explicit status writes a stage event. Starting linked work can move Inbox/Ready to In progress; current-work PR links and merges can move active work to In review. Merges do not complete tickets. Leave results In review until the user accepts the finish condition; Done records that acceptance.",
   parameters: Schema.Struct({ id: TicketId, ...editable }),
   success: TicketSummary,
 })
@@ -118,7 +118,7 @@ const UpdateTool = Tool.make("t3_ticket_update", {
 const LinkThreadTool = Tool.make("t3_ticket_link_thread", {
   ...shared,
   description:
-    'Link a ticket to a thread, defaulting to the calling thread (outside clients must pass threadId). Role defaults to "work", which contributes to automatic status; "origin" only records where an idea came from. Set unlink=true to remove the link. The target thread must run within the caller\'s permission modes. Returns the ticket summary with derived status.',
+    'Link a ticket to a thread, defaulting to the calling thread (outside clients must pass threadId). Role defaults to "work"; "origin" only records where an idea came from. Linking alone does not change stage; a subsequent run can start work and current-work PR observations can move active work to In review. Set unlink=true to remove the link. The target thread must run within the caller\'s permission modes. Returns the ticket summary with its recorded stage.',
   parameters: Schema.Struct({
     id: TicketId,
     threadId: Schema.optional(ThreadId),
@@ -147,7 +147,7 @@ const GetTool = Tool.make("t3_ticket_get", {
 const EntryTool = Tool.make("t3_ticket_entry", {
   ...shared,
   description:
-    "Write a milestone entry. End handoffs with Next: (or next). Reuse clientRequestId after a lost response; it is deduplicated within your caller namespace.",
+    "Write a milestone entry before the substantive final answer when permitted. Put the next action or needed decision in structured next. Record corrected premises and accepted scope/finish conditions as decisions with their source; supersedes/resolves retain the original history. Planning decisions do not authorize implementation. Respect plan/read-only restrictions; T3 can record a source pointer to a planning outcome without a provider write. Reuse clientRequestId after a lost response; it is deduplicated within your caller namespace. A fallback handoff request needs at most a one-line acknowledgment, not another final answer.",
   parameters: Schema.Struct({
     ticket: TicketId,
     kind: TicketEntryKind,

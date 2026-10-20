@@ -201,6 +201,8 @@ export class TicketService extends Context.Service<
       input: TicketEntryInput,
       by?: TicketAuthor,
       namespace?: string,
+      /** Server observations retain their source time when recovered after restart. */
+      occurredAt?: string,
     ) => Effect.Effect<TicketMutationResult, TicketError>;
     readonly importEvents: (events: readonly TicketEvent[]) => Effect.Effect<void, TicketError>;
     readonly rebuild: Effect.Effect<void, TicketError>;
@@ -449,7 +451,12 @@ export const make = Effect.gen(function* () {
       );
       return {
         tickets: states
-          .map((state) => state.ticket)
+          // Full question responses belong to get, not every board broadcast.
+          .map(({ ticket }) =>
+            ticket.workState
+              ? { ...ticket, workState: { ...ticket.workState, answers: undefined } }
+              : ticket,
+          )
           .filter((ticket) => input.includeDeleted || ticket.deletedAt === null)
           .sort(
             (a, b) =>
@@ -729,8 +736,6 @@ export const make = Effect.gen(function* () {
             local.role === "work" &&
             latestWork?.ref === local.ref &&
             latestWork.machine === machine;
-          const active =
-            state.ticket.status === "in_progress" || state.ticket.status === "in_review";
           if (input.kind === "pr_linked" && input.isDraft) continue;
           if (input.kind === "pr_linked" || input.referenceKind)
             events.push({
@@ -745,9 +750,9 @@ export const make = Effect.gen(function* () {
             });
           if (
             currentWork &&
-            ((input.kind === "pr_linked" && state.ticket.status === "in_progress") ||
+            state.ticket.status === "in_progress" &&
+            (input.kind === "pr_linked" ||
               (input.kind === "pr_merged" &&
-                active &&
                 history.some(
                   (e) =>
                     e.type === "auto" &&
@@ -760,7 +765,8 @@ export const make = Effect.gen(function* () {
             events.push({
               ...(yield* base(id, by)),
               type: "stage",
-              stage: input.kind === "pr_merged" ? "done" : "in_review",
+              // A supporting PR can merge before the Ticket's finish condition is met.
+              stage: "in_review",
               reason: input.kind,
             });
           events.push({
@@ -777,21 +783,22 @@ export const make = Effect.gen(function* () {
       }),
       (changed) => changed,
     ).pipe(Effect.asVoid, Effect.uninterruptible, mapError);
-  const entry = (input: TicketEntryInput, by?: TicketAuthor, namespace = "user") =>
+  const entry = (
+    input: TicketEntryInput,
+    by?: TicketAuthor,
+    namespace = "user",
+    occurredAt?: string,
+  ) =>
     mutate(
       Effect.gen(function* () {
         const state = yield* readState(input.id);
         const signed = by ?? author();
+        const at = occurredAt ?? (yield* now);
         const requestKey = input.clientRequestId
           ? deterministicEventId(namespace, input.clientRequestId, signed.machine)
           : undefined;
         const eventId = input.clientRequestId
-          ? deterministicEventId(
-              namespace,
-              input.clientRequestId,
-              signed.machine,
-              Date.parse(yield* now),
-            )
+          ? deterministicEventId(namespace, input.clientRequestId, signed.machine, Date.parse(at))
           : undefined;
         if (requestKey) {
           const rows = yield* sql<{
@@ -817,6 +824,7 @@ export const make = Effect.gen(function* () {
         yield* commitEvents([
           {
             ...(yield* base(state.ticket.id, signed)),
+            at,
             ...(eventId ? { eventId, requestKey } : {}),
             type: "entry",
             ...fields,

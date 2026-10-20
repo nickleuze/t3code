@@ -80,6 +80,12 @@ it.effect(
       yield* nudge.drain;
       assert.equal(dispatched.length, 1);
       assert.equal(dispatched[0]?.type, "message.dispatch");
+      if (dispatched[0]?.type === "message.dispatch") {
+        assert.include(dispatched[0].text, "structured next field");
+        assert.include(dispatched[0].text, "at most one line");
+        assert.include(dispatched[0].text, "do not repeat the substantive final answer");
+        assert.include(dispatched[0].text, "not new work or approval");
+      }
       runId = RunId.make("chat");
       items = [];
       yield* nudge.observe({ id: runId, threadId });
