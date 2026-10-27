@@ -9,6 +9,8 @@ import {
   type ServerSettings,
   ProviderInstanceMutation,
   requiredScopesForServerSettingsPatch,
+  requiredScopesForProjectMutation,
+  ProjectMutation,
   AuthSettingsWriteScope,
   AuthProvidersManageScope,
   AuthEnvironmentMaintainScope,
@@ -36,27 +38,27 @@ import type * as RpcGroup from "effect/rpc/RpcGroup";
 
 type WsRpcMethod = RpcGroup.Rpcs<typeof WsRpcGroup>["_tag"];
 
-/**
- * Keep authorization coverage coupled to the RPC group itself. Adding an RPC to
- * `WsRpcGroup` without choosing a scope is a type error instead of a production
- * runtime failure.
- */
 export const RPC_REQUIRED_SCOPES = {
   ...CLIENT_GUARDED_RPC_SCOPES,
   [ORCHESTRATION_V2_WS_METHODS.dispatchCommand]: AuthOrchestrationOperateScope,
   [ORCHESTRATION_V2_WS_METHODS.getWorkflowScript]: AuthOrchestrationReadScope,
+  [ORCHESTRATION_V2_WS_METHODS.stopWorkflow]: AuthOrchestrationOperateScope,
   [ORCHESTRATION_V2_WS_METHODS.getTurnDiff]: AuthOrchestrationReadScope,
   [ORCHESTRATION_V2_WS_METHODS.getFullThreadDiff]: AuthOrchestrationReadScope,
   [ORCHESTRATION_V2_WS_METHODS.searchThreads]: AuthOrchestrationReadScope,
   [ORCHESTRATION_V2_WS_METHODS.searchThread]: AuthOrchestrationReadScope,
   [ORCHESTRATION_V2_WS_METHODS.searchThreadStream]: AuthOrchestrationReadScope,
   [ORCHESTRATION_V2_WS_METHODS.getArchivedShellSnapshot]: AuthOrchestrationReadScope,
+  [ORCHESTRATION_V2_WS_METHODS.getThreadFamily]: AuthOrchestrationReadScope,
+  [ORCHESTRATION_V2_WS_METHODS.getWorktreeThreadIds]: AuthOrchestrationReadScope,
+  [ORCHESTRATION_V2_WS_METHODS.getOlderSettledThreads]: AuthOrchestrationReadScope,
   [ORCHESTRATION_V2_WS_METHODS.getThreadProjection]: AuthOrchestrationReadScope,
   [ORCHESTRATION_V2_WS_METHODS.getTurnItem]: AuthOrchestrationReadScope,
   [ORCHESTRATION_V2_WS_METHODS.launchThread]: AuthOrchestrationOperateScope,
   [ORCHESTRATION_V2_WS_METHODS.subscribeArchivedShell]: AuthOrchestrationReadScope,
   [ORCHESTRATION_V2_WS_METHODS.subscribeShell]: AuthOrchestrationReadScope,
   [ORCHESTRATION_V2_WS_METHODS.subscribeThread]: AuthOrchestrationReadScope,
+  [ORCHESTRATION_V2_WS_METHODS.subscribeCommandOutput]: AuthOrchestrationReadScope,
   [WS_METHODS.projectsMutate]: AuthOrchestrationOperateScope,
   [WS_METHODS.serverProbe]: AuthOrchestrationReadScope,
   [WS_METHODS.serverGetConfig]: AuthOrchestrationReadScope,
@@ -83,7 +85,9 @@ export const RPC_REQUIRED_SCOPES = {
   [WS_METHODS.serverUpsertKeybinding]: AuthSettingsWriteScope,
   [WS_METHODS.serverRemoveKeybinding]: AuthSettingsWriteScope,
   [WS_METHODS.serverGetStorageCleanupReport]: AuthOrchestrationReadScope,
+  [WS_METHODS.serverGetDatabaseStorage]: AuthOrchestrationReadScope,
   [WS_METHODS.serverGetSettings]: AuthOrchestrationReadScope,
+  [WS_METHODS.peerLinksList]: AuthAccessReadScope,
   [WS_METHODS.serverUpdateSettings]: AuthSettingsWriteScope,
   [WS_METHODS.serverSearchAcpRegistry]: AuthOrchestrationReadScope,
   [WS_METHODS.serverPrepareAcpRegistryAgent]: AuthProvidersManageScope,
@@ -99,8 +103,7 @@ export const RPC_REQUIRED_SCOPES = {
   [WS_METHODS.serverDiscoverSourceControl]: AuthOrchestrationReadScope,
   [WS_METHODS.serverGetTraceDiagnostics]: AuthDiagnosticsReadScope,
   [WS_METHODS.serverGetProcessDiagnostics]: AuthDiagnosticsReadScope,
-  // Load-balancing new threads reads host load; that is part of operating
-  // threads, not of inspecting diagnostics.
+  // Thread load balancing reads host load, so it needs thread scope rather than diagnostics scope.
   [WS_METHODS.serverGetHostResources]: AuthOrchestrationReadScope,
   [WS_METHODS.serverGetProcessResourceHistory]: AuthDiagnosticsReadScope,
   [WS_METHODS.serverGetResourceTelemetryHistory]: AuthDiagnosticsReadScope,
@@ -128,6 +131,7 @@ export const RPC_REQUIRED_SCOPES = {
   [WS_METHODS.cloudInstallRelayClient]: AuthRelayWriteScope,
   [WS_METHODS.pullRequestsList]: AuthOrchestrationReadScope,
   [WS_METHODS.pullRequestsListStats]: AuthOrchestrationReadScope,
+  [WS_METHODS.pullRequestsFilterOptions]: AuthOrchestrationReadScope,
   [WS_METHODS.pullRequestsSummary]: AuthOrchestrationReadScope,
   [WS_METHODS.pullRequestsRouting]: AuthOrchestrationReadScope,
   [WS_METHODS.pullRequestsRoutingIdentity]: AuthOrchestrationReadScope,
@@ -137,16 +141,14 @@ export const RPC_REQUIRED_SCOPES = {
   [WS_METHODS.pullRequestsPreview]: AuthOrchestrationReadScope,
   [WS_METHODS.pullRequestsChecks]: AuthOrchestrationReadScope,
   [WS_METHODS.pullRequestsActivity]: AuthOrchestrationReadScope,
+  [WS_METHODS.pullRequestsReviewGuide]: AuthOrchestrationReadScope,
   [WS_METHODS.pullRequestsThreadComments]: AuthOrchestrationReadScope,
   [WS_METHODS.pullRequestsDiffFileContents]: AuthOrchestrationReadScope,
   [WS_METHODS.pullRequestsFilesViewed]: AuthOrchestrationReadScope,
-  // Read scope like the reads it un-caches: refreshing is part of reading, and a read-only
-  // client pressing refresh must not be told it may not look again.
+  [WS_METHODS.pullRequestsChangeBreakdown]: AuthOrchestrationReadScope,
   [WS_METHODS.pullRequestsInvalidate]: AuthOrchestrationReadScope,
   [WS_METHODS.pullRequestsReportState]: AuthOrchestrationReadScope,
   [WS_METHODS.pullRequestsSubscribeRefreshes]: AuthOrchestrationReadScope,
-  // The candidate list is a read like the detail beside it; asking somebody for a review is a
-  // write like every other one.
   [WS_METHODS.pullRequestsReviewerCandidates]: AuthOrchestrationReadScope,
   [WS_METHODS.pullRequestsLabelCandidates]: AuthOrchestrationReadScope,
   [WS_METHODS.sourceControlLookupRepository]: AuthOrchestrationReadScope,
@@ -162,6 +164,7 @@ export const RPC_REQUIRED_SCOPES = {
   // caches as a query, so the client checks the scope itself (no guard entry).
   [WS_METHODS.mcpServersListTools]: AuthProvidersManageScope,
   [WS_METHODS.projectsListEntries]: AuthFilesystemReadScope,
+  [WS_METHODS.projectsListIgnoredFiles]: AuthFilesystemReadScope,
   [WS_METHODS.projectsReadFile]: AuthFilesystemReadScope,
   [WS_METHODS.projectsSearchContents]: AuthFilesystemReadScope,
   [WS_METHODS.projectsSearchEntries]: AuthFilesystemReadScope,
@@ -172,6 +175,7 @@ export const RPC_REQUIRED_SCOPES = {
   [WS_METHODS.projectsWorkModelPreview]: AuthFilesystemReadScope,
   [WS_METHODS.shellOpenInEditor]: AuthOrchestrationOperateScope,
   [WS_METHODS.filesystemBrowse]: AuthFilesystemReadScope,
+  [WS_METHODS.filesystemGetMetadata]: AuthFilesystemReadScope,
   [WS_METHODS.agentSessionsScan]: AuthOrchestrationReadScope,
   [WS_METHODS.agentSessionsImport]: AuthOrchestrationOperateScope,
   [WS_METHODS.assetsCreateUrl]: AuthOrchestrationReadScope,
@@ -179,7 +183,6 @@ export const RPC_REQUIRED_SCOPES = {
   [WS_METHODS.attachmentsCreateUploadUrl]: AuthOrchestrationOperateScope,
   [WS_METHODS.attachmentsDelete]: AuthOrchestrationOperateScope,
   [WS_METHODS.providerUploadFeedback]: AuthOrchestrationOperateScope,
-  // An app's tool calls can change things on its server, like a user action.
   [WS_METHODS.mcpAppsCallTool]: AuthOrchestrationOperateScope,
   [WS_METHODS.mcpAppsToolInfo]: AuthOrchestrationReadScope,
   [WS_METHODS.mcpAppsReadResource]: AuthOrchestrationReadScope,
@@ -217,6 +220,7 @@ export const RPC_REQUIRED_SCOPES = {
   [WS_METHODS.subscribeDiscoveredLocalServers]: AuthOrchestrationReadScope,
   [WS_METHODS.deviceConfigure]: AuthSettingsWriteScope,
   [WS_METHODS.deviceTestHost]: AuthSettingsWriteScope,
+  [WS_METHODS.deviceEasAccount]: AuthSettingsWriteScope,
   [WS_METHODS.deviceList]: AuthOrchestrationReadScope,
   [WS_METHODS.deviceOpen]: AuthOrchestrationOperateScope,
   [WS_METHODS.deviceClose]: AuthOrchestrationOperateScope,
@@ -251,19 +255,22 @@ const SettingsUpdate = Schema.Struct({
   patch: ServerSettingsPatch,
   providerInstanceMutation: Schema.optionalKey(ProviderInstanceMutation),
 });
+const decodeSettingsUpdate = Schema.decodeUnknownSync(SettingsUpdate);
 
 const requiredScopesForSettingsUpdate = (
   payload: unknown,
   current: Pick<ServerSettings, "projectSettingsOverrides"> | undefined,
 ) => {
-  const input = Schema.decodeUnknownSync(SettingsUpdate)(payload);
+  const input = decodeSettingsUpdate(payload);
   const scopes = requiredScopesForServerSettingsPatch(input.patch, current);
   if (input.providerInstanceMutation === undefined) return scopes;
-  // An atomic provider mutation carries an empty patch unless it also changes settings.
   return Object.values(input.patch).every((value) => value === undefined)
     ? [AuthProvidersManageScope]
     : [...new Set([...scopes, AuthProvidersManageScope])];
 };
+
+const decodeProjectMutation = Schema.decodeUnknownSync(ProjectMutation);
+const decodeAssetCreateUrlInput = Schema.decodeUnknownSync(AssetCreateUrlInput);
 
 const requiredScopesForRpcCall = (
   method: string,
@@ -274,7 +281,7 @@ const requiredScopesForRpcCall = (
     return [AuthEnvironmentMaintainScope, AuthDiagnosticsReadScope];
   }
   if (method === WS_METHODS.assetsCreateUrl) {
-    const { resource } = Schema.decodeUnknownSync(AssetCreateUrlInput)(payload);
+    const { resource } = decodeAssetCreateUrlInput(payload);
     return [
       resource._tag === "workspace-file" ||
       resource._tag === "media-file" ||
@@ -286,31 +293,36 @@ const requiredScopesForRpcCall = (
   if (method === WS_METHODS.serverUpdateSettings) {
     return requiredScopesForSettingsUpdate(payload, currentSettings);
   }
+  if (method === WS_METHODS.projectsMutate) {
+    return requiredScopesForProjectMutation(decodeProjectMutation(payload));
+  }
   const guarded = clientRpcRequiredScopes(method, payload);
   if (guarded.length > 0) return guarded;
   return [requiredScopeForRpcMethod(method)];
 };
 
 /**
- * Authorizes every RPC on one connection against that connection's session scopes.
- * `currentSettings` lets a settings update that only resends a project's stored
- * MCP servers pass with `settings:write`.
+ * `onAuthorized` runs once after an authorized request succeeds (for a stream, when
+ * it completes). `currentSettings` lets a settings update that only resends a
+ * project's stored MCP servers pass with `settings:write`.
  */
 export const layer = (
   scopes: ReadonlyArray<AuthEnvironmentScope>,
-  currentSettings: Effect.Effect<
-    Pick<ServerSettings, "projectSettingsOverrides"> | undefined
-  > = Effect.succeed(undefined),
+  onAuthorized?: (method: string, payload: unknown) => Effect.Effect<void>,
+  currentSettings?: Effect.Effect<Pick<ServerSettings, "projectSettingsOverrides"> | undefined>,
 ) =>
   Layer.succeed(RpcScopeAuthorization)((effect, { rpc, payload }) =>
     Effect.gen(function* () {
       const settings =
-        rpc._tag === WS_METHODS.serverUpdateSettings ? yield* currentSettings : undefined;
+        rpc._tag === WS_METHODS.serverUpdateSettings && currentSettings !== undefined
+          ? yield* currentSettings
+          : undefined;
       const requiredScopes = requiredScopesForRpcCall(rpc._tag, payload, settings);
       const requiredScope = requiredScopes.find((scope) => !scopes.includes(scope));
-      return requiredScope === undefined
-        ? yield* effect
-        : yield* Effect.fail(rpcAuthorizationError(requiredScope));
+      if (requiredScope !== undefined) return yield* rpcAuthorizationError(requiredScope);
+      return yield* onAuthorized === undefined
+        ? effect
+        : Effect.tap(effect, () => onAuthorized(rpc._tag, payload));
     }),
   );
 

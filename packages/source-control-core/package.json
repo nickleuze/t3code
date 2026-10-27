@@ -3,6 +3,14 @@
   "private": true,
   "type": "module",
   "exports": {
+    "./shared/definition": {
+      "types": "./src/shared/definition.ts",
+      "import": "./src/shared/definition.ts"
+    },
+    "./shared/threadPullRequests": {
+      "types": "./src/shared/threadPullRequests.ts",
+      "import": "./src/shared/threadPullRequests.ts"
+    },
     "./server/diffFileRevisions": {
       "types": "./src/server/diffFileRevisions.ts",
       "import": "./src/server/diffFileRevisions.ts"

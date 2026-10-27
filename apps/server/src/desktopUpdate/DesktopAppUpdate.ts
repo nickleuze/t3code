@@ -110,106 +110,103 @@ export const make = Effect.fn("desktopUpdate.desktopAppUpdate.make")(function* (
       ),
     );
 
-  const consumeReports = (
+  const consumeReports = Effect.fn("consumeReports")(function* (
     requestId: string,
     changes: Stream.Stream<DesktopUpdateStatusReport>,
     reportProgress: (
       stage: ServerSelfUpdateProgressStage,
     ) => Effect.Effect<void, ServerSelfUpdateError>,
-  ) =>
-    Effect.gen(function* () {
-      const lastStage = yield* Ref.make<ServerSelfUpdateProgressStage | null>(null);
-      const emitStage = (
-        stage: ServerSelfUpdateProgressStage | null,
-      ): Effect.Effect<void, ServerSelfUpdateError> =>
-        stage === null
-          ? Effect.void
-          : Ref.get(lastStage).pipe(
-              Effect.flatMap((previous) =>
-                previous === stage
-                  ? Effect.void
-                  : Ref.set(lastStage, stage).pipe(Effect.andThen(reportProgress(stage))),
-              ),
-            );
+  ) {
+    const lastStage = yield* Ref.make<ServerSelfUpdateProgressStage | null>(null);
+    const emitStage = (
+      stage: ServerSelfUpdateProgressStage | null,
+    ): Effect.Effect<void, ServerSelfUpdateError> =>
+      stage === null
+        ? Effect.void
+        : Ref.get(lastStage).pipe(
+            Effect.flatMap((previous) =>
+              previous === stage
+                ? Effect.void
+                : Ref.set(lastStage, stage).pipe(Effect.andThen(reportProgress(stage))),
+            ),
+          );
 
-      const answered = yield* Deferred.make<void>();
-      const unanswered = Deferred.await(answered).pipe(
-        Effect.timeout(DESKTOP_UPDATE_ANSWER_TIMEOUT),
-        Effect.catchTags({
-          // Withdraw the request so an app that unblocks later does not
-          // start an update nobody is waiting for.
-          TimeoutError: () =>
-            receiver
-              .cancelDesktopUpdate(requestId)
-              .pipe(
-                Effect.ignore,
-                Effect.andThen(
-                  Effect.fail(
-                    failWith(
-                      "The T3 Code desktop app on this machine is not responding. Something may be blocking it, such as a macOS Keychain prompt waiting on that machine's screen.",
-                    ),
+    const answered = yield* Deferred.make<void>();
+    const unanswered = Deferred.await(answered).pipe(
+      Effect.timeout(DESKTOP_UPDATE_ANSWER_TIMEOUT),
+      Effect.catchTags({
+        // Withdraw the request so an app that unblocks later does not
+        // start an update nobody is waiting for.
+        TimeoutError: () =>
+          receiver
+            .cancelDesktopUpdate(requestId)
+            .pipe(
+              Effect.ignore,
+              Effect.andThen(
+                Effect.fail(
+                  failWith(
+                    "The T3 Code desktop app on this machine is not responding. Something may be blocking it, such as a macOS Keychain prompt waiting on that machine's screen.",
                   ),
                 ),
               ),
+            ),
+      }),
+      Effect.andThen(Effect.never),
+    );
+
+    const reports = changes.pipe(
+      Stream.filter((report) => report.requestId === requestId),
+      Stream.tap(() => Deferred.succeed(answered, undefined)),
+      Stream.mapEffect(
+        (report): Effect.Effect<Option.Option<DesktopUpdateStatusReport>, ServerSelfUpdateError> =>
+          report.outcome === undefined
+            ? emitStage(desktopUpdateProgressStage(report.state)).pipe(
+                Effect.as(Option.none<DesktopUpdateStatusReport>()),
+              )
+            : Effect.succeedSome(report),
+      ),
+      Stream.filterMap(
+        Option.match({
+          onNone: () => Result.failVoid,
+          onSome: Result.succeed,
         }),
-        Effect.andThen(Effect.never),
-      );
+      ),
+      Stream.runHead,
+    );
+    const terminal = yield* Effect.raceFirst(reports, unanswered);
+    if (Option.isNone(terminal)) {
+      return yield* failWith("The desktop app stopped reporting its update.");
+    }
 
-      const reports = changes.pipe(
-        Stream.filter((report) => report.requestId === requestId),
-        Stream.tap(() => Deferred.succeed(answered, undefined)),
-        Stream.mapEffect(
-          (
-            report,
-          ): Effect.Effect<Option.Option<DesktopUpdateStatusReport>, ServerSelfUpdateError> =>
-            report.outcome === undefined
-              ? emitStage(desktopUpdateProgressStage(report.state)).pipe(
-                  Effect.as(Option.none<DesktopUpdateStatusReport>()),
-                )
-              : Effect.succeedSome(report),
-        ),
-        Stream.filterMap(
-          Option.match({
-            onNone: () => Result.failVoid,
-            onSome: Result.succeed,
-          }),
-        ),
-        Stream.runHead,
-      );
-      const terminal = yield* Effect.raceFirst(reports, unanswered);
-      if (Option.isNone(terminal)) {
-        return yield* failWith("The desktop app stopped reporting its update.");
-      }
-
-      const report = terminal.value;
-      if (report.outcome === "ready-to-install") {
-        yield* emitStage("installing");
-        const targetVersion =
-          report.state.downloadedVersion ??
-          report.state.availableVersion ??
-          report.state.currentVersion;
-        yield* Effect.logInfo("Desktop app update prepared for install.", {
-          targetVersion,
-        });
-        yield* Ref.set(inFlight, false);
-        return {
-          targetVersion,
-          method: "desktop-app" as const,
-          desktopUpdateToken: requestId,
-          ...(report.downloadedSha512 === undefined
-            ? {}
-            : { downloadedSha512: report.downloadedSha512 }),
-        };
-      }
-      if (report.outcome === "up-to-date") {
-        return yield* failWith(
-          `The T3 Code desktop app on this machine is already up to date on ${report.state.currentVersion}.`,
-        );
-      }
+    const report = terminal.value;
+    if (report.outcome === "ready-to-install") {
+      yield* emitStage("installing");
+      const targetVersion =
+        report.state.downloadedVersion ??
+        report.state.availableVersion ??
+        report.state.currentVersion;
+      yield* Effect.logInfo("Desktop app update prepared for install.", {
+        targetVersion,
+      });
+      yield* Ref.set(inFlight, false);
+      return {
+        targetVersion,
+        method: "desktop-app" as const,
+        desktopUpdateToken: requestId,
+        ...(report.downloadedSha512 === undefined
+          ? {}
+          : { downloadedSha512: report.downloadedSha512 }),
+      };
+    }
+    if (report.outcome === "up-to-date") {
       return yield* failWith(
-        report.reason ?? report.state.message ?? "The desktop app update failed.",
+        `The T3 Code desktop app on this machine is already up to date on ${report.state.currentVersion}.`,
       );
-    });
+    }
+    return yield* failWith(
+      report.reason ?? report.state.message ?? "The desktop app update failed.",
+    );
+  });
 
   const run: DesktopAppUpdate["Service"]["run"] = Effect.fn("desktopUpdate.desktopAppUpdate.run")(
     function* (reportProgress, owner) {
@@ -225,11 +222,13 @@ export const make = Effect.fn("desktopUpdate.desktopAppUpdate.make")(function* (
 
       return yield* Effect.scoped(
         Effect.gen(function* () {
-          const requestId = yield* crypto.randomUUIDv4.pipe(
-            Effect.mapError((error) =>
-              failWith("Could not generate a desktop update request id.", error),
-            ),
-          );
+          const requestId = yield* crypto
+            .randomUUIDv4()
+            .pipe(
+              Effect.mapError((error) =>
+                failWith("Could not generate a desktop update request id.", error),
+              ),
+            );
           // Subscribe before sending the request so a fast first report
           // cannot be missed.
           const { changes } = yield* receiver.desktopUpdates;
@@ -299,8 +298,10 @@ export const make = Effect.fn("desktopUpdate.desktopAppUpdate.make")(function* (
     available,
     run,
     commit,
-    reserve: (deployment) => Ref.set(reservedBy, deployment),
-    release: (requestId) => receiver.cancelDesktopUpdate(requestId).pipe(Effect.ignore),
+    reserve: Effect.fn("DesktopAppUpdate.reserve")((deployment) => Ref.set(reservedBy, deployment)),
+    release: Effect.fn("DesktopAppUpdate.release")((requestId) =>
+      receiver.cancelDesktopUpdate(requestId).pipe(Effect.ignore),
+    ),
   });
 });
 
