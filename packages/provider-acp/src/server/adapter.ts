@@ -608,11 +608,9 @@ interface AcpMcpContext {
 }
 
 /**
- * The user's servers from Settings → Tools, passed through as plain ACP
- * entries. ACP wants an absolute command, so a bare name such as `npx` is
- * looked up on the PATH the agent inherits; one that cannot be found is sent
- * as typed. Http entries are dropped later for agents that do not advertise
- * http support.
+ * Settings → Tools servers as ACP entries. ACP wants an absolute command, so a
+ * bare name is resolved on the agent's PATH (or sent as typed when missing).
+ * Http entries are dropped later for agents without http support.
  */
 function acpUserMcpServers(
   servers: ReadonlyArray<ResolvedMcpServer>,

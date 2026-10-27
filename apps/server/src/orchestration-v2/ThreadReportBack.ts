@@ -91,14 +91,10 @@ function isTerminalRunUpdate(stored: OrchestrationV2StoredEvent): boolean {
 }
 
 /**
- * Tells a thread when work its agent started in another thread ends. Threads
- * launched with t3_thread_launch/create_threads and turns sent with
- * t3_thread_send report back to the sending thread. Each notice is an ordinary
- * queued notification message whose command and message ids derive from the
- * run, so command receipts deliver it at most once. Live terminal runs are
- * reported as they commit; after a restart, a sweep re-offers recently ended
- * runs, which covers runs that ended unreported while the server was down or
- * that restart reconciliation stopped.
+ * Reports work launched or sent from another thread back to the sender as a
+ * queued notification whose ids derive from the run, so receipts deliver it
+ * at most once. Live runs report on commit; after a restart a sweep re-offers
+ * recently ended runs that went unreported.
  */
 export const make = Effect.gen(function* () {
   const eventSink = yield* EventSink.EventSinkV2;

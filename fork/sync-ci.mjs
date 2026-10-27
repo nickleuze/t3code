@@ -1,11 +1,6 @@
-// Fork-only: generates .github/workflows/fork-ci.yml from upstream's ci.yml.
-//
-// The fork runs upstream's checks unchanged, on GitHub-hosted runners, for its
-// own branches, and as a reusable workflow for fork-release.yml. Each edit
-// below must match upstream exactly, so a reshaped ci.yml fails here instead
-// of producing a silently different workflow. fork/sync-ci.test.mjs fails
-// while fork-ci.yml is out of date.
-//
+// Fork-only: generates fork-ci.yml (upstream's checks on GitHub-hosted runners,
+// also reusable by fork-release.yml). Each edit must match upstream exactly, so
+// a reshaped ci.yml fails here; fork/sync-ci.test.mjs fails while it is stale.
 // Usage: node fork/sync-ci.mjs   (rewrites fork-ci.yml after an upstream sync)
 import * as NodeFS from "node:fs";
 import * as NodeURL from "node:url";
