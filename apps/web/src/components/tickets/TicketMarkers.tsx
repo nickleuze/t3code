@@ -1,4 +1,3 @@
-import { useMemo } from "react";
 import { useAtomValue } from "@effect/atom-react";
 import { AsyncResult } from "effect/reactivity";
 import type { EnvironmentTicket } from "@t3tools/client-runtime/state/ticket-board";
@@ -8,10 +7,7 @@ import { Badge } from "../ui/badge";
 export function TicketMarkers({ entry }: { entry: EnvironmentTicket }) {
   const { linked } = useTicketConnections(entry);
   const sync = useAtomValue(
-    useMemo(
-      () => ticketEnvironment.syncStatus({ environmentId: entry.environmentId, input: {} }),
-      [entry.environmentId],
-    ),
+    ticketEnvironment.syncStatus({ environmentId: entry.environmentId, input: {} }),
   );
   return (
     <div className="flex flex-wrap gap-1">

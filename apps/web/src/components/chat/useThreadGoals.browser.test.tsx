@@ -20,9 +20,11 @@ const fixture = vi.hoisted(() => ({
   projection: null as unknown,
   dialog: null as null | { mode: string; onSubmit: (brief: GoalBrief) => Promise<void> },
 }));
-vi.mock("@tanstack/react-router", () => ({ useNavigate: () => vi.fn() }));
+vi.mock("@tanstack/react-router", async (original) => ({
+  ...(await original<typeof import("@tanstack/react-router")>()),
+  useNavigate: () => vi.fn(),
+}));
 vi.mock("~/state/session", () => ({ useEnvironmentScope: () => true }));
-vi.mock("~/lib/utils", () => ({ randomUUID: () => "command" }));
 vi.mock("../../state/entities", () => ({ useThreadProjection: () => fixture.projection }));
 vi.mock("../../state/threads", () => ({
   threadEnvironment: { messageGoal: "message", updateGoal: "update" },
@@ -161,7 +163,7 @@ it("edits a paused goal's brief through thread.goal.update and offers no edit wh
     environmentId,
     input: {
       type: "thread.goal.update",
-      commandId: "command",
+      commandId: expect.any(String),
       threadId: "owner",
       goalId: "goal",
       objective: "Ship",

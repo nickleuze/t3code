@@ -1,7 +1,7 @@
 import { useAtomRefresh, useAtomValue } from "@effect/atom-react";
 import { formatModelSlugName } from "@t3tools/shared/model";
 import { AsyncResult } from "effect/reactivity";
-import { useEffect, useLayoutEffect, useMemo, useRef, useState, type RefObject } from "react";
+import { useEffect, useLayoutEffect, useRef, useState, type RefObject } from "react";
 import { deriveTicketWorkState } from "@t3tools/shared/ticket";
 import type { TicketEvent, TicketEntryInput } from "@t3tools/contracts";
 import {
@@ -29,12 +29,10 @@ export function TicketTimeline({
   composerRef: RefObject<HTMLTextAreaElement | null>;
 }) {
   const { environmentId, ticket } = entry;
-  const query = useMemo(
-    () => ticketEnvironment.timeline({ environmentId, input: { id: ticket.id } }),
-    [environmentId, ticket.id],
-  );
+  const query = ticketEnvironment.timeline({ environmentId, input: { id: ticket.id } });
   const result = useAtomValue(query);
   const refresh = useAtomRefresh(query);
+  // oxlint-disable-next-line t3code/react-effect-budget -- reloads the timeline when the board reports a newer ticket revision
   useEffect(() => {
     if (ticket.updatedAt) refresh();
   }, [refresh, ticket.updatedAt]);
@@ -56,7 +54,7 @@ export function TicketTimeline({
   const [history, setHistory] = useState(false);
   const events = AsyncResult.isSuccess(result) ? result.value.events : [];
   const machines = AsyncResult.isSuccess(result) ? result.value.machines : {};
-  const view = useMemo(() => deriveTicketWorkState(events, ticket.status), [events, ticket.status]);
+  const view = deriveTicketWorkState(events, ticket.status);
   const { entries, superseded, resolved, questions, blockers, currentEvidence, nextAction } = view;
   const decisions = (
     history ? entries.filter((e) => e.kind === "decision") : view.decisions
@@ -471,6 +469,7 @@ function EntryText({ text }: { text: string }) {
   const [expanded, setExpanded] = useState(false);
   const [expandable, setExpandable] = useState(false);
   const textRef = useRef<HTMLParagraphElement>(null);
+  // oxlint-disable-next-line t3code/react-effect-budget -- measures clamped text before paint and follows resizes
   useLayoutEffect(() => {
     const node = textRef.current;
     if (!node || expanded) return;

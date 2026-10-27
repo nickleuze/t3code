@@ -1,6 +1,6 @@
 import { useAtomRefresh, useAtomValue } from "@effect/atom-react";
 import { AsyncResult } from "effect/reactivity";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 import {
   ProjectId,
   type EnvironmentId,
@@ -52,16 +52,10 @@ function failureMessage(result: Parameters<typeof squashAtomCommandFailure>[0]):
 }
 function EnvironmentTicketSettings({ environmentId }: { environmentId: EnvironmentId }) {
   const narrow = useMediaQuery("(max-width: 480px)");
-  const query = useMemo(
-    () => ticketEnvironment.syncStatus({ environmentId, input: {} }),
-    [environmentId],
-  );
+  const query = ticketEnvironment.syncStatus({ environmentId, input: {} });
   const status = useAtomValue(query);
   const reload = useAtomRefresh(query);
-  const projectsQuery = useMemo(
-    () => ticketEnvironment.projectsList({ environmentId, input: {} }),
-    [environmentId],
-  );
+  const projectsQuery = ticketEnvironment.projectsList({ environmentId, input: {} });
   const mappings = useAtomValue(projectsQuery);
   const reloadProjects = useAtomRefresh(projectsQuery);
   const configure = useAtomCommand(ticketEnvironment.syncConfigure);
@@ -76,6 +70,7 @@ function EnvironmentTicketSettings({ environmentId }: { environmentId: Environme
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [checks, setChecks] = useState<TicketSetupCheck | null>(null);
+  // oxlint-disable-next-line t3code/react-effect-budget -- polls sync status while the settings are open
   useEffect(() => {
     const timer = setInterval(reload, 15000);
     return () => clearInterval(timer);

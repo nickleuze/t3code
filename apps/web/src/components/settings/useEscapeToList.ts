@@ -21,6 +21,7 @@ export function useEscapeToList(onBack: () => void) {
     event.stopImmediatePropagation();
     onBack();
   });
+  // oxlint-disable-next-line t3code/react-effect-budget -- subscribes to window keydown for the life of the detail view
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => goBack(event);
     window.addEventListener("keydown", onKeyDown, { capture: true });

@@ -60,6 +60,7 @@ function TicketsPage() {
   const narrow = useMediaQuery("(max-width: 480px)");
   const boardRef = useRef<HTMLDivElement>(null);
   const [boardWidth, setBoardWidth] = useState(0);
+  // oxlint-disable-next-line t3code/react-effect-budget -- measures the board before paint and follows resizes
   useLayoutEffect(() => {
     const node = boardRef.current;
     if (!node) return;
@@ -81,6 +82,7 @@ function TicketsPage() {
   const { environments } = useEnvironments();
   const upsert = useAtomCommand(ticketEnvironment.upsertTicket);
   const sensors = useSensors(useSensor(PointerSensor));
+  // oxlint-disable-next-line t3code/react-effect-budget -- opens capture once for a ?capture link after tickets load, then clears the param
   useEffect(() => {
     if (!search.capture) {
       captureOpened.current = false;
@@ -100,6 +102,7 @@ function TicketsPage() {
     const { capture: _capture, project: _project, ...rest } = search;
     void navigate({ to: "/tickets", search: rest, replace: true });
   }, [search, ids, loading, projects, navigate]);
+  // oxlint-disable-next-line t3code/react-effect-budget -- swaps the PWA manifest while the board is mounted and restores it on leave
   useEffect(() => {
     const manifest = document.querySelector<HTMLLinkElement>('link[rel="manifest"]');
     if (!manifest) return;

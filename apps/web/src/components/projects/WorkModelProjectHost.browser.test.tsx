@@ -1,7 +1,5 @@
-// @vitest-environment jsdom
-import { act } from "react";
-import { createRoot, type Root } from "react-dom/client";
-import { afterEach, beforeEach, expect, it, vi } from "vite-plus/test";
+import { useSyncExternalStore } from "react";
+import { expect, it, vi } from "vite-plus/test";
 import {
   EnvironmentId,
   ProjectId,
@@ -9,6 +7,7 @@ import {
   type WorkModelProjectOptions,
   type WorkModelProjectPreview,
 } from "@t3tools/contracts";
+import { act, render as renderUi, type Screen } from "../../../test/render";
 import { WorkModelProjectHost } from "./WorkModelProjectHost";
 import { openWorkModelProject, useWorkModelProject } from "../../workModelProject";
 
@@ -27,33 +26,61 @@ const boundary = vi.hoisted(() => ({
   connected: true,
   groupReady: true,
   github: null as { account: string | null } | null,
+  version: 0,
+  listeners: new Set<() => void>(),
 }));
-vi.mock("@effect/atom-react", () => ({ useAtomValue: (value: boolean) => value }));
-vi.mock("@tanstack/react-router", () => ({ useNavigate: () => boundary.navigate }));
+/** Mocked hooks re-read the boundary when a test changes it, like the atoms they replace. */
+function useBoundary() {
+  useSyncExternalStore(
+    (listener) => {
+      boundary.listeners.add(listener);
+      return () => boundary.listeners.delete(listener);
+    },
+    () => boundary.version,
+  );
+  return boundary;
+}
+vi.mock("@effect/atom-react", async (original) => ({
+  ...(await original<typeof import("@effect/atom-react")>()),
+  // Permission atoms are tokens, so a memoized atom read still sees a changed grant.
+  useAtomValue: (atom: string) => {
+    const { allowed, publishAllowed } = useBoundary();
+    return atom === "create-permission" ? allowed : publishAllowed;
+  },
+}));
+vi.mock("@tanstack/react-router", async (original) => ({
+  ...(await original<typeof import("@tanstack/react-router")>()),
+  useNavigate: () => boundary.navigate,
+}));
 vi.mock("../../state/projects", () => ({
   projectEnvironment: {
     workModelOptions: ({ environmentId }: { environmentId: string }) => ({ environmentId }),
-    createNew: { permissionAtom: () => boundary.allowed },
+    createNew: { permissionAtom: () => "create-permission" },
     workModelPreview: {},
   },
 }));
 vi.mock("../../state/sourceControl", () => ({
   sourceControlEnvironment: {
     discovery: () => null,
-    publishRepository: { permissionAtom: () => boundary.publishAllowed },
+    publishRepository: { permissionAtom: () => "publish-permission" },
   },
 }));
 vi.mock("../../state/query", () => ({
-  useEnvironmentQuery: (query: { environmentId: string } | null) => ({
-    ...(query
-      ? boundary.options.get(query.environmentId)
-      : { data: null, error: null, isPending: false }),
-    refresh: boundary.refresh,
-  }),
+  useEnvironmentQuery: (query: { environmentId: string } | null) => {
+    const current = useBoundary();
+    return {
+      // Source control discovery (null query) gets fresh data, so publish targets are re-read.
+      ...(query
+        ? current.options.get(query.environmentId)
+        : { data: { version: current.version }, error: null, isPending: false }),
+      refresh: current.refresh,
+    };
+  },
 }));
 vi.mock("@t3tools/client-runtime/operations/projects", async (original) => ({
   ...(await original<typeof import("@t3tools/client-runtime/operations/projects")>()),
-  getNewProjectGitHubTarget: () => boundary.github,
+  getNewProjectPublishTargets: () =>
+    boundary.github ? [{ definition: { kind: "github" }, owner: boundary.github.account }] : [],
 }));
 vi.mock("../../state/use-atom-command", () => ({ useAtomCommand: () => boundary.review }));
 vi.mock("../../hooks/useNewProject", () => ({ useNewProject: () => boundary.create }));
@@ -63,6 +90,7 @@ vi.mock("../../ticketCapture", () => ({
 }));
 vi.mock("../../state/environments", () => ({
   useEnvironments: () => ({
+    revision: useBoundary().version,
     environments: [
       {
         environmentId: "A",
@@ -134,13 +162,9 @@ const preview: WorkModelProjectPreview = {
   registeredProjectId: null,
   files: [],
 };
-let root: Root;
-let container: HTMLDivElement;
-beforeEach(() => {
-  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
-  container = document.createElement("div");
-  document.body.append(container);
-  root = createRoot(container);
+let screen: Screen | undefined;
+/** Resets the boundary and request for one test; disposing unmounts the host. */
+function setup(): AsyncDisposable {
   boundary.options.clear();
   boundary.options.set("A", { data: options, error: null, isPending: false });
   boundary.options.set("B", {
@@ -175,17 +199,26 @@ beforeEach(() => {
     name: "Fixture",
     purpose: "Build a useful thing",
   });
-});
-afterEach(async () => {
-  await act(async () => {
-    root.unmount();
-    useWorkModelProject.setState({ request: null });
+  return {
+    async [Symbol.asyncDispose]() {
+      await screen?.unmount();
+      await act(() => useWorkModelProject.setState({ request: null }));
+      await screen?.[Symbol.asyncDispose]();
+      screen = undefined;
+    },
+  };
+}
+/** Mounts the host on first call; later calls publish the boundary's changes. */
+const render = async () => {
+  if (!screen) {
+    screen = await renderUi(<WorkModelProjectHost />);
+    return;
+  }
+  await act(() => {
+    boundary.version += 1;
+    for (const listener of boundary.listeners) listener();
   });
-  container.remove();
-  vi.restoreAllMocks();
-  vi.unstubAllGlobals();
-});
-const render = () => act(async () => root.render(<WorkModelProjectHost />));
+};
 const button = (text: string) => {
   const node = Array.from(document.querySelectorAll("button")).find((b) => b.textContent === text);
   if (!node) throw new Error(`Missing button: ${text}`);
@@ -220,6 +253,7 @@ const review = async () => {
 };
 
 it("reviews the single setup form before creating; opens settings honestly and leaves the first Ticket separate", async () => {
+  await using _setup = setup();
   await render();
   expect(input("Name").value).toBe("Fixture");
   await change("Name", "My Home");
@@ -251,6 +285,7 @@ it("reviews the single setup form before creating; opens settings honestly and l
   expect(useWorkModelProject.getState().request).toBeNull();
 });
 it("preserves an Idea through review and cancellation, then offers a separate first Ticket after success", async () => {
+  await using _setup = setup();
   openWorkModelProject({
     environmentId: EnvironmentId.make("A"),
     name: "Idea",
@@ -275,6 +310,7 @@ it("preserves an Idea through review and cancellation, then offers a separate fi
   });
 });
 it("shows durable identity separately from a legacy prefix and explicitly adopts an existing Home without an initializer", async () => {
+  await using _setup = setup();
   boundary.options.set("A", {
     data: { ...options, initializerAvailable: false },
     error: null,
@@ -299,6 +335,7 @@ it("shows durable identity separately from a legacy prefix and explicitly adopts
   expect(boundary.create.mock.calls[0]![0].workModel.adoptExisting).toBe(true);
 });
 it("labels identity unavailable on older servers without substituting a legacy prefix", async () => {
+  await using _setup = setup();
   const { projectIdentity: _, ...legacy } = preview;
   boundary.review.mockResolvedValue({ _tag: "Success", value: legacy });
   await review();
@@ -307,6 +344,7 @@ it("labels identity unavailable on older servers without substituting a legacy p
 it.each(["no-areas", "discovery-failed"])(
   "requires explicit basic creation and review for %s",
   async (reason) => {
+    await using _setup = setup();
     boundary.options.set("A", {
       data: reason === "no-areas" ? { ...options, areas: [] } : options,
       error: reason === "discovery-failed" ? "unavailable" : null,
@@ -323,11 +361,12 @@ it.each(["no-areas", "discovery-failed"])(
     expect(boundary.create).toHaveBeenCalledWith({
       environmentId: "A",
       name: "Fixture",
-      github: null,
+      publishTo: null,
     });
   },
 );
 it("does not silently convert an Idea to basic creation when setup is missing", async () => {
+  await using _setup = setup();
   openWorkModelProject({
     environmentId: EnvironmentId.make("A"),
     name: "Idea",
@@ -341,6 +380,7 @@ it("does not silently convert an Idea to basic creation when setup is missing", 
   expect(document.body.textContent).not.toContain("Use basic creation");
 });
 it("keeps name and purpose when switching machines, resets Area and routes review to the selected host", async () => {
+  await using _setup = setup();
   await render();
   await choose("Area", "systems");
   await change("Name", "Keep this name");
@@ -355,6 +395,7 @@ it("keeps name and purpose when switching machines, resets Area and routes revie
   });
 });
 it("does not create when permission or connectivity is lost after review", async () => {
+  await using _setup = setup();
   await review();
   boundary.allowed = false;
   await render();
@@ -366,6 +407,7 @@ it("does not create when permission or connectivity is lost after review", async
   expect(boundary.create).not.toHaveBeenCalled();
 });
 it("retains input and requires another review after creation fails", async () => {
+  await using _setup = setup();
   boundary.create.mockResolvedValue(null);
   await review();
   await click("Create project");
@@ -375,6 +417,7 @@ it("retains input and requires another review after creation fails", async () =>
   expect(button("Review setup").disabled).toBe(false);
 });
 it("allows retrying setup without clearing the form", async () => {
+  await using _setup = setup();
   boundary.options.set("A", { data: null, error: "Unavailable", isPending: false });
   await render();
   await click("Retry setup");
@@ -382,6 +425,7 @@ it("allows retrying setup without clearing the form", async () => {
   expect(input("Name").value).toBe("Fixture");
 });
 it("guards duplicate submits while review is pending", async () => {
+  await using _setup = setup();
   let finish!: (result: unknown) => void;
   boundary.review.mockImplementation(
     () =>
@@ -401,6 +445,7 @@ it("guards duplicate submits while review is pending", async () => {
   await act(async () => finish({ _tag: "Success", value: preview }));
 });
 it("reviews optional GitHub publication and rejects an account change before creation", async () => {
+  await using _setup = setup();
   boundary.github = { account: "account-a" };
   await render();
   await choose("Area", "systems");
@@ -414,6 +459,7 @@ it("reviews optional GitHub publication and rejects an account change before cre
   expect(document.body.textContent).toContain("GitHub availability changed");
 });
 it("does not offer a duplicate creation when registration has not reached the client", async () => {
+  await using _setup = setup();
   boundary.groupReady = false;
   await review();
   await click("Create project");
@@ -424,6 +470,7 @@ it("does not offer a duplicate creation when registration has not reached the cl
 });
 
 it("does not publish when adopting an existing Home, even after the option was selected", async () => {
+  await using _setup = setup();
   boundary.github = { account: "account-a" };
   boundary.review.mockResolvedValue({ _tag: "Success", value: { ...preview, existingHome: true } });
   await render();
@@ -432,9 +479,10 @@ it("does not publish when adopting an existing Home, even after the option was s
   await click("Review setup");
   expect(document.body.textContent).toContain("Not offered when adopting");
   await click("Adopt existing Home");
-  expect(boundary.create.mock.calls[0]![0].github).toBeNull();
+  expect(boundary.create.mock.calls[0]![0].publishTo).toBeNull();
 });
 it("distinguishes a failed basic request from resumable Home adoption", async () => {
+  await using _setup = setup();
   boundary.options.set("A", { data: { ...options, areas: [] }, error: null, isPending: false });
   boundary.create.mockResolvedValue(null);
   await render();
@@ -445,6 +493,7 @@ it("distinguishes a failed basic request from resumable Home adoption", async ()
   expect(document.body.textContent).not.toContain("Review the same Home to resume");
 });
 it("explains a setup change after review and prevents silently changing creation modes", async () => {
+  await using _setup = setup();
   await review();
   boundary.options.set("A", { data: options, error: "refresh failed", isPending: false });
   await render();
@@ -455,6 +504,7 @@ it("explains a setup change after review and prevents silently changing creation
   expect(boundary.create).not.toHaveBeenCalled();
 });
 it("explains a missing publication grant even when GitHub is configured", async () => {
+  await using _setup = setup();
   boundary.github = { account: "ready" };
   boundary.publishAllowed = false;
   await render();

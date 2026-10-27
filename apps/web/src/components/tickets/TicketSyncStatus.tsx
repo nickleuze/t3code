@@ -1,7 +1,7 @@
 import { Link } from "@tanstack/react-router";
 import { useAtomRefresh, useAtomValue } from "@effect/atom-react";
 import { AsyncResult } from "effect/reactivity";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 import type { EnvironmentId } from "@t3tools/contracts";
 import { ticketEnvironment } from "../../state/tickets";
 import { useAtomCommand } from "../../state/use-atom-command";
@@ -10,15 +10,13 @@ import { Button } from "../ui/button";
 import { Badge } from "../ui/badge";
 
 export function TicketSyncStatus({ environmentId }: { environmentId: EnvironmentId }) {
-  const query = useMemo(
-    () => ticketEnvironment.syncStatus({ environmentId, input: {} }),
-    [environmentId],
-  );
+  const query = ticketEnvironment.syncStatus({ environmentId, input: {} });
   const status = useAtomValue(query);
   const reload = useAtomRefresh(query);
   const refresh = useAtomCommand(ticketEnvironment.syncRefresh);
   const allowed = useAtomValue(ticketEnvironment.syncRefresh.permissionAtom(environmentId));
   const [busy, setBusy] = useState(false);
+  // oxlint-disable-next-line t3code/react-effect-budget -- polls sync status while the badge is shown
   useEffect(() => {
     const interval = setInterval(reload, 15_000);
     return () => clearInterval(interval);

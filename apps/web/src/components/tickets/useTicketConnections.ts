@@ -1,4 +1,3 @@
-import { useMemo } from "react";
 import { useAtomValue } from "@effect/atom-react";
 import { AsyncResult, Atom } from "effect/reactivity";
 import type { EnvironmentId } from "@t3tools/contracts";
@@ -7,19 +6,15 @@ import { ticketEnvironment, ticketEnvironmentIdsAtom } from "../../state/tickets
 import { useThreadShells } from "../../state/entities";
 export function useTicketConnections(entry: EnvironmentTicket) {
   const machines = useAtomValue(
-    useMemo(
-      () =>
-        Atom.make((get) => {
-          const connected = new Map<string, { environmentId: EnvironmentId; label: string }>();
-          for (const environmentId of get(ticketEnvironmentIdsAtom)) {
-            const status = get(ticketEnvironment.syncStatus({ environmentId, input: {} }));
-            if (AsyncResult.isSuccess(status))
-              connected.set(status.value.machine, { environmentId, label: status.value.label });
-          }
-          return connected;
-        }),
-      [],
-    ),
+    Atom.make((get) => {
+      const connected = new Map<string, { environmentId: EnvironmentId; label: string }>();
+      for (const environmentId of get(ticketEnvironmentIdsAtom)) {
+        const status = get(ticketEnvironment.syncStatus({ environmentId, input: {} }));
+        if (AsyncResult.isSuccess(status))
+          connected.set(status.value.machine, { environmentId, label: status.value.label });
+      }
+      return connected;
+    }),
   );
   const machine =
     [...machines].find(([, value]) => value.environmentId === entry.environmentId)?.[0] ?? null;

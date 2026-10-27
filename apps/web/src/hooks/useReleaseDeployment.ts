@@ -18,7 +18,7 @@ import {
 import type { UpdateAllState } from "@t3tools/client-runtime/state/updateAllMachines";
 import * as Option from "effect/Option";
 import { AsyncResult, Atom } from "effect/reactivity";
-import { useEffect, useEffectEvent, useMemo, useRef, useState } from "react";
+import { useEffect, useEffectEvent, useRef, useState } from "react";
 
 import {
   buildReleaseDeploymentRequest,
@@ -101,7 +101,7 @@ export function useReleaseDeployment(
     .map((environment) => environment.environmentId)
     .toSorted()
     .join(",");
-  const recordsAtom = useMemo(() => deploymentRecordsAtom(capableIdsKey), [capableIdsKey]);
+  const recordsAtom = deploymentRecordsAtom(capableIdsKey);
   const { records: recordsByEnvironment, request: latestRequest } = useAtomValue(recordsAtom);
   // A release every target finished, or a newer one replaced, no longer holds the update control.
   const latestRecords =
@@ -188,23 +188,16 @@ export function useReleaseDeployment(
     }
   };
 
-  const records = useMemo(
-    () =>
-      request === null
-        ? new Map<string, HostDeployment>()
-        : releaseRecords(request, recordsByEnvironment),
-    [recordsByEnvironment, request],
+  const records =
+    request === null
+      ? new Map<string, HostDeployment>()
+      : releaseRecords(request, recordsByEnvironment);
+  const connectedIds = new Set(
+    environments
+      .filter((environment) => environment.connection.phase === "connected")
+      .map((environment) => environment.environmentId),
   );
-  const connectedIds = useMemo(
-    () =>
-      new Set(
-        environments
-          .filter((environment) => environment.connection.phase === "connected")
-          .map((environment) => environment.environmentId),
-      ),
-    [environments],
-  );
-  const runErrors = useMemo(() => {
+  const runErrors = (() => {
     if (run === null || request === null) return {};
     const errors: Record<string, string> = {};
     for (const [environmentId, state] of Object.entries(run.remotes)) {
@@ -215,7 +208,7 @@ export function useReleaseDeployment(
       errors[local.environmentId] = run.localError;
     }
     return errors;
-  }, [request, run]);
+  })();
   const rows =
     request === null ? [] : deploymentRows({ request, records, connectedIds, runErrors });
   const override = request === null ? null : localOnlyOverride({ request, records, connectedIds });
@@ -231,6 +224,7 @@ export function useReleaseDeployment(
   });
   // Keyed by release so a record update does not restart the sequence.
   const resumeReleaseId = resumeRequest?.releaseId ?? null;
+  // oxlint-disable-next-line t3code/react-effect-budget -- resumes an approved release that a record reports, once per release
   useEffect(() => {
     if (resumeReleaseId !== null) resume(resumeReleaseId);
   }, [resumeReleaseId]);

@@ -37,6 +37,7 @@ export function TicketCaptureHost() {
   const pending = usePendingTicketDrafts((state) => state.links);
   const shells = useThreadShells(Object.keys(pending).length > 0);
   const attempted = useRef(new Set<string>());
+  // oxlint-disable-next-line t3code/react-effect-budget -- links a promoted draft once its thread records a first message, which arrives from the server
   useEffect(() => {
     for (const [draftId, link] of Object.entries(pending)) {
       if (

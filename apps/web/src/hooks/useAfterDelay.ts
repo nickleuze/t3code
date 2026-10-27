@@ -6,6 +6,7 @@ import { useEffect, useState } from "react";
  */
 export function useAfterDelay(active: boolean, delayMs: number) {
   const [elapsed, setElapsed] = useState(false);
+  // oxlint-disable-next-line t3code/react-effect-budget -- owns the delay timer and resets it when the condition ends
   useEffect(() => {
     if (!active) return;
     const timer = setTimeout(() => setElapsed(true), delayMs);

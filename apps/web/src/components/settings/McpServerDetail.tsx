@@ -69,6 +69,7 @@ export function McpServerDetail({
   const transportKey = row === null ? "" : JSON.stringify(row.config.transport);
   const listedFor = useRef(transportKey);
   const { refresh } = query;
+  // oxlint-disable-next-line t3code/react-effect-budget -- relists tools when the saved transport changes, not on every render
   useEffect(() => {
     if (listedFor.current === transportKey) return;
     listedFor.current = transportKey;

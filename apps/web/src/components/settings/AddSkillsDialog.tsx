@@ -5,7 +5,7 @@ import {
   type SkillPreviewItem,
 } from "@t3tools/contracts";
 import { AlertTriangleIcon, SearchIcon } from "lucide-react";
-import { useId, useMemo, useState } from "react";
+import { useId, useState } from "react";
 
 import { serverEnvironment } from "../../state/server";
 import { formatEnvironmentQueryError } from "../../state/query";
@@ -120,7 +120,7 @@ export function AddSkillsDialog({
       return next;
     });
   const full = selected.size >= MAX_SKILLS_PER_INSTALL;
-  const shown = useMemo(() => {
+  const shown = (() => {
     const needle = filter.trim().toLowerCase();
     if (found === null || needle.length === 0) return found?.skills ?? [];
     return found.skills.filter(
@@ -129,7 +129,7 @@ export function AddSkillsDialog({
         skill.name.toLowerCase().includes(needle) ||
         (skill.description ?? "").toLowerCase().includes(needle),
     );
-  }, [filter, found]);
+  })();
   // The header box acts on the rows shown, so a filter can pick a subset.
   const shownSelected = shown.filter((skill) => selected.has(skill.name)).length;
   const allShown = shown.length > 0 && shownSelected === shown.length;

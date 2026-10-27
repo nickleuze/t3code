@@ -291,7 +291,7 @@ export function EnvironmentDeploymentStatus({
       className={cn("block text-xs", status.stopped ? "text-destructive" : "text-muted-foreground")}
     >
       Deployment {status.text}
-      {status.reason ? ` — ${status.reason}` : ""}
+      {status.reason ? `: ${status.reason}` : ""}
     </span>
   );
 }

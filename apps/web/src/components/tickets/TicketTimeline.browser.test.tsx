@@ -1,7 +1,5 @@
-// @vitest-environment jsdom
-import { act, createRef } from "react";
-import { createRoot, type Root } from "react-dom/client";
-import { afterEach, beforeEach, expect, it, vi } from "vite-plus/test";
+import { createRef } from "react";
+import { expect, it, vi } from "vite-plus/test";
 import { AsyncResult } from "effect/reactivity";
 import {
   EnvironmentId,
@@ -10,6 +8,7 @@ import {
   type TicketEvent,
   type TicketEntryInput,
 } from "@t3tools/contracts";
+import { act, render } from "../../../test/render";
 import { TicketTimeline } from "./TicketTimeline";
 
 const boundary = vi.hoisted(() => ({
@@ -19,7 +18,8 @@ const boundary = vi.hoisted(() => ({
   add: vi.fn(),
   refresh: vi.fn(),
 }));
-vi.mock("@effect/atom-react", () => ({
+vi.mock("@effect/atom-react", async (original) => ({
+  ...(await original<typeof import("@effect/atom-react")>()),
   useAtomValue: () => AsyncResult.success({ events: boundary.events, machines: { A: "MacBook" } }),
   useAtomRefresh: () => boundary.refresh,
 }));
@@ -88,15 +88,14 @@ const event = (
   kind,
   text: `Evidence ${n}`,
 });
-let root: Root;
-let container: HTMLDivElement;
 const composerRef = createRef<HTMLTextAreaElement>();
-beforeEach(() => {
-  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
-  Element.prototype.scrollIntoView = vi.fn();
-  container = document.createElement("div");
-  document.body.append(container);
-  root = createRoot(container);
+const timeline = () => (
+  <TicketTimeline
+    entry={{ environmentId: EnvironmentId.make("local"), ticket }}
+    composerRef={composerRef}
+  />
+);
+function reset() {
   boundary.events = [];
   boundary.allowed = true;
   boundary.fail = false;
@@ -105,22 +104,14 @@ beforeEach(() => {
     boundary.events = [...boundary.events, { ...event(200), ...input, type: "entry" }];
     return { _tag: "Success" };
   });
-});
-afterEach(async () => {
-  await act(async () => root.unmount());
-  container.remove();
-  vi.restoreAllMocks();
-  vi.unstubAllGlobals();
-});
-const render = () =>
-  act(async () =>
-    root.render(
-      <TicketTimeline
-        entry={{ environmentId: EnvironmentId.make("local"), ticket }}
-        composerRef={composerRef}
-      />,
-    ),
-  );
+}
+let container: HTMLElement;
+/** Renders the timeline; `events` and `allowed` are read from the boundary at render. */
+async function mount() {
+  const screen = await render(timeline());
+  container = screen.container;
+  return screen;
+}
 const button = (text: string) => {
   const found = [...container.querySelectorAll("button")].find((b) => b.textContent === text);
   if (!found) throw new Error(`Missing button ${text}`);
@@ -139,9 +130,10 @@ async function fill(text: string) {
 }
 
 it("shows the brief and newest ten entries first, with older entries and the full audit reachable", async () => {
+  reset();
   boundary.events = Array.from({ length: 129 }, (_, i) => event(i));
   boundary.events.push({ ...event(130), type: "auto", kind: "thread_settled", ref: "thread" });
-  await render();
+  await using _screen = await mount();
   expect(container.querySelector('[aria-label="Brief"]')?.textContent).toContain(
     "Done when: history is readable.",
   );
@@ -173,8 +165,9 @@ it("shows the brief and newest ten entries first, with older entries and the ful
 it.each(["answer", "dismiss"] as const)(
   "requires and retains a %s, retries the same request, and reloads the recorded resolution",
   async (mode) => {
+    reset();
     boundary.events = [event(1, "question")];
-    await render();
+    await using screen = await mount();
     await click("Answer or dismiss");
     expect(document.activeElement).toBe(composerRef.current);
     if (mode === "dismiss")
@@ -198,9 +191,8 @@ it.each(["answer", "dismiss"] as const)(
     expect(retry.text).toBe(
       `${mode === "answer" ? "Answer" : "Dismissed"}: Use the existing Home.`,
     );
-    await act(async () => root.unmount());
-    root = createRoot(container);
-    await render();
+    await screen.unmount();
+    await using _remounted = await mount();
     expect(
       container.querySelector('[aria-label="Open questions and blockers"]')?.textContent,
     ).not.toContain("Evidence 1");
@@ -212,9 +204,10 @@ it.each(["answer", "dismiss"] as const)(
 );
 
 it("keeps write controls unavailable without Ticket permission", async () => {
+  reset();
   boundary.events = [event(1, "question")];
   boundary.allowed = false;
-  await render();
+  await using _screen = await mount();
   expect(button("Answer or dismiss").disabled).toBe(true);
   expect(composerRef.current?.disabled).toBe(true);
   expect(button("Add entry").disabled).toBe(true);
@@ -223,8 +216,9 @@ it("keeps write controls unavailable without Ticket permission", async () => {
 });
 
 it("protects an unfinished draft when a question or decision is selected", async () => {
+  reset();
   boundary.events = [event(1, "question"), event(2, "decision")];
-  await render();
+  await using _screen = await mount();
   await fill("My unfinished update");
   expect(button("Answer or dismiss").disabled).toBe(true);
   expect(button("Supersede").disabled).toBe(true);
@@ -234,13 +228,14 @@ it("protects an unfinished draft when a question or decision is selected", async
   expect(button("Answer or dismiss").disabled).toBe(false);
 });
 it("resolves a blocker from another Run using a recorded explanation", async () => {
+  reset();
   boundary.events = [{ ...event(1, "blocker"), by: { actor: "agent", machine: "A" } }];
-  await render();
+  await using screen = await mount();
   await click("Resolve blocker");
   expect(button("Record resolution").disabled).toBe(true);
   await fill("The volume is available again.");
   await click("Record resolution");
-  await render();
+  await screen.rerender(timeline());
   expect(boundary.add.mock.calls[0]![0].input).toMatchObject({
     resolves: "entry-001",
     text: "Resolved: The volume is available again.",
@@ -250,11 +245,12 @@ it("resolves a blocker from another Run using a recorded explanation", async () 
   );
 });
 it("shows the next action's own source after an answer adds newer evidence", async () => {
+  reset();
   boundary.events = [
     { ...event(1, "handoff"), next: "Implement option A" },
     { ...event(2, "note"), text: "Answer: option A" },
   ];
-  await render();
+  await using _screen = await mount();
   const current = container.querySelector('[aria-label="Current evidence"]')!;
   expect(current.textContent).toContain("Answer: option A");
   expect(current.textContent).toContain("Implement option A");
@@ -263,25 +259,28 @@ it("shows the next action's own source after an answer adds newer evidence", asy
   );
 });
 it("short multiline evidence can be expanded without losing its final lines", async () => {
-  vi.spyOn(HTMLElement.prototype, "scrollHeight", "get").mockReturnValue(120);
-  vi.spyOn(HTMLElement.prototype, "clientHeight", "get").mockReturnValue(80);
+  reset();
+  using _scrollHeight = vi.spyOn(HTMLElement.prototype, "scrollHeight", "get").mockReturnValue(120);
+  using _clientHeight = vi.spyOn(HTMLElement.prototype, "clientHeight", "get").mockReturnValue(80);
   boundary.events = [{ ...event(1, "handoff"), text: "one\ntwo\nthree\nfour\nfive\nsix" }];
-  await render();
+  await using _screen = await mount();
   await click("Read full entry");
   expect(button("Show less").getAttribute("aria-expanded")).toBe("true");
   expect(container.querySelector('[aria-label="Current evidence"]')?.textContent).toContain("six");
 });
 it("does not offer expansion when the current evidence fits", async () => {
-  vi.spyOn(HTMLElement.prototype, "scrollHeight", "get").mockReturnValue(40);
-  vi.spyOn(HTMLElement.prototype, "clientHeight", "get").mockReturnValue(40);
+  reset();
+  using _scrollHeight = vi.spyOn(HTMLElement.prototype, "scrollHeight", "get").mockReturnValue(40);
+  using _clientHeight = vi.spyOn(HTMLElement.prototype, "clientHeight", "get").mockReturnValue(40);
   boundary.events = [{ ...event(1, "handoff"), text: "one\ntwo" }];
-  await render();
+  await using _screen = await mount();
   expect(container.querySelector('[aria-label="Current evidence"]')?.textContent).not.toContain(
     "Read full entry",
   );
 });
 
 it("exposes the current Brief source, corrections and original field values in read-only history", async () => {
+  reset();
   const first = {
     ticketId: ticket.id,
     eventId: "001",
@@ -310,7 +309,7 @@ it("exposes the current Brief source, corrections and original field values in r
     { ...event(3, "decision"), text: "Nick accepted validation only; no implementation approval." },
     { ...event(4, "decision"), text: "Corrected premise, source retained." },
   ];
-  await render();
+  await using _screen = await mount();
   const brief = container.querySelector('[aria-label="Brief"]')!;
   expect(brief.textContent).toContain(ticket.body);
   expect(brief.textContent).toContain("Brief recorded by");

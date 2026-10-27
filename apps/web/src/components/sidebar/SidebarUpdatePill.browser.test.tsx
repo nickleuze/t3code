@@ -183,7 +183,7 @@ describe("SidebarMachineUpdateDetails", () => {
         tooltip="Machine update failed"
       />,
     );
-    await expect.element(screen.getByRole("alert").first()).toHaveTextContent("Remote timed out");
+    await expect.element(screen.getByRole("alert").getByText("Remote timed out")).toBeVisible();
     await userEvent.click(screen.getByRole("button", { name: "Retry nick-mini" }));
     expect(start).toHaveBeenLastCalledWith("mini");
     await userEvent.click(screen.getByRole("button", { name: "Install on this machine only" }));
