@@ -1,4 +1,3 @@
-// @vitest-environment jsdom
 import {
   CommandId,
   EnvironmentId,
@@ -21,8 +20,11 @@ const fixture = vi.hoisted(() => ({
   navigate: vi.fn(),
 }));
 vi.mock("../../state/session", () => ({ useEnvironmentScope: () => fixture.canMutate }));
-vi.mock("@react-navigation/native", () => ({
-  useNavigation: () => ({ navigate: fixture.navigate }),
+vi.mock("../workspace/useSelectWorkspaceDetail", () => ({
+  useSelectWorkspaceDetail:
+    () =>
+    ({ name, params }: { name: string; params: unknown }) =>
+      fixture.navigate(name, params),
 }));
 vi.mock("react-native", () => ({
   View: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
@@ -51,7 +53,7 @@ vi.mock("react-native", () => ({
     />
   ),
 }));
-vi.mock("../../components/AppText", () => ({
+vi.mock("../../components/ui/AppText", () => ({
   AppText: ({
     children,
     accessibilityRole,
@@ -60,8 +62,8 @@ vi.mock("../../components/AppText", () => ({
     accessibilityRole?: string;
   }) => <span role={accessibilityRole}>{children}</span>,
 }));
-vi.mock("./RequestActionButton", () => ({
-  RequestActionButton: ({
+vi.mock("../../components/ui/Button", () => ({
+  Button: ({
     label,
     onPress,
     disabled,

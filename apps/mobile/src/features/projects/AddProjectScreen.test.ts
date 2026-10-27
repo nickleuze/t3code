@@ -140,7 +140,15 @@ vi.mock("../../state/use-remote-environment-registry", () => ({
 }));
 vi.mock("../../state/use-atom-command", () => ({ useAtomCommand: (command: unknown) => command }));
 vi.mock("../../state/use-atom-query-runner", () => ({ useAtomQueryRunner: () => () => {} }));
-vi.mock("../../state/query", () => ({ useEnvironmentQuery: () => ({ data: null }) }));
+vi.mock("../../state/query", () => ({
+  // A host without Work Model Areas, so New project offers basic creation.
+  useEnvironmentQuery: (query: unknown) => ({
+    data:
+      query === "work-model-options"
+        ? { projectsRoot: "/projects", areas: [], initializerAvailable: false }
+        : null,
+  }),
+}));
 vi.mock("../../state/presentation", () => ({
   useEnvironmentPresentation: () => ({ isReady: true, presentation: null }),
 }));
@@ -159,6 +167,9 @@ vi.mock("../../state/sourceControl", () => ({
 vi.mock("../../state/projects", () => ({
   projectEnvironment: {
     createNew: () => state.createNewResult,
+    // The fork's Work Model setup queries; null keeps New project on basic creation.
+    workModelOptions: () => "work-model-options",
+    workModelPreview: () => null,
     create: ({ input }: { input: { workspaceRoot: string } }) => {
       if (!state.scopes.has(AuthOrchestrationOperateScope)) {
         return Promise.resolve(
@@ -365,12 +376,12 @@ describe("add project source environment", () => {
       for (const phase of ["available", "offline", "error"] as const) {
         state.connectionStates = { environment: phase };
         await act(() => root.render(createElement(SourceObserver)));
-        expect(findAction(screen, "Local folder")).toBeNull();
+        expect(findAction(screen, "Add existing project")).toBeNull();
         expect(state.dispatch).not.toHaveBeenCalled();
       }
       state.connectionStates = {};
       await act(() => root.render(createElement(SourceObserver)));
-      const reconnectedLocal = findAction(screen, "Local folder");
+      const reconnectedLocal = findAction(screen, "Add existing project");
       if (!reconnectedLocal) throw new Error("Reconnected local folder action missing");
       reconnectedLocal();
       expect(state.dispatch).toHaveBeenLastCalledWith({
@@ -379,11 +390,11 @@ describe("add project source environment", () => {
       });
       state.connectionStates = { environment: "offline" };
       await act(() => root.render(createElement(SourceObserver)));
-      expect(findAction(screen, "Local folder")).toBeNull();
+      expect(findAction(screen, "Add existing project")).toBeNull();
       const select = findAction(screen, "Another environment");
       if (!select) throw new Error("Connected environment selection missing");
       await act(() => select());
-      const local = findAction(screen, "Local folder");
+      const local = findAction(screen, "Add existing project");
       if (!local) throw new Error("Manually selected local folder action missing");
       local();
       expect(state.dispatch).toHaveBeenLastCalledWith({
@@ -415,14 +426,14 @@ describe("add project source environment", () => {
     }
     try {
       await act(() => root.render(createElement(SourceObserver)));
-      expect(findAction(screen, "Local folder")).toBeNull();
+      expect(findAction(screen, "Add existing project")).toBeNull();
       expect(navigation.getState().routes.at(-1)?.name).toBe("AddProject");
       const select = findAction(screen, "Another environment");
       if (!select) throw new Error("Connected environment selection missing");
       await act(() => select());
       state.connectionStates = {};
       await act(() => root.render(createElement(SourceObserver)));
-      const local = findAction(screen, "Local folder");
+      const local = findAction(screen, "Add existing project");
       if (!local) throw new Error("Local folder action missing");
       local();
       expect(navigation.getState().routes.at(-1)).toMatchObject({
@@ -450,7 +461,7 @@ describe("add project source environment", () => {
     function SourceRouteObserver(props: { environmentId?: string | string[] }) {
       const route = AddProjectSourceRoute({ route: { params: props } });
       const screen = AddProjectSourceScreen(route.props);
-      const local = findAction(screen, "Local folder");
+      const local = findAction(screen, "Add existing project");
       const selectEnvironment = findAction(screen, "Environment");
       if (!local || !selectEnvironment) throw new Error("Source actions missing");
       actions = { local, selectEnvironment };
@@ -626,8 +637,16 @@ describe("local project navigation", () => {
       await act(() => {
         expect(enterName(screen)).toBe(true);
       });
-      const submit = findAction(screen, "Create project");
-      if (!submit) throw new Error("Create project action missing");
+      // The fork asks for basic creation and a review before it creates.
+      for (const label of ["Use basic creation", "Review setup"]) {
+        const step = findAction(screen, label);
+        if (!step) throw new Error(`${label} action missing`);
+        await act(async () => {
+          await step();
+        });
+      }
+      const submit = findAction(screen, "Create basic project");
+      if (!submit) throw new Error("Create basic project action missing");
       await act(async () => {
         submit();
         created.resolve(

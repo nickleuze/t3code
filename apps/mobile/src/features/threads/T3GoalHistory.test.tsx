@@ -1,4 +1,3 @@
-// @vitest-environment jsdom
 import { CommandId, EnvironmentId, ThreadId } from "@t3tools/contracts";
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
@@ -27,7 +26,7 @@ vi.mock("react-native", () => ({
     </button>
   ),
 }));
-vi.mock("../../components/AppText", () => ({
+vi.mock("../../components/ui/AppText", () => ({
   AppText: ({ children }: { children: React.ReactNode }) => <span>{children}</span>,
 }));
 import { T3GoalHistory } from "./T3GoalHistory";

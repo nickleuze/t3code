@@ -1,5 +1,5 @@
 import type { OlderSettledScope } from "@t3tools/client-runtime/state/threads";
-import type { EnvironmentId } from "@t3tools/contracts";
+import type { EnvironmentId, SidebarFlatThreadSortOrder } from "@t3tools/contracts";
 import { useMemo, useSyncExternalStore } from "react";
 
 import { scopedProjectKey } from "../../lib/scopedEntities";
@@ -50,6 +50,8 @@ export function useThreadListV2(input: {
   readonly pendingOrder: LayoutInput["pendingOrder"];
   readonly shelfPreferencesLoaded: boolean;
   readonly workingShelfEnabled: boolean;
+  /** The saved flat order; only "manual" lets active cards move. */
+  readonly flatThreadSortOrder: SidebarFlatThreadSortOrder;
   readonly workingShelfExpanded: boolean;
   readonly snoozedShelfExpanded: boolean;
   readonly settledShelfExpanded: boolean;
@@ -88,7 +90,9 @@ export function useThreadListV2(input: {
     });
   const moveAvailability = new Map([
     ...sectionAvailability("pinned"),
-    ...(workingShelfEnabled ? [] : sectionAvailability("active")),
+    ...(workingShelfEnabled || input.flatThreadSortOrder !== "manual"
+      ? []
+      : sectionAvailability("active")),
   ]);
   // Older settled threads load in pages; the shelf lists them only as far as they are loaded.
   const scopes = olderSettledScopes(input);
@@ -99,6 +103,7 @@ export function useThreadListV2(input: {
     visibleCount: input.searchQuery.trim().length === 0 ? input.settledLimit : 0,
   });
   const layout = buildThreadListV2Items({
+    flatThreadSortOrder: input.flatThreadSortOrder,
     pendingOrder: input.pendingOrder,
     threads: threads.filter((thread) => thread.archivedAt === null),
     environmentId: input.environmentId,

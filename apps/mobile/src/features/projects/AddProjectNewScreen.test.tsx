@@ -1,4 +1,3 @@
-// @vitest-environment jsdom
 import { act, type ReactNode } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vite-plus/test";
@@ -29,7 +28,44 @@ const state = vi.hoisted(() => ({
 vi.mock("../../lib/uuid", () => ({ uuidv4: () => "fixture" }));
 vi.mock("@t3tools/client-runtime/operations/projects", async (original) => ({
   ...(await original<typeof import("@t3tools/client-runtime/operations/projects")>()),
-  getNewProjectGitHubTarget: () => state.github,
+  getNewProjectPublishTargets: () =>
+    state.github
+      ? [
+          {
+            definition: { kind: "github", label: "GitHub", icon: "github" },
+            owner: state.github.account,
+          },
+        ]
+      : [],
+}));
+vi.mock("../workspace/useSelectWorkspaceDetail", () => ({
+  useSelectWorkspaceDetail: () => () => {},
+}));
+vi.mock("../../native/StackHeader", () => ({ nativeHeaderScrollEdgeEffects: () => undefined }));
+vi.mock("../../components/ui/Dialog", () => ({ alert: vi.fn() }));
+vi.mock("../../components/ui/AppActivityIndicator", () => ({ AppActivityIndicator: () => null }));
+vi.mock("../../components/ui/NavigationRow", () => ({ NavigationRow: () => null }));
+vi.mock("../../components/ui/Button", () => ({
+  Button: ({
+    label,
+    onPress,
+    disabled,
+    loading,
+  }: {
+    label: string;
+    onPress: () => void;
+    disabled?: boolean;
+    loading?: boolean;
+  }) => (
+    <button onClick={onPress} disabled={disabled || loading}>
+      {label}
+    </button>
+  ),
+}));
+vi.mock("../../state/use-composer-drafts", () => ({
+  waitForComposerDraftsLoaded: async () => {},
+  createNewTaskDraft: () => "prompt-draft",
+  setComposerDraftText: () => {},
 }));
 vi.mock("react-native", () => ({
   Platform: { OS: "ios" },
@@ -50,7 +86,7 @@ vi.mock("react-native", () => ({
     </button>
   ),
 }));
-vi.mock("../../components/AppText", () => ({
+vi.mock("../../components/ui/AppText", () => ({
   AppText: ({ children }: { children: ReactNode }) => <span>{children}</span>,
   AppTextInput: ({
     value,
@@ -71,9 +107,7 @@ vi.mock("../../components/AppText", () => ({
     />
   ),
 }));
-vi.mock("../../components/MaterialListRow", () => ({ MaterialListRow: () => null }));
-vi.mock("../../components/MaterialButton", () => ({ MaterialButton: () => null }));
-vi.mock("../../components/ScreenScrollView", () => ({
+vi.mock("../../components/ui/ScreenScrollView", () => ({
   ScreenScrollView: ({ children }: { children: ReactNode }) => <div>{children}</div>,
 }));
 vi.mock("../settings/components/SettingsScreen", () => ({
@@ -84,21 +118,26 @@ vi.mock("../settings/components/SettingsScreen", () => ({
     </div>
   ),
 }));
-vi.mock("../../components/ThemedSwitch", () => ({ ThemedSwitch: () => null }));
+vi.mock("../../components/ui/ThemedSwitch", () => ({ ThemedSwitch: () => null }));
 vi.mock("@react-navigation/native", () => ({
-  useNavigation: () => ({ dispatch: state.dispatch, canGoBack: () => true, goBack: state.goBack }),
+  useNavigation: () => ({
+    dispatch: state.dispatch,
+    canGoBack: () => true,
+    goBack: state.goBack,
+    getState: () => ({ index: 0, routes: [{ key: "new", name: "AddProjectNew" }] }),
+  }),
   CommonActions: { reset: (v: unknown) => v },
   StackActions: { replace: (v: unknown) => v },
 }));
 vi.mock("react-native-safe-area-context", () => ({ useSafeAreaInsets: () => ({ bottom: 0 }) }));
-vi.mock("../../components/AppSymbol", () => ({ SymbolView: () => null }));
+vi.mock("../../components/ui/AppSymbol", () => ({ SymbolView: () => null }));
 vi.mock("../../components/EnvironmentMachineSymbol", () => ({
   EnvironmentMachineSymbol: () => null,
 }));
-vi.mock("../../components/ErrorBanner", () => ({
+vi.mock("../../components/ui/ErrorBanner", () => ({
   ErrorBanner: ({ message }: { message: string }) => <p role="alert">{message}</p>,
 }));
-vi.mock("../../components/SourceControlIcon", () => ({ SourceControlIcon: () => null }));
+vi.mock("./SourceControlIcon", () => ({ SourceControlIcon: () => null }));
 vi.mock("../../state/session", () => ({
   useEnvironmentScope: (_id: string, scope: string) =>
     (scope === AuthOrchestrationOperateScope || scope === AuthSourceControlWriteScope) &&

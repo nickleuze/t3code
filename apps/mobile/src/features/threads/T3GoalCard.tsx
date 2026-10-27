@@ -1,4 +1,4 @@
-import { useNavigation } from "@react-navigation/native";
+import { useSelectWorkspaceDetail } from "../workspace/useSelectWorkspaceDetail";
 import { squashAtomCommandFailure } from "@t3tools/client-runtime/state/runtime";
 import type { EnvironmentThreadShell } from "@t3tools/client-runtime/state/shell";
 import {
@@ -28,13 +28,13 @@ import {
   TextInput,
   View,
 } from "react-native";
-import { AppText as Text } from "../../components/AppText";
+import { AppText as Text } from "../../components/ui/AppText";
 import { uuidv4 } from "../../lib/uuid";
 import { useEnvironmentScope } from "../../state/session";
 import { threadEnvironment } from "../../state/threads";
 import { useAtomCommand } from "../../state/use-atom-command";
 import { useThreadProjection } from "../../state/use-thread-detail";
-import { RequestActionButton } from "./RequestActionButton";
+import { Button } from "../../components/ui/Button";
 
 type GoalFields = Pick<
   Extract<OrchestrationV2Command, { type: "thread.goal.set" }>,
@@ -58,7 +58,7 @@ export function T3GoalCard(props: {
   const dismissProposal = useAtomCommand(threadEnvironment.dismissGoalProposal, {
     reportFailure: false,
   });
-  const navigation = useNavigation();
+  const selectDetail = useSelectWorkspaceDetail();
   const [pending, setPending] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [details, setDetails] = useState(false);
@@ -79,7 +79,10 @@ export function T3GoalCard(props: {
     !(goal !== null && goalIsLive(goal));
   const openThread = (threadId: string) => {
     Keyboard.dismiss();
-    navigation.navigate("Thread", { environmentId: String(thread.environmentId), threadId });
+    selectDetail({
+      name: "Thread",
+      params: { environmentId: String(thread.environmentId), threadId },
+    });
   };
   const run = async (label: string, action: () => Promise<void>) => {
     if (!canMutate || inFlight.current) return;
@@ -131,14 +134,14 @@ export function T3GoalCard(props: {
           </Text>
           <View className="flex-row flex-wrap gap-2">
             {goal.currentChildThreadId !== null ? (
-              <RequestActionButton
+              <Button
                 tone="secondary"
                 label={goal.needsInput ? "Answer iteration" : "Open iteration"}
                 onPress={() => openThread(String(goal.currentChildThreadId))}
               />
             ) : null}
             {goalControlActions(goal).map((action) => (
-              <RequestActionButton
+              <Button
                 key={action}
                 tone={action === "stop" ? "danger" : "secondary"}
                 label={
@@ -163,7 +166,7 @@ export function T3GoalCard(props: {
               />
             ))}
             {fullGoal !== null && goalIsEditable(goal) ? (
-              <RequestActionButton
+              <Button
                 tone="secondary"
                 label="Edit"
                 disabled={!canMutate || pending !== null}
@@ -171,11 +174,7 @@ export function T3GoalCard(props: {
               />
             ) : null}
             {fullGoal !== null ? (
-              <RequestActionButton
-                tone="secondary"
-                label="Goal details"
-                onPress={() => setDetails(true)}
-              />
+              <Button tone="secondary" label="Goal details" onPress={() => setDetails(true)} />
             ) : null}
           </View>
         </>
@@ -189,18 +188,18 @@ export function T3GoalCard(props: {
             Done when: {proposal.doneWhen}
           </Text>
           <View className="flex-row flex-wrap gap-2">
-            <RequestActionButton
+            <Button
               label={pending === "start" ? "Starting…" : "Start goal"}
               disabled={!canStart || pending !== null || startedProposalId === proposal.id}
               onPress={() => void run("start", () => start(proposalFields(proposal)))}
             />
-            <RequestActionButton
+            <Button
               tone="secondary"
               label="Edit"
               disabled={!canStart || pending !== null || startedProposalId === proposal.id}
               onPress={() => setEditing(true)}
             />
-            <RequestActionButton
+            <Button
               tone="secondary"
               label="Dismiss"
               disabled={!canMutate || pending !== null}
@@ -225,7 +224,7 @@ export function T3GoalCard(props: {
       {iteration !== null ? (
         <>
           <Text className="text-sm">T3 goal iteration {iteration.iteration}</Text>
-          <RequestActionButton
+          <Button
             tone="secondary"
             label="Open goal"
             onPress={() => openThread(String(iteration.parentThreadId))}
@@ -389,7 +388,7 @@ function GoalBriefEditor(props: {
       </Text>
       {field("objective")}
       {field("doneWhen")}
-      <RequestActionButton
+      <Button
         tone="secondary"
         label={advanced ? "Hide advanced" : "Advanced"}
         disabled={props.pending}
@@ -406,7 +405,7 @@ function GoalBriefEditor(props: {
           {props.error}
         </Text>
       ) : null}
-      <RequestActionButton
+      <Button
         label={props.pending ? "Saving…" : props.mode === "start" ? "Start goal" : "Save changes"}
         disabled={!props.canSubmit || props.pending || !valid}
         onPress={() =>
@@ -419,12 +418,7 @@ function GoalBriefEditor(props: {
           })
         }
       />
-      <RequestActionButton
-        tone="secondary"
-        label="Cancel"
-        disabled={props.pending}
-        onPress={props.onClose}
-      />
+      <Button tone="secondary" label="Cancel" disabled={props.pending} onPress={props.onClose} />
     </GoalModal>
   );
 }
@@ -435,7 +429,7 @@ function GoalDetails(props: {
   readonly onOpen: (threadId: string) => void;
 }) {
   const { goal } = props;
-  // oxlint-disable-next-line unicorn/no-array-reverse -- Hermes lacks toReversed; reverse only the new copy.
+  // Hermes lacks toReversed; reverse only the new copy.
   const history = [...goal.history].reverse();
   return (
     <GoalModal onClose={props.onClose}>
@@ -458,7 +452,7 @@ function GoalDetails(props: {
         </Text>
       ))}
       {goal.current ? (
-        <RequestActionButton
+        <Button
           tone="secondary"
           label={`Open iteration ${goal.current.iteration}`}
           onPress={() => {
@@ -468,7 +462,7 @@ function GoalDetails(props: {
         />
       ) : null}
       {history.map((record) => (
-        <RequestActionButton
+        <Button
           key={record.iteration}
           tone="secondary"
           label={`Iteration ${record.iteration}: ${GOAL_ITERATION_OUTCOME_LABELS[record.outcome]}`}
@@ -478,7 +472,7 @@ function GoalDetails(props: {
           }}
         />
       ))}
-      <RequestActionButton tone="secondary" label="Close" onPress={props.onClose} />
+      <Button tone="secondary" label="Close" onPress={props.onClose} />
     </GoalModal>
   );
 }
