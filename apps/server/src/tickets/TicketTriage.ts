@@ -1,17 +1,8 @@
 import { readmeFrontmatter } from "../project/ProjectHome.ts";
 /**
- * Triage: decides what a new Idea becomes as soon as it is created.
- *
- * Classifies only `created` changes for key-less inbox tickets created on this
- * machine; later changes repair an omitted decision without reclassifying.
- * A deterministic pre-pass files Ideas that name exactly one known Project
- * or Area; anything else goes to the pluggable classifier. Confident matches
- * get a project key, status ready and a decision entry. New Projects and
- * unsure cases stay in the Inbox with a "Needs Nick" question entry. Agents
- * never create Projects or Areas: a verdict naming an unknown key is treated
- * as a best guess.
- *
- * @module TicketTriage
+ * Files a new key-less inbox Idea from this machine: a deterministic pre-pass or the
+ * classifier sets a known project key and Ready, otherwise it stays in the Inbox
+ * with a "Needs Nick" question. Agents never create Projects or Areas.
  */
 import { CommandId, type ProjectId, type ThreadId, type TicketId } from "@t3tools/contracts";
 import { makeDrainableWorker } from "@t3tools/shared/DrainableWorker";
@@ -222,8 +213,8 @@ export const make = Effect.gen(function* () {
     );
   });
 
-  const triage = (id: TicketId) =>
-    Effect.gen(function* () {
+  const triage = Effect.fn("triage")(
+    function* (id: TicketId) {
       if (!(yield* settings.getSettings).ticketTriage) return;
       const { ticket } = yield* tickets.get(id);
       if (ticket.projectKey || ticket.status !== "inbox" || ticket.deletedAt !== null) return;
@@ -277,19 +268,20 @@ export const make = Effect.gen(function* () {
               }${verdict.kind === "match" && !match ? " (not a known Project or Area)" : ""}. ${clause(verdict.reason)}.`
             : "Needs Nick: triage found no matching Project or Area.";
       yield* entry("question", `${text}${duplicateNote}`);
-    }).pipe(Effect.catchCause((cause) => Effect.logWarning("tickets.triage.failed", { cause })));
+    },
+    Effect.catchCause((cause) => Effect.logWarning("tickets.triage.failed", { cause })),
+  );
 
   const worker = yield* makeDrainableWorker(triage);
   /** Classify only new Ideas; later changes repair an omitted agent decision. */
-  const onChange = (change: Tickets.TicketChange) =>
-    Effect.gen(function* () {
-      yield* Effect.forEach(change.created, worker.enqueue, { discard: true });
-      yield* Effect.forEach(
-        change.ids.filter((id) => !change.created.includes(id)),
-        completeAgentMatch,
-        { discard: true },
-      );
-    });
+  const onChange = Effect.fn("onChange")(function* (change: Tickets.TicketChange) {
+    yield* Effect.forEach(change.created, worker.enqueue, { discard: true });
+    yield* Effect.forEach(
+      change.ids.filter((id) => !change.created.includes(id)),
+      completeAgentMatch,
+      { discard: true },
+    );
+  });
   const start = Effect.gen(function* () {
     const subscription = yield* tickets.subscribeChanges;
     yield* Effect.forEach((yield* tickets.list()).tickets, (t) => completeAgentMatch(t.id), {
@@ -324,11 +316,11 @@ export function triagePrompt(input: TriageInput): string {
     `Idea ${input.idea.id}: ${line(input.idea.title)}`,
     input.idea.body.trim() ? input.idea.body.trim().slice(0, 4000) : "(no description)",
     "",
-    "Known Projects and Areas (key — name, area, current Goal):",
+    "Known Projects and Areas (key: name, area, current Goal):",
     list(
       input.candidates.map(
         (c) =>
-          `- ${c.key} — ${line(c.name)}${c.area ? `, area ${c.area}` : ""}${c.goal ? `, goal: ${line(c.goal)}` : ""}`,
+          `- ${c.key}: ${line(c.name)}${c.area ? `, area ${c.area}` : ""}${c.goal ? `, goal: ${line(c.goal)}` : ""}`,
       ),
       "- (none registered)",
     ),
@@ -362,8 +354,8 @@ export const layerAgentClassifier = Layer.effect(
     const folders = yield* ManagedProjectFolders.ManagedProjectFolders;
     const settings = yield* Settings.ServerSettingsService;
     return TicketTriageClassifier.of({
-      classify: (input) =>
-        Effect.gen(function* () {
+      classify: Effect.fn("TicketTriageClassifier.classify")(
+        function* (input) {
           const current = yield* settings.getSettings;
           const { projectId } = yield* folders.ensureScratchProject;
           const title = line(input.idea.title);
@@ -380,11 +372,11 @@ export const layerAgentClassifier = Layer.effect(
             creationSource: "server",
           });
           return { kind: "delegated", threadId: launched.threadId } as const;
-        }).pipe(
-          Effect.catchCause((cause) =>
-            Effect.logWarning("tickets.triage.agent-failed", { cause }).pipe(Effect.as(null)),
-          ),
+        },
+        Effect.catchCause((cause) =>
+          Effect.logWarning("tickets.triage.agent-failed", { cause }).pipe(Effect.as(null)),
         ),
+      ),
     });
   }),
 );

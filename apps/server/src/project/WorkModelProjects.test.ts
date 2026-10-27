@@ -9,6 +9,7 @@ import * as SqlClient from "effect/sql/SqlClient";
 import * as ServerConfig from "../config.ts";
 import * as RuntimeLayer from "../orchestration-v2/runtimeLayer.ts";
 import * as ProjectStore from "../orchestration-v2/ProjectStore.ts";
+import * as ServerSettings from "../serverSettings.ts";
 import * as Sqlite from "../persistence/Sqlite.ts";
 import * as ProcessRunner from "../processRunner.ts";
 import * as Tickets from "../tickets/TicketService.ts";
@@ -80,7 +81,9 @@ const withHome = <A, E>(
           }),
           Layer.succeed(ProjectFavicon.ProjectFaviconResolver, {
             resolvePath: () => Effect.succeed(null),
+            invalidate: () => Effect.void,
           }),
+          ServerSettings.layerTest(),
         ),
       ),
       Layer.provideMerge(ProjectStore.layer),

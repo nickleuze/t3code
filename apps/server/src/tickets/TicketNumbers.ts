@@ -1,13 +1,7 @@
 /**
- * Readable Ticket IDs: `<projectKey>-<suffix>`, e.g. `lighting-director-4K7QXM`.
- *
- * The suffix is the last six characters of the ticket's ULID, extended one
- * character at a time for every ticket in the same project that shares it.
- * The readable ID is derived, never stored or synced, so two Macs creating
- * tickets offline need no coordination. Ideas (tickets with no project or
- * area key) have no readable ID.
- *
- * @module TicketNumbers
+ * Readable Ticket IDs, `<projectKey>-<suffix>`: the ULID's last six characters,
+ * lengthened while another ticket in the project shares them. Derived, never
+ * stored or synced, so offline Macs need no coordination. Ideas have none.
  */
 
 const READABLE_SUFFIX_LENGTH = 6;

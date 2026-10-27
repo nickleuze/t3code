@@ -101,7 +101,7 @@ export const make = Effect.gen(function* () {
   let state: { -readonly [K in keyof typeof Config.Type]: (typeof Config.Type)[K] } = {
     registryPending: false,
     branch: "main",
-    machine: yield* crypto.randomUUIDv4,
+    machine: yield* crypto.randomUUIDv4(),
     label,
     remote: null as string | null,
     lastPullAt: null as string | null,
@@ -112,10 +112,9 @@ export const make = Effect.gen(function* () {
   else yield* write({ filePath: configPath, contents: yield* encodeConfig(state) });
   let lastError: string | null = null;
   const lock = yield* Semaphore.make(1);
-  const save = () =>
-    Effect.gen(function* () {
-      yield* write({ filePath: configPath, contents: yield* encodeConfig(state) });
-    });
+  const save = Effect.fn("save")(function* () {
+    yield* write({ filePath: configPath, contents: yield* encodeConfig(state) });
+  });
   const now = DateTime.now.pipe(Effect.map(DateTime.formatIso));
   const git = (args: readonly string[], cwd = repo) =>
     runner.run({
@@ -136,51 +135,48 @@ export const make = Effect.gen(function* () {
         SSH_ASKPASS_REQUIRE: "never",
       },
     });
-  const hasConflict = (stderr: string) =>
-    Effect.gen(function* () {
-      const markers = yield* git(["diff", "--name-only", "--diff-filter=U"]);
-      return (
-        Boolean(markers.stdout.trim()) ||
-        /\bconflicts?\b/i.test(stderr) ||
-        // Git can leave rebase state after a fatal identity/network failure too.
-        (!/\bfatal:|identity unknown/i.test(stderr) &&
-          ((yield* fs.exists(path.join(repo, ".git/rebase-merge"))) ||
-            (yield* fs.exists(path.join(repo, ".git/rebase-apply")))))
-      );
+  const hasConflict = Effect.fn("hasConflict")(function* (stderr: string) {
+    const markers = yield* git(["diff", "--name-only", "--diff-filter=U"]);
+    return (
+      Boolean(markers.stdout.trim()) ||
+      /\bconflicts?\b/i.test(stderr) ||
+      // Git can leave rebase state after a fatal identity/network failure too.
+      (!/\bfatal:|identity unknown/i.test(stderr) &&
+        ((yield* fs.exists(path.join(repo, ".git/rebase-merge"))) ||
+          (yield* fs.exists(path.join(repo, ".git/rebase-apply")))))
+    );
+  });
+  const checked = Effect.fn("checked")(function* (args: readonly string[], cwd = repo) {
+    const output = yield* git(args, cwd);
+    if (output.code === 0) return output.stdout;
+    return yield* new TicketError({
+      message:
+        args[0] === "pull"
+          ? (yield* hasConflict(output.stderr))
+            ? "Ticket sync pull/rebase conflict. Resolve the clone conflict manually; local events are kept."
+            : "Ticket sync pull failed, will retry. Local events are queued."
+          : `Ticket sync ${args[0]} failed. Local events are queued.`,
+      cause: output.stderr.slice(-400),
     });
-  const checked = (args: readonly string[], cwd = repo) =>
-    Effect.gen(function* () {
-      const output = yield* git(args, cwd);
-      if (output.code === 0) return output.stdout;
-      return yield* new TicketError({
-        message:
-          args[0] === "pull"
-            ? (yield* hasConflict(output.stderr))
-              ? "Ticket sync pull/rebase conflict. Resolve the clone conflict manually; local events are kept."
-              : "Ticket sync pull failed, will retry. Local events are queued."
-            : `Ticket sync ${args[0]} failed. Local events are queued.`,
-        cause: output.stderr.slice(-400),
-      });
-    });
+  });
   const registry = Effect.gen(function* () {
     const target =
       state.remote === null ? localRegistryPath : path.join(repo, "registry/projects.json");
     if (!(yield* fs.exists(target))) return {};
     return yield* decodeRegistry(yield* fs.readFileString(target));
   }).pipe(mapError);
-  const append = (events: readonly TicketEvent[]) =>
-    Effect.gen(function* () {
-      for (const event of events) {
-        const target = path.join(outbox, `${event.eventId}.json`);
-        const contents = yield* encodeEvent(event);
-        if (yield* fs.exists(target)) {
-          if ((yield* fs.readFileString(target)) !== contents)
-            return yield* new TicketError({
-              message: "Queued ticket event identity conflict. Local event was preserved.",
-            });
-        } else yield* write({ filePath: target, contents });
-      }
-    }).pipe(mapError);
+  const append = Effect.fn("append")(function* (events: readonly TicketEvent[]) {
+    for (const event of events) {
+      const target = path.join(outbox, `${event.eventId}.json`);
+      const contents = yield* encodeEvent(event);
+      if (yield* fs.exists(target)) {
+        if ((yield* fs.readFileString(target)) !== contents)
+          return yield* new TicketError({
+            message: "Queued ticket event identity conflict. Local event was preserved.",
+          });
+      } else yield* write({ filePath: target, contents });
+    }
+  }, mapError);
   const readEvents = Effect.gen(function* () {
     const events: TicketEvent[] = [];
     const root = path.join(repo, "tickets");

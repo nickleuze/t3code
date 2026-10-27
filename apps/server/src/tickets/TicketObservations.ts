@@ -22,25 +22,24 @@ export const make = Effect.gen(function* () {
   const projection = yield* Effect.serviceOption(Projection.ProjectionStoreV2);
   const knownGoals = new Set<string>();
   const knownIterations = new Set<string>();
-  const refreshReference = (
+  const refreshReference = Effect.fn("refreshReference")(function* (
     threadId: import("@t3tools/contracts").ThreadId,
     kind: "goal" | "task" | "pr",
     ref: string,
     title: string,
     model?: string,
-  ) =>
-    Effect.gen(function* () {
-      for (const { id, reference } of yield* tickets.ticketsLinkedToReference(
-        kind,
-        ref,
-        tickets.author().machine,
-      )) {
-        yield* tickets.reference(
-          { id, kind, ref, role: reference.role, title },
-          tickets.author({ actor: "agent", thread: threadId, ...(model ? { model } : {}) }),
-        );
-      }
-    });
+  ) {
+    for (const { id, reference } of yield* tickets.ticketsLinkedToReference(
+      kind,
+      ref,
+      tickets.author().machine,
+    )) {
+      yield* tickets.reference(
+        { id, kind, ref, role: reference.role, title },
+        tickets.author({ actor: "agent", thread: threadId, ...(model ? { model } : {}) }),
+      );
+    }
+  });
   const worker = yield* makeDrainableWorker((stored: OrchestrationV2StoredEvent) =>
     Effect.gen(function* () {
       if (String(stored.commandId).startsWith("command:runtime-reconcile:")) return;

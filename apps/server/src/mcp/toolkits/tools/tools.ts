@@ -51,7 +51,7 @@ const ToolsState = Schema.Struct({
 const ToolsReadTool = Tool.make("t3_tools_read", {
   ...shared,
   description:
-    "Read Settings → Tools for this environment or one project: the skills switched off and the MCP servers T3 gives every agent session. Changes apply to new agent sessions.",
+    "Read Settings → Tools for this environment or one `projectId`: skills switched off and the MCP servers T3 gives every agent session.",
   parameters: Schema.Struct(Scope),
   success: ToolsState,
 })
@@ -61,7 +61,7 @@ const ToolsReadTool = Tool.make("t3_tools_read", {
 const ToolsUpdateTool = Tool.make("t3_tools_update", {
   ...shared,
   description:
-    "Turn skills or Settings → Tools MCP servers on or off for this environment or one project. Skills are named as agents invoke them. Requires a live full-access/default calling thread. Applies to new agent sessions.",
+    "Switch skills (named as agents invoke them) or Settings → Tools MCP servers on or off for this environment or one `projectId`. Needs a live full-access/default calling thread. Applies to new sessions.",
   parameters: Schema.Struct({
     ...Scope,
     skills: Schema.optional(
@@ -77,7 +77,7 @@ const ToolsUpdateTool = Tool.make("t3_tools_update", {
 const SkillsInstallTool = Tool.make("t3_skills_install", {
   ...shared,
   description:
-    "Install skills from a source (GitHub owner/repo, git URL, or a folder on this environment) for every agent, the way `npx skills add` does. With projectId they go into that project's .agents/skills; without, into the environment's ~/.agents/skills. Skills may include scripts agents can run: install only sources the user asked for. Requires a live full-access/default calling thread.",
+    "Install skills for every agent from a GitHub owner/repo, git URL or local folder, like `npx skills add`: into `projectId`'s .agents/skills, else ~/.agents/skills. Skills can run scripts; install only sources the user asked for. Needs a live full-access/default calling thread.",
   parameters: Schema.Struct({
     ...Scope,
     source: SkillSource,
@@ -89,7 +89,7 @@ const SkillsInstallTool = Tool.make("t3_skills_install", {
 const SkillsRemoveTool = Tool.make("t3_skills_remove", {
   ...shared,
   description:
-    "Remove a skill from the agents' own skill folders for this environment or one project, with every agent's link to it: one installed from a source (with t3_skills_install, the Tools page, or `npx skills`) or put there by hand. Plugin and built-in skills can only be switched off with t3_tools_update. Requires a live full-access/default calling thread.",
+    "Remove an installed or hand-placed skill, and every agent's link to it, from this environment's or `projectId`'s skill folders. Plugin and built-in skills can only be switched off with `t3_tools_update`. Needs a live full-access/default calling thread.",
   parameters: Schema.Struct({ ...Scope, name: InstalledSkillName }),
   success: Schema.Struct({}),
 }).annotate(Tool.Destructive, true);

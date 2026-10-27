@@ -23,7 +23,7 @@ const shared = {
 const DeploymentStatusTool = Tool.make("t3_deployment_status", {
   ...shared,
   description:
-    "Read this host's release deployments: status, step, the exact reason it is waiting, blocked or failed, and its approved, published, installed, verified and accepted milestones. Approving, admitting and overriding deployments is the user's, in the app.",
+    "Read this host's release deployments: status, step, why one waits, is blocked or failed, and its milestones. Only the user approves, admits or overrides them, in the app.",
   success: Schema.Struct({ deployments: Schema.Array(HostDeployment) }),
 })
   .annotate(Tool.Readonly, true)
@@ -32,7 +32,7 @@ const DeploymentStatusTool = Tool.make("t3_deployment_status", {
 const DeploymentAcceptanceTool = Tool.make("t3_deployment_record_acceptance", {
   ...shared,
   description:
-    "Record the feature acceptance receipt for a verified release on this host, after you have checked the approved acceptance scope on the installed app. `scope` must equal the release's acceptanceScope; put what you checked and saw in `summary` and `evidence`.",
+    "Record acceptance of a verified release on this host after checking its approved scope on the installed app. `scope` must equal its acceptanceScope; put what you checked and saw in `summary` and `evidence`.",
   parameters: HostDeploymentAcceptanceInput,
   success: HostDeployment,
 }).annotate(Tool.Destructive, false);

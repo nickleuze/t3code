@@ -185,8 +185,8 @@ const make = Effect.gen(function* () {
       Effect.orElseSucceed(() => 0),
     );
 
-  const preflight: HostDeploymentHostShape["preflight"] = (request) =>
-    Effect.gen(function* () {
+  const preflight: HostDeploymentHostShape["preflight"] = Effect.fn("preflight")(
+    function* (request) {
       const bundle = config.appBundlePath;
       if ((!isMac && platform !== "win32") || bundle === undefined) {
         return yield* new HostDeploymentBlocked({
@@ -260,7 +260,8 @@ const make = Effect.gen(function* () {
           reason: `The backup needs ${Math.ceil(required / 1024 ** 3)} GiB free in ${backupRoot}; ${Math.floor(available / 1024 ** 3)} GiB is available. Free space or empty the Trash, then retry.`,
         });
       }
-    });
+    },
+  );
 
   const FACTS_SQL = [
     "PRAGMA quick_check",
@@ -319,82 +320,84 @@ const make = Effect.gen(function* () {
       ),
     );
 
-  const backup: HostDeploymentHostShape["backup"] = ({ releaseId, from }) =>
-    Effect.gen(function* () {
-      const stamp = DateTime.formatIso(yield* DateTime.now).replace(/[:.]/g, "-");
-      const directory = path.join(backupRoot, `${releaseId}-from-${from.version}-${stamp}`);
+  const backup: HostDeploymentHostShape["backup"] = Effect.fn("backup")(function* ({
+    releaseId,
+    from,
+  }) {
+    const stamp = DateTime.formatIso(yield* DateTime.now).replace(/[:.]/g, "-");
+    const directory = path.join(backupRoot, `${releaseId}-from-${from.version}-${stamp}`);
+    yield* fs
+      .makeDirectory(directory, { recursive: true })
+      .pipe(Effect.mapError(blocked(`Could not create ${directory}.`)));
+
+    // The backup API reads a consistent snapshot through its own connection.
+    const databaseCopy = path.join(directory, path.basename(config.dbPath));
+    yield* Effect.tryPromise(() => snapshotDatabase(config.dbPath, databaseCopy)).pipe(
+      Effect.mapError(blocked("Could not take a consistent state backup.")),
+    );
+
+    for (const file of [
+      config.settingsPath,
+      config.keybindingsConfigPath,
+      config.environmentIdPath,
+    ]) {
+      if (!(yield* fs.exists(file).pipe(Effect.orElseSucceed(() => false)))) continue;
       yield* fs
-        .makeDirectory(directory, { recursive: true })
-        .pipe(Effect.mapError(blocked(`Could not create ${directory}.`)));
+        .copyFile(file, path.join(directory, path.basename(file)))
+        .pipe(Effect.mapError(blocked(`Could not back up ${file}.`)));
+    }
 
-      // The backup API reads a consistent snapshot through its own connection.
-      const databaseCopy = path.join(directory, path.basename(config.dbPath));
-      yield* Effect.tryPromise(() => snapshotDatabase(config.dbPath, databaseCopy)).pipe(
-        Effect.mapError(blocked("Could not take a consistent state backup.")),
-      );
-
-      for (const file of [
-        config.settingsPath,
-        config.keybindingsConfigPath,
-        config.environmentIdPath,
-      ]) {
-        if (!(yield* fs.exists(file).pipe(Effect.orElseSucceed(() => false)))) continue;
-        yield* fs
-          .copyFile(file, path.join(directory, path.basename(file)))
-          .pipe(Effect.mapError(blocked(`Could not back up ${file}.`)));
+    // A Windows install restores by rerunning the previous release's installer.
+    let appBundle: HostDeploymentBackup["appBundle"] = null;
+    if (isMac && config.appBundlePath !== undefined) {
+      const appCopy = path.join(directory, path.basename(config.appBundlePath));
+      const ditto = yield* run(
+        "/usr/bin/ditto",
+        [config.appBundlePath, appCopy],
+        "10 minutes",
+      ).pipe(Effect.mapError(blocked("Could not copy the running app.")));
+      if (ditto.code !== 0) {
+        return yield* new HostDeploymentBlocked({ reason: "Could not copy the running app." });
       }
-
-      // A Windows install restores by rerunning the previous release's installer.
-      let appBundle: HostDeploymentBackup["appBundle"] = null;
-      if (isMac && config.appBundlePath !== undefined) {
-        const appCopy = path.join(directory, path.basename(config.appBundlePath));
-        const ditto = yield* run(
-          "/usr/bin/ditto",
-          [config.appBundlePath, appCopy],
-          "10 minutes",
-        ).pipe(Effect.mapError(blocked("Could not copy the running app.")));
-        if (ditto.code !== 0) {
-          return yield* new HostDeploymentBlocked({ reason: "Could not copy the running app." });
-        }
-        // A name alone cannot prove what was copied; read the copy's own version.
-        const plist = yield* run("/usr/libexec/PlistBuddy", [
-          "-c",
-          "Print :CFBundleShortVersionString",
-          path.join(appCopy, "Contents", "Info.plist"),
-        ]).pipe(Effect.mapError(blocked("Could not read the copied app's version.")));
-        const version = plist.stdout.trim();
-        if (version !== from.version) {
-          return yield* new HostDeploymentBlocked({
-            reason: `The copied app reports ${version || "no version"}, not the running ${from.version}.`,
-          });
-        }
-        appBundle = { path: appCopy, version };
+      // A name alone cannot prove what was copied; read the copy's own version.
+      const plist = yield* run("/usr/libexec/PlistBuddy", [
+        "-c",
+        "Print :CFBundleShortVersionString",
+        path.join(appCopy, "Contents", "Info.plist"),
+      ]).pipe(Effect.mapError(blocked("Could not read the copied app's version.")));
+      const version = plist.stdout.trim();
+      if (version !== from.version) {
+        return yield* new HostDeploymentBlocked({
+          reason: `The copied app reports ${version || "no version"}, not the running ${from.version}.`,
+        });
       }
+      appBundle = { path: appCopy, version };
+    }
 
-      const facts = yield* sqliteFacts(databaseCopy);
-      const databaseBytes = yield* fs.stat(databaseCopy).pipe(
-        Effect.map((info) => Number(info.size)),
-        Effect.mapError(blocked("Could not read the state backup.")),
-      );
-      const verifiedAt = DateTime.formatIso(yield* DateTime.now);
-      yield* fs
-        .writeFileString(
-          path.join(directory, BACKUP_MANIFEST),
-          encodeBackupManifest({ releaseId, verifiedAt }),
-        )
-        .pipe(Effect.mapError(blocked("Could not record the backup manifest.")));
-      return {
-        path: directory,
-        databaseBytes,
-        threadCount: facts.threadCount,
-        projectCount: facts.projectCount,
-        appBundle,
-        verifiedAt,
-      } satisfies HostDeploymentBackup;
-    });
+    const facts = yield* sqliteFacts(databaseCopy);
+    const databaseBytes = yield* fs.stat(databaseCopy).pipe(
+      Effect.map((info) => Number(info.size)),
+      Effect.mapError(blocked("Could not read the state backup.")),
+    );
+    const verifiedAt = DateTime.formatIso(yield* DateTime.now);
+    yield* fs
+      .writeFileString(
+        path.join(directory, BACKUP_MANIFEST),
+        encodeBackupManifest({ releaseId, verifiedAt }),
+      )
+      .pipe(Effect.mapError(blocked("Could not record the backup manifest.")));
+    return {
+      path: directory,
+      databaseBytes,
+      threadCount: facts.threadCount,
+      projectCount: facts.projectCount,
+      appBundle,
+      verifiedAt,
+    } satisfies HostDeploymentBackup;
+  });
 
-  const pruneBackups: HostDeploymentHostShape["pruneBackups"] = (keep) =>
-    Effect.gen(function* () {
+  const pruneBackups: HostDeploymentHostShape["pruneBackups"] = Effect.fn("pruneBackups")(
+    function* (keep) {
       const names = yield* fs.readDirectory(backupRoot).pipe(Effect.orElseSucceed(() => []));
       const verified: Array<{ readonly directory: string; readonly verifiedAt: string }> = [];
       for (const name of names) {
@@ -444,7 +447,8 @@ const make = Effect.gen(function* () {
           ),
         );
       }
-    });
+    },
+  );
 
   const liveCounts = Effect.gen(function* () {
     const threads = yield* sql<{ readonly count: number }>`

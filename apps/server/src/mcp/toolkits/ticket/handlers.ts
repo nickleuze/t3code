@@ -144,6 +144,8 @@ export const layer = McpToolAccess.toLayer(TicketToolkit, {
           );
         return { ...result, threadUrl: `t3-thread://v1/${result.threadId}` };
       }),
+    // Ticket launches do not carry a link's origin, so a linked caller cannot own them.
+    { refused: "start ticket work in this environment" },
   ),
   t3_ticket_get: McpToolAccess.reads((input) =>
     Effect.gen(function* () {

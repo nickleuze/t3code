@@ -59,7 +59,7 @@ const CreateTool = Tool.make("t3_ticket_create", {
   ...shared,
   dependencies: [...shared.dependencies, Crypto.Crypto],
   description:
-    "File a ticket in the user's backlog for worthwhile follow-up work outside your current task. Project defaults to the calling thread's project, or unassigned for an outside client; pass null for unassigned. Status defaults to inbox. Records this thread as the origin, without marking it as work. Reuse clientRequestId when retrying a creation to avoid duplicates, and mention filed tickets in your reply.",
+    "File follow-up work outside your task in the user's backlog. `projectId` defaults to this thread's project (outside clients: unassigned); null unassigns. Status defaults to inbox. Links this thread as origin, not work. Reuse `clientRequestId` on retry. Mention filed tickets in your reply.",
   parameters: Schema.Struct({
     ...editable,
     title: TrimmedNonEmptyString,
@@ -73,7 +73,7 @@ const CreateTool = Tool.make("t3_ticket_create", {
 const ListTool = Tool.make("t3_ticket_list", {
   ...shared,
   description:
-    'List compact backlog rows with explicit stage. Project defaults to the calling thread\'s project, or unassigned for an outside client; pass projectId="all" for every project, or null for unassigned. By default excludes done/dropped; includeDone=true includes them, and an explicit status filter also selects terminal tickets. Query matches title and body. Limit defaults to 50 (maximum 100); hasMore reports additional matches. Returns short body excerpts and up to 10 linked work threads per ticket.',
+    'List backlog rows with stage, body excerpt and up to 10 work threads. `projectId` defaults to this thread\'s project (outside clients: unassigned); "all" for every project, null for unassigned. Done/dropped only with `includeDone` or an explicit `status`. `query` matches title and body. `limit` 50 by default, max 100; `hasMore` flags more.',
   parameters: Schema.Struct({
     projectId: Schema.optional(Schema.Union([ProjectId, Schema.Literal("all"), Schema.Null])),
     status: Schema.optional(TicketStatus),
@@ -108,7 +108,7 @@ const ListTool = Tool.make("t3_ticket_list", {
 const UpdateTool = Tool.make("t3_ticket_update", {
   ...shared,
   description:
-    "Patch an existing ticket's title, body, status or project. Omitted fields are preserved; an empty body clears it and null projectId unassigns it. Explicit status writes a stage event. Starting linked work can move Inbox/Ready to In progress; current-work PR links and merges can move active work to In review. Merges do not complete tickets. Leave results In review until the user accepts the finish condition; Done records that acceptance.",
+    "Patch a ticket's title, body, status or project. Omitted fields stay; an empty body clears it; null `projectId` unassigns. An explicit status writes a stage event. Linked work and its PRs move stages on their own; merges never complete a ticket. Leave results In review until the user accepts the finish condition; Done records that acceptance.",
   parameters: Schema.Struct({ id: TicketId, ...editable }),
   success: TicketSummary,
 })
@@ -118,7 +118,7 @@ const UpdateTool = Tool.make("t3_ticket_update", {
 const LinkThreadTool = Tool.make("t3_ticket_link_thread", {
   ...shared,
   description:
-    'Link a ticket to a thread, defaulting to the calling thread (outside clients must pass threadId). Role defaults to "work"; "origin" only records where an idea came from. Linking alone does not change stage; a subsequent run can start work and current-work PR observations can move active work to In review. Set unlink=true to remove the link. The target thread must run within the caller\'s permission modes. Returns the ticket summary with its recorded stage.',
+    'Link a ticket to a thread, this thread by default (outside clients pass `threadId`). Role "work" by default; "origin" only records where the idea came from. Linking alone does not change stage. `unlink: true` removes it. The thread must run within your permission modes.',
   parameters: Schema.Struct({
     id: TicketId,
     threadId: Schema.optional(ThreadId),
@@ -133,7 +133,7 @@ const LinkThreadTool = Tool.make("t3_ticket_link_thread", {
 const GetTool = Tool.make("t3_ticket_get", {
   ...shared,
   description:
-    "Read the ticket before working: current state, decisions, questions, last handoff and recent timeline (last 30 events). Accepts the ULID or the readable Ticket ID (e.g. lighting-director-4K7QXM).",
+    "Read a ticket before working on it: state, decisions, questions, last handoff and its last 30 events. Takes the ULID or readable id (e.g. lighting-director-4K7QXM).",
   parameters: Schema.Struct({ ticket: TicketId }),
   success: Schema.Struct({
     ticket: Ticket,
@@ -147,7 +147,7 @@ const GetTool = Tool.make("t3_ticket_get", {
 const EntryTool = Tool.make("t3_ticket_entry", {
   ...shared,
   description:
-    "Write a milestone entry before the substantive final answer when permitted. Put the next action or needed decision in structured next. Record corrected premises and accepted scope/finish conditions as decisions with their source; supersedes/resolves retain the original history. Planning decisions do not authorize implementation. Respect plan/read-only restrictions; T3 can record a source pointer to a planning outcome without a provider write. Reuse clientRequestId after a lost response; it is deduplicated within your caller namespace. A fallback handoff request needs at most a one-line acknowledgment, not another final answer.",
+    "Write a milestone entry before your final answer when permitted. Put the next action or needed decision in `next`. Record corrected premises and accepted scope or finish conditions as decisions with their source; `supersedes`/`resolves` keep history. A planning decision does not authorize implementation. Respect plan/read-only modes. Reuse `clientRequestId` on retry. A fallback handoff request needs at most a one-line acknowledgment.",
   parameters: Schema.Struct({
     ticket: TicketId,
     kind: TicketEntryKind,
@@ -164,7 +164,7 @@ const EntryTool = Tool.make("t3_ticket_entry", {
 const LinkTool = Tool.make("t3_ticket_link", {
   ...shared,
   description:
-    "Attach a thread, goal, task or PR to a ticket. Thread ref defaults to the calling thread. Linking alone does not move the stage, but the next run in a work-linked thread moves an Inbox or Ready ticket to In progress. Role defaults to work.",
+    "Attach a thread (this one by default), goal, task or PR to a ticket, role work by default. The next run in a work-linked thread moves an Inbox or Ready ticket to In progress.",
   parameters: Schema.Struct({
     ticket: TicketId,
     kind: TicketReferenceKind,
@@ -180,7 +180,7 @@ const StartTool = Tool.make("t3_ticket_start", {
   ...shared,
   dependencies: [...shared.dependencies, Crypto.Crypto, Launches.TicketLaunchService],
   description:
-    "Start or hand off work on a ticket. Prefer this over t3_thread_launch plus t3_ticket_link. Defaults to plan first using project defaults on this machine. Pass projectId only to map or assign a missing project. Active work returns its existing thread unless allowParallel. Reuse clientRequestId after a lost response to retry the same thread within your caller namespace. Modes cannot exceed the caller's permissions.",
+    "Start or hand off work on a ticket, instead of `t3_thread_launch` plus `t3_ticket_link`. Plan first with this machine's project defaults unless set. `projectId` only maps a missing project. Active work returns its thread unless `allowParallel`. Reuse `clientRequestId` on retry. Modes stay within yours.",
   parameters: Schema.Struct({
     ticket: TicketId,
     mode: Schema.optional(TicketStartMode),
@@ -197,7 +197,7 @@ const StartTool = Tool.make("t3_ticket_start", {
 const ProjectMapTool = Tool.make("t3_ticket_project_map", {
   ...shared,
   description:
-    "Map a ticket project key to a T3 project on this machine, e.g. after a Project Home folder moved and was registered as a new T3 project. Tickets keep their key (and readable IDs); new tickets filed from that T3 project reuse it. Pass projectId null to unmap. Without displayName the synced name is kept. Returns every known key with its mapping. Mappings are per machine: run it on each Mac.",
+    "Map a ticket project key to a T3 project on this machine, e.g. after a Project Home folder moved. Tickets keep their key and readable ids; new tickets from that project reuse it. null `projectId` unmaps; no `displayName` keeps the synced name. Per machine. Returns every key and its mapping.",
   parameters: Schema.Struct({
     key: TrimmedNonEmptyString,
     projectId: Schema.NullOr(ProjectId),

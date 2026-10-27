@@ -2,18 +2,14 @@ import * as Effect from "effect/Effect";
 import { Argument, Command } from "effect/cli";
 
 /**
- * `t3 skills-cli <args…>` runs the bundled `skills` CLI (vercel-labs/skills),
- * the installer `npx skills` runs. The server spawns it through this hidden
- * subcommand so installs need no Node or npm of their own: the CLI is part of
- * this build, and runs as a child so its `process.exit` and prompts stay out
- * of the server.
+ * `t3 skills-cli <args…>` runs the bundled `skills` CLI as a child process, so
+ * installs need no Node or npm of their own and its `process.exit` and prompts
+ * stay out of the server.
  */
 export async function runSkillsCli(args: ReadonlyArray<string>): Promise<void> {
-  // The CLI prints its `--json` result and calls `process.exit` straight
-  // away. Writes to a pipe are asynchronous on POSIX, so whatever hasn't
-  // flushed would be lost: a large result is cut at 64 KiB. A blocking pipe
-  // finishes each write before the next statement, so exit loses nothing.
-  // (Windows pipes are already synchronous.)
+  // The CLI calls `process.exit` right after printing `--json`; POSIX pipe writes are
+  // asynchronous, so a large result would be cut at 64 KiB. Block until each write
+  // finishes (Windows pipes already do).
   const stdout = process.stdout as typeof process.stdout & {
     readonly _handle?: { readonly setBlocking?: (blocking: boolean) => void };
   };

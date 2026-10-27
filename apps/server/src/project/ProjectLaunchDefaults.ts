@@ -76,15 +76,14 @@ const make = Effect.gen(function* () {
   const settings = yield* Settings.ServerSettingsService;
   const registry = yield* ProviderRegistry.ProviderRegistry;
   return ProjectLaunchDefaults.of({
-    resolve: (project) =>
-      Effect.gen(function* () {
-        return projectLaunchDefaults(
-          yield* settings.getSettings,
-          project,
-          yield* registry.getProviders,
-        );
-      }),
-    runtimeMode: (mode, selection) =>
+    resolve: Effect.fn("ProjectLaunchDefaults.resolve")(function* (project) {
+      return projectLaunchDefaults(
+        yield* settings.getSettings,
+        project,
+        yield* registry.getProviders,
+      );
+    }),
+    runtimeMode: Effect.fn("ProjectLaunchDefaults.runtimeMode")((mode, selection) =>
       registry.getProviders.pipe(
         Effect.map((providers) =>
           supportedRuntimeMode(
@@ -93,6 +92,7 @@ const make = Effect.gen(function* () {
           ),
         ),
       ),
+    ),
   });
 });
 export const layer = Layer.effect(ProjectLaunchDefaults, make);

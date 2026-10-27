@@ -6,6 +6,7 @@ import {
   ThreadId,
   TicketError,
   TicketId,
+  type Ticket,
   type TicketListResult,
   type TicketUpsertInput,
 } from "@t3tools/contracts";
@@ -21,6 +22,10 @@ import * as ProjectStore from "../orchestration-v2/ProjectStore.ts";
 import * as Sqlite from "../persistence/Sqlite.ts";
 import { runMigrations } from "../persistence/Migrations.ts";
 import * as Tickets from "./TicketService.ts";
+
+// Board lists leave full question responses to get.
+const listed = (ticket: Ticket) =>
+  ticket.workState ? { ...ticket, workState: { ...ticket.workState, answers: undefined } } : ticket;
 
 const layer = Tickets.layer.pipe(
   Layer.provide(Layer.mergeAll(ProjectStore.layer, NodeCrypto.layer)),
@@ -75,14 +80,29 @@ it.effect("partial updates preserve omitted fields and allow clearing fields", (
     assert.notEqual(edited.updatedAt, created.updatedAt);
     const bodyEdit = (yield* service.upsert({ id: created.id, body: "Another device's edit" }))
       .ticket;
-    assert.deepStrictEqual(bodyEdit, { ...edited, body: "Another device's edit" });
+    // A body edit is the ticket's new brief.
+    assert.deepStrictEqual(bodyEdit, {
+      ...edited,
+      body: "Another device's edit",
+      workState: { ...edited.workState!, briefSource: bodyEdit.workState!.briefSource },
+    });
+    assert.notEqual(
+      bodyEdit.workState?.briefSource?.eventId,
+      edited.workState?.briefSource?.eventId,
+    );
     const cleared = (yield* service.upsert({
       id: created.id,
       body: "",
       sortKey: 0,
       projectId: null,
     })).ticket;
-    assert.deepStrictEqual(cleared, { ...bodyEdit, body: "", sortKey: 0, projectId: null });
+    assert.deepStrictEqual(cleared, {
+      ...bodyEdit,
+      body: "",
+      sortKey: 0,
+      projectId: null,
+      workState: { ...bodyEdit.workState!, briefSource: cleared.workState!.briefSource },
+    });
   }).pipe(Effect.provide(layer)),
 );
 
@@ -138,7 +158,7 @@ it.effect("CRUD preserves creation metadata and records explicit status override
     const review = (yield* service.upsert({ ...input, id: created.id, status: "in_review" }))
       .ticket;
     assert.equal(review.status, "in_review");
-    assert.deepStrictEqual((yield* service.list()).tickets, [review]);
+    assert.deepStrictEqual((yield* service.list()).tickets, [listed(review)]);
   }).pipe(Effect.provide(layer)),
 );
 
@@ -226,7 +246,7 @@ it.effect("commandId replays creates and updates without overwriting later edits
     yield* TestClock.adjust("1 second");
     const latest = yield* service.upsert({ id: first.ticket.id, status: "done" });
     assert.deepStrictEqual(yield* service.upsert(update), changed);
-    assert.deepStrictEqual((yield* service.list()).tickets, [latest.ticket]);
+    assert.deepStrictEqual((yield* service.list()).tickets, [listed(latest.ticket)]);
     // Receipts survive rebuilding the service over the same connection.
     const reopened = yield* Tickets.make.pipe(
       Effect.provide(Layer.mergeAll(ProjectStore.layer, NodeCrypto.layer)),

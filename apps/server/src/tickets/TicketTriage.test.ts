@@ -365,7 +365,7 @@ it("the agent prompt carries the Idea, candidates and the no-new-Projects rule",
     openTickets: [],
   });
   assert.include(prompt, "Idea 01JQ4K7QZ8R3PB5W1N0D4K7QXM: Softbox sim");
-  assert.include(prompt, "- lighting-director — Lighting director, area photography");
+  assert.include(prompt, "- lighting-director: Lighting director, area photography");
   assert.include(prompt, "Never create a Project or an Area");
   assert.include(prompt, 'starting "Needs Nick:"');
 });

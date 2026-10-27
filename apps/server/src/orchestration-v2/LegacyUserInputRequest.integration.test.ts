@@ -232,10 +232,7 @@ it.effect.each(["answer", "queue", "steer", "dismiss", "restart"] as const)(
                   Effect.sync(() => {
                     steered.push(input.message.text);
                   }),
-                interruptTurn: () =>
-                  Effect.gen(function* () {
-                    yield* terminal("interrupted");
-                  }),
+                interruptTurn: () => terminal("interrupted"),
                 respondToRuntimeRequest: () =>
                   Effect.die("Fallback answers must be messages, never permission responses"),
                 readThreadSnapshot: () => Effect.die("Unexpected snapshot in goal runtime test"),

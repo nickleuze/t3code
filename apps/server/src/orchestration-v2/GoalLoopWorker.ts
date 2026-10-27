@@ -1,12 +1,7 @@
 /**
- * Drives `/t3-goal` loops. A scheduler sweep reconciles every thread whose goal
- * needs attention: it starts the next iteration in a fresh child thread,
- * continues the child in place while its context has room, records its
- * outcome, and enforces the iteration time limit. All decisions about what a finished iteration means live
- * in `GoalState.ts`; this worker only observes and reports, so restarts resume
+ * Drives `/t3-goal` loops: each sweep starts, continues in place, records and
+ * times out iterations. Decisions live in `GoalState.ts`, so restarts resume
  * from durable state.
- *
- * @module GoalLoopWorker
  */
 import {
   CheckpointRef,
@@ -196,401 +191,399 @@ export const make = Effect.gen(function* () {
           Effect.orElseSucceed(() => null),
         );
 
-  const captureRef = (cwd: string | null, ref: CheckpointRef) =>
-    Effect.gen(function* () {
-      const ops = yield* checkpointOps(cwd);
-      if (ops === null || cwd === null) return false;
-      return yield* ops.captureCheckpoint({ cwd, checkpointRef: ref }).pipe(
-        Effect.as(true),
-        Effect.orElseSucceed(() => false),
-      );
-    });
+  const captureRef = Effect.fn("GoalLoopWorker.captureRef")(function* (
+    cwd: string | null,
+    ref: CheckpointRef,
+  ) {
+    const ops = yield* checkpointOps(cwd);
+    if (ops === null || cwd === null) return false;
+    return yield* ops.captureCheckpoint({ cwd, checkpointRef: ref }).pipe(
+      Effect.as(true),
+      Effect.orElseSucceed(() => false),
+    );
+  });
 
-  const workspaceChanged = (
+  const workspaceChanged = Effect.fn("GoalLoopWorker.workspaceChanged")(function* (
     thread: OrchestrationV2AppThread,
     goal: OrchestrationV2ThreadGoal,
     baselineRef: CheckpointRef | null,
-  ) =>
-    Effect.gen(function* () {
-      if (baselineRef === null) return null;
-      const cwd = yield* workspaceCwd(thread);
-      const endRef = goalRef(goal, goal.iteration, "end");
-      if (!(yield* captureRef(cwd, endRef))) return null;
-      const ops = yield* checkpointOps(cwd);
-      if (ops === null || cwd === null) return null;
-      const changed = yield* ops
-        .diffCheckpoints({
-          cwd,
-          fromCheckpointRef: baselineRef,
-          toCheckpointRef: endRef,
-          ignoreWhitespace: false,
-          format: "numstat",
-        })
-        .pipe(
-          Effect.map((diff) => diff.trim().length > 0),
-          Effect.orElseSucceed(() => null),
-        );
-      yield* ops
-        .deleteCheckpointRefs({ cwd, checkpointRefs: [baselineRef, endRef] })
-        .pipe(Effect.ignore);
-      return changed;
-    });
+  ) {
+    if (baselineRef === null) return null;
+    const cwd = yield* workspaceCwd(thread);
+    const endRef = goalRef(goal, goal.iteration, "end");
+    if (!(yield* captureRef(cwd, endRef))) return null;
+    const ops = yield* checkpointOps(cwd);
+    if (ops === null || cwd === null) return null;
+    const changed = yield* ops
+      .diffCheckpoints({
+        cwd,
+        fromCheckpointRef: baselineRef,
+        toCheckpointRef: endRef,
+        ignoreWhitespace: false,
+        format: "numstat",
+      })
+      .pipe(
+        Effect.map((diff) => diff.trim().length > 0),
+        Effect.orElseSucceed(() => null),
+      );
+    yield* ops
+      .deleteCheckpointRefs({ cwd, checkpointRefs: [baselineRef, endRef] })
+      .pipe(Effect.ignore);
+    return changed;
+  });
 
-  const startIteration = (thread: OrchestrationV2AppThread, goal: OrchestrationV2ThreadGoal) =>
-    Effect.gen(function* () {
-      const iteration = goal.iteration + 1;
-      const cwd = yield* workspaceCwd(thread);
-      const startRef = goalRef(goal, iteration, "start");
-      const baselineRef = (yield* captureRef(cwd, startRef)) ? startRef : null;
-      yield* orchestrator
-        .dispatch({
-          type: "thread.goal.iteration.start",
-          commandId: commandId(thread, `${iteration}:start`),
-          threadId: thread.id,
-          goalId: goal.id,
-          iteration,
-          baselineRef,
-          prompt: buildGoalIterationPrompt(goal, iteration),
-        })
-        .pipe(
-          Effect.catchCause((cause) =>
-            Effect.logWarning("orchestration-v2.goal-loop.start-failed", {
-              threadId: thread.id,
-              cause,
-            }).pipe(
-              Effect.andThen(
-                advance(thread, goal, "start-failed", {
-                  type: "paused",
-                  reason: "child_failed",
-                }),
-              ),
+  const startIteration = Effect.fn("GoalLoopWorker.startIteration")(function* (
+    thread: OrchestrationV2AppThread,
+    goal: OrchestrationV2ThreadGoal,
+  ) {
+    const iteration = goal.iteration + 1;
+    const cwd = yield* workspaceCwd(thread);
+    const startRef = goalRef(goal, iteration, "start");
+    const baselineRef = (yield* captureRef(cwd, startRef)) ? startRef : null;
+    yield* orchestrator
+      .dispatch({
+        type: "thread.goal.iteration.start",
+        commandId: commandId(thread, `${iteration}:start`),
+        threadId: thread.id,
+        goalId: goal.id,
+        iteration,
+        baselineRef,
+        prompt: buildGoalIterationPrompt(goal, iteration),
+      })
+      .pipe(
+        Effect.catchCause((cause) =>
+          Effect.logWarning("orchestration-v2.goal-loop.start-failed", {
+            threadId: thread.id,
+            cause,
+          }).pipe(
+            Effect.andThen(
+              advance(thread, goal, "start-failed", {
+                type: "paused",
+                reason: "child_failed",
+              }),
             ),
           ),
-        );
-    });
+        ),
+      );
+  });
 
   /**
-   * Starts another turn in the iteration's thread when its last turn ended
-   * cleanly, recorded progress, and left both time and context to spare, so
-   * the agent keeps its context instead of re-orienting in a fresh thread.
-   * Returns false when the iteration should end; unknown context size keeps
-   * the fresh-thread behaviour.
+   * Continues the iteration's thread when its last turn ended cleanly with
+   * progress and time and context to spare. Returns false when the iteration
+   * should end; unknown context size keeps the fresh-thread behaviour.
    */
-  const continueInPlace = (
+  const continueInPlace = Effect.fn("GoalLoopWorker.continueInPlace")(function* (
     thread: OrchestrationV2AppThread,
     goal: OrchestrationV2ThreadGoal,
     records: ProjectionStore.ProjectionRecords<"runs" | "providerThreads" | "providerTurns">,
     progress: ReturnType<typeof delegatedTaskProgress>,
     nowMs: number,
-  ) =>
-    Effect.gen(function* () {
-      const current = goal.current!;
-      const endedRun = progress.resultRun;
-      if (
-        goal.status !== "active" ||
-        current.claim !== null ||
-        current.wrapUpSentAt != null ||
-        endedRun?.status !== "completed" ||
-        endedRun.startedAt === null ||
-        nowMs - Date.parse(current.startedAt) >
-          iterationDeadlines(goalIterationTimeoutMins(goal)).wrapUpMs
-      ) {
-        return false;
-      }
-      // A turn that left no note is not obviously progressing; let a fresh
-      // iteration take over rather than prompting it again.
-      const turnStartedMs = DateTime.toEpochMillis(endedRun.startedAt);
-      if (
-        !goal.progressNotes.some(
-          (note) => note.iteration === current.iteration && Date.parse(note.at) >= turnStartedMs,
-        )
-      ) {
-        return false;
-      }
-      const fraction = childContextFraction(
-        records.providerTurns,
-        records.providerThreads.find(
-          (providerThread) => providerThread.id === records.thread.activeProviderThreadId,
-        ),
-      );
-      if (fraction === null || fraction >= CONTEXT_ROLLOVER_FRACTION) return false;
-      const pendingMessages = current.pendingMessages ?? [];
-      const sent = yield* dispatch({
-        type: "message.dispatch",
-        commandId: commandId(thread, `${goal.iteration}:continue`),
-        messageId: MessageId.make(
-          `goal-continue:${current.childThreadId}:${bootId}-${dispatchSequence}`,
-        ),
-        threadId: current.childThreadId,
-        text: [
-          ...pendingMessages.map((message) => message.text),
-          "Continue from T3 Code: this goal iteration still has time and context to spare, so keep working toward the goal in this thread. If the goal is achieved, call t3_goal_complete. Otherwise rewrite the handoff file and call t3_goal_update before your turn ends.",
-        ].join("\n\n"),
-        attachments: [],
-        deliveryIntent: "auto",
-        dispatchMode: { type: "start_immediately" },
-        createdBy: "agent",
-        creationSource: "server",
-      }).pipe(
-        Effect.as(true),
-        Effect.catchCause((cause) =>
-          Effect.logWarning("orchestration-v2.goal-loop.continue-failed", {
-            threadId: thread.id,
-            cause,
-          }).pipe(Effect.as(false)),
-        ),
-      );
-      if (!sent) return false;
-      yield* Effect.logDebug("orchestration-v2.goal-loop.continued", {
-        threadId: thread.id,
-        iteration: goal.iteration,
-        contextFraction: fraction,
-      });
-      if (pendingMessages.length > 0) {
-        yield* advance(thread, goal, "messages-delivered", {
-          type: "messages_delivered",
-          count: pendingMessages.length,
-        });
-      }
-      yield* advance(thread, goal, "continued", { type: "turn_continued" });
-      return true;
+  ) {
+    const current = goal.current!;
+    const endedRun = progress.resultRun;
+    if (
+      goal.status !== "active" ||
+      current.claim !== null ||
+      current.wrapUpSentAt != null ||
+      endedRun?.status !== "completed" ||
+      endedRun.startedAt === null ||
+      nowMs - Date.parse(current.startedAt) >
+        iterationDeadlines(goalIterationTimeoutMins(goal)).wrapUpMs
+    ) {
+      return false;
+    }
+    // A turn that left no note is not obviously progressing; let a fresh
+    // iteration take over rather than prompting it again.
+    const turnStartedMs = DateTime.toEpochMillis(endedRun.startedAt);
+    if (
+      !goal.progressNotes.some(
+        (note) => note.iteration === current.iteration && Date.parse(note.at) >= turnStartedMs,
+      )
+    ) {
+      return false;
+    }
+    const fraction = childContextFraction(
+      records.providerTurns,
+      records.providerThreads.find(
+        (providerThread) => providerThread.id === records.thread.activeProviderThreadId,
+      ),
+    );
+    if (fraction === null || fraction >= CONTEXT_ROLLOVER_FRACTION) return false;
+    const pendingMessages = current.pendingMessages ?? [];
+    const sent = yield* dispatch({
+      type: "message.dispatch",
+      commandId: commandId(thread, `${goal.iteration}:continue`),
+      messageId: MessageId.make(
+        `goal-continue:${current.childThreadId}:${bootId}-${dispatchSequence}`,
+      ),
+      threadId: current.childThreadId,
+      text: [
+        ...pendingMessages.map((message) => message.text),
+        "Continue from T3 Code: this goal iteration still has time and context to spare, so keep working toward the goal in this thread. If the goal is achieved, call t3_goal_complete. Otherwise rewrite the handoff file and call t3_goal_update before your turn ends.",
+      ].join("\n\n"),
+      attachments: [],
+      deliveryIntent: "auto",
+      dispatchMode: { type: "start_immediately" },
+      createdBy: "agent",
+      creationSource: "server",
+    }).pipe(
+      Effect.as(true),
+      Effect.catchCause((cause) =>
+        Effect.logWarning("orchestration-v2.goal-loop.continue-failed", {
+          threadId: thread.id,
+          cause,
+        }).pipe(Effect.as(false)),
+      ),
+    );
+    if (!sent) return false;
+    yield* Effect.logDebug("orchestration-v2.goal-loop.continued", {
+      threadId: thread.id,
+      iteration: goal.iteration,
+      contextFraction: fraction,
     });
+    if (pendingMessages.length > 0) {
+      yield* advance(thread, goal, "messages-delivered", {
+        type: "messages_delivered",
+        count: pendingMessages.length,
+      });
+    }
+    yield* advance(thread, goal, "continued", { type: "turn_continued" });
+    return true;
+  });
 
-  const reconcileRunning = (
+  const reconcileRunning = Effect.fn("GoalLoopWorker.reconcileRunning")(function* (
     thread: OrchestrationV2AppThread,
     goal: OrchestrationV2ThreadGoal,
     nowMs: number,
-  ) =>
-    Effect.gen(function* () {
-      const current = goal.current!;
-      const child = yield* orchestrator
-        .getThreadRecords(
-          current.childThreadId,
-          [
-            "runs",
-            "messages",
-            "subagents",
-            "providerThreads",
-            "providerTurns",
-            "runtimeRequests",
-            "turnItems",
-          ],
-          { turnItemTypes: ["user_input_request", "run_interrupt_request"] },
-        )
-        .pipe(Effect.option);
-      // Finished iterations are named for what they did, from their last note.
-      const lastNote = goal.progressNotes.findLast((note) => note.iteration === current.iteration);
-      const finish = (
-        step: Omit<Extract<OrchestrationV2GoalAdvanceStep, { type: "iteration_finished" }>, "type">,
-      ) =>
-        advance(thread, goal, "finished", { type: "iteration_finished", ...step }).pipe(
-          Effect.andThen(
-            lastNote === undefined
-              ? Effect.void
-              : dispatch({
-                  type: "thread.metadata.update",
-                  commandId: commandId(thread, `${goal.iteration}:retitle`),
-                  threadId: current.childThreadId,
-                  title: goalIterationTitle(current.iteration, lastNote.text),
-                }),
-          ),
-          Effect.andThen(
-            dispatch({
-              type: "thread.settle",
-              commandId: commandId(thread, `${goal.iteration}:settle-child`),
-              threadId: current.childThreadId,
-            }),
-          ),
-        );
-      if (Option.isNone(child)) {
-        // Only a child that is really gone ends the iteration; a failed read
-        // retries on the next sweep instead of abandoning a running agent.
-        const childShell = yield* orchestrator
-          .getThreadShell(current.childThreadId)
-          .pipe(Effect.orElseSucceed(() => undefined));
-        if (childShell !== null) return;
-      }
-      if (Option.isNone(child) || child.value.thread.deletedAt !== null) {
-        return yield* finish({
-          childOutcome: "interrupted",
-          tokens: 0,
-          workspaceChanged: yield* workspaceChanged(thread, goal, current.baselineRef),
-          resumeAt: null,
-        });
-      }
-      const records = child.value;
+  ) {
+    const current = goal.current!;
+    const child = yield* orchestrator
+      .getThreadRecords(
+        current.childThreadId,
+        [
+          "runs",
+          "messages",
+          "subagents",
+          "providerThreads",
+          "providerTurns",
+          "runtimeRequests",
+          "turnItems",
+        ],
+        { turnItemTypes: ["user_input_request", "run_interrupt_request"] },
+      )
+      .pipe(Effect.option);
+    // Finished iterations are named for what they did, from their last note.
+    const lastNote = goal.progressNotes.findLast((note) => note.iteration === current.iteration);
+    const finish = (
+      step: Omit<Extract<OrchestrationV2GoalAdvanceStep, { type: "iteration_finished" }>, "type">,
+    ) =>
+      advance(thread, goal, "finished", { type: "iteration_finished", ...step }).pipe(
+        Effect.andThen(
+          lastNote === undefined
+            ? Effect.void
+            : dispatch({
+                type: "thread.metadata.update",
+                commandId: commandId(thread, `${goal.iteration}:retitle`),
+                threadId: current.childThreadId,
+                title: goalIterationTitle(current.iteration, lastNote.text),
+              }),
+        ),
+        Effect.andThen(
+          dispatch({
+            type: "thread.settle",
+            commandId: commandId(thread, `${goal.iteration}:settle-child`),
+            threadId: current.childThreadId,
+          }),
+        ),
+      );
+    if (Option.isNone(child)) {
+      // Only a child that is really gone ends the iteration; a failed read
+      // retries on the next sweep instead of abandoning a running agent.
+      const childShell = yield* orchestrator
+        .getThreadShell(current.childThreadId)
+        .pipe(Effect.orElseSucceed(() => undefined));
+      if (childShell !== null) return;
+    }
+    if (Option.isNone(child) || child.value.thread.deletedAt !== null) {
+      return yield* finish({
+        childOutcome: "interrupted",
+        tokens: 0,
+        workspaceChanged: yield* workspaceChanged(thread, goal, current.baselineRef),
+        resumeAt: null,
+      });
+    }
+    const records = child.value;
 
-      const pending = records.runtimeRequests.find((request) => request.status === "pending");
-      if (pending !== undefined && current.waitingOnRequest?.requestId !== pending.id) {
-        yield* advance(thread, goal, `waiting:${pending.id}`, {
-          type: "child_waiting",
-          requestId: pending.id,
-          kind: pending.kind,
-        });
-      } else if (pending === undefined && current.waitingOnRequest !== null) {
-        yield* advance(thread, goal, `resumed:${current.waitingOnRequest.requestId}`, {
-          type: "child_resumed",
-        });
-      }
+    const pending = records.runtimeRequests.find((request) => request.status === "pending");
+    if (pending !== undefined && current.waitingOnRequest?.requestId !== pending.id) {
+      yield* advance(thread, goal, `waiting:${pending.id}`, {
+        type: "child_waiting",
+        requestId: pending.id,
+        kind: pending.kind,
+      });
+    } else if (pending === undefined && current.waitingOnRequest !== null) {
+      yield* advance(thread, goal, `resumed:${current.waitingOnRequest.requestId}`, {
+        type: "child_resumed",
+      });
+    }
 
-      const progress = delegatedTaskProgress(records);
-      const stillWorking =
-        progress.state !== "result_available" ||
-        records.runs.some((run) => run.status === "queued" && run.queueHeld !== true);
-      const interrupting = goal.status === "stopped" || current.timedOutAt != null;
-      if (stillWorking) {
-        const liveRuns = records.runs.filter(isLiveRun);
-        if (interrupting) {
-          if (
-            records.runs.some(
-              (run) =>
-                isLiveRun(run) ||
-                run.status === "waiting" ||
-                (run.status === "queued" && run.queueHeld !== true),
-            )
-          ) {
-            yield* dispatch({
-              type: "thread.stop",
-              commandId: commandId(thread, `${goal.iteration}:stop-child`),
-              threadId: current.childThreadId,
-              reason:
-                current.timedOutAt != null
-                  ? "This goal iteration reached its time limit."
-                  : "Goal loop stopped this iteration.",
-            });
-            return;
+    const progress = delegatedTaskProgress(records);
+    const stillWorking =
+      progress.state !== "result_available" ||
+      records.runs.some((run) => run.status === "queued" && run.queueHeld !== true);
+    const interrupting = goal.status === "stopped" || current.timedOutAt != null;
+    if (stillWorking) {
+      const liveRuns = records.runs.filter(isLiveRun);
+      if (interrupting) {
+        if (
+          records.runs.some(
+            (run) =>
+              isLiveRun(run) ||
+              run.status === "waiting" ||
+              (run.status === "queued" && run.queueHeld !== true),
+          )
+        ) {
+          yield* dispatch({
+            type: "thread.stop",
+            commandId: commandId(thread, `${goal.iteration}:stop-child`),
+            threadId: current.childThreadId,
+            reason:
+              current.timedOutAt != null
+                ? "This goal iteration reached its time limit."
+                : "Goal loop stopped this iteration.",
+          });
+          return;
+        }
+        // Nothing left to interrupt (only background work remains): close
+        // the iteration now rather than waiting on work nobody wants.
+      } else {
+        const pendingMessages = current.pendingMessages ?? [];
+        if (pendingMessages.length > 0) {
+          yield* dispatch({
+            type: "message.dispatch",
+            commandId: commandId(thread, `${goal.iteration}:user-message`),
+            messageId: MessageId.make(
+              `goal-message:${current.childThreadId}:${bootId}-${dispatchSequence}`,
+            ),
+            threadId: current.childThreadId,
+            text: pendingMessages.map((message) => message.text).join("\n\n"),
+            attachments: [],
+            deliveryIntent: "auto",
+            dispatchMode: { type: "start_immediately" },
+            createdBy: "user",
+            creationSource: "server",
+          });
+          yield* advance(thread, goal, "messages-delivered", {
+            type: "messages_delivered",
+            count: pendingMessages.length,
+          });
+        }
+        if (goal.status === "active") {
+          const elapsedMs = nowMs - Date.parse(current.startedAt);
+          const deadlines = iterationDeadlines(goalIterationTimeoutMins(goal));
+          if (elapsedMs > deadlines.timeoutMs) {
+            return yield* advance(thread, goal, "timed-out", { type: "timed_out" });
           }
-          // Nothing left to interrupt (only background work remains): close
-          // the iteration now rather than waiting on work nobody wants.
-        } else {
-          const pendingMessages = current.pendingMessages ?? [];
-          if (pendingMessages.length > 0) {
+          // Only a live turn can take the nudge; with no turn running it
+          // would start a fresh one.
+          if (
+            elapsedMs > deadlines.wrapUpMs &&
+            current.wrapUpSentAt == null &&
+            liveRuns.length > 0
+          ) {
+            const minutesLeft = Math.max(1, Math.round((deadlines.timeoutMs - elapsedMs) / 60_000));
+            // Steering only: queued behind the turn it would start a new one.
             yield* dispatch({
               type: "message.dispatch",
-              commandId: commandId(thread, `${goal.iteration}:user-message`),
+              commandId: commandId(thread, `${goal.iteration}:wrap-up`),
               messageId: MessageId.make(
-                `goal-message:${current.childThreadId}:${bootId}-${dispatchSequence}`,
+                `goal-wrap-up:${current.childThreadId}:${bootId}-${dispatchSequence}`,
               ),
               threadId: current.childThreadId,
-              text: pendingMessages.map((message) => message.text).join("\n\n"),
+              text: `Time check from T3 Code: this goal iteration will be stopped in about ${minutesLeft} minutes. Finish or checkpoint the current step, rewrite the handoff file, call t3_goal_update with a short note, and end your turn. The next iteration continues from there.`,
               attachments: [],
-              deliveryIntent: "auto",
+              deliveryIntent: "steer",
               dispatchMode: { type: "start_immediately" },
-              createdBy: "user",
+              createdBy: "agent",
               creationSource: "server",
             });
-            yield* advance(thread, goal, "messages-delivered", {
-              type: "messages_delivered",
-              count: pendingMessages.length,
-            });
+            yield* advance(thread, goal, "wrap-up-sent", { type: "wrap_up_sent" });
           }
-          if (goal.status === "active") {
-            const elapsedMs = nowMs - Date.parse(current.startedAt);
-            const deadlines = iterationDeadlines(goalIterationTimeoutMins(goal));
-            if (elapsedMs > deadlines.timeoutMs) {
-              return yield* advance(thread, goal, "timed-out", { type: "timed_out" });
-            }
-            // Only a live turn can take the nudge; with no turn running it
-            // would start a fresh one.
-            if (
-              elapsedMs > deadlines.wrapUpMs &&
-              current.wrapUpSentAt == null &&
-              liveRuns.length > 0
-            ) {
-              const minutesLeft = Math.max(
-                1,
-                Math.round((deadlines.timeoutMs - elapsedMs) / 60_000),
-              );
-              // Steering only: queued behind the turn it would start a new one.
-              yield* dispatch({
-                type: "message.dispatch",
-                commandId: commandId(thread, `${goal.iteration}:wrap-up`),
-                messageId: MessageId.make(
-                  `goal-wrap-up:${current.childThreadId}:${bootId}-${dispatchSequence}`,
-                ),
-                threadId: current.childThreadId,
-                text: `Time check from T3 Code: this goal iteration will be stopped in about ${minutesLeft} minutes. Finish or checkpoint the current step, rewrite the handoff file, call t3_goal_update with a short note, and end your turn. The next iteration continues from there.`,
-                attachments: [],
-                deliveryIntent: "steer",
-                dispatchMode: { type: "start_immediately" },
-                createdBy: "agent",
-                creationSource: "server",
-              });
-              yield* advance(thread, goal, "wrap-up-sent", { type: "wrap_up_sent" });
-            }
-          }
-          return;
-        }
-      }
-
-      // With "continue threads after a server update" on, a restart resumes the
-      // cut turn in this same thread, so the iteration is not over yet.
-      if (progress.resultRun?.status === "cancelled") {
-        const continuation = yield* outbox.get(
-          `effect:restart-continuation:${progress.resultRun.id}`,
-        );
-        if (
-          Option.isSome(continuation) &&
-          (continuation.value.status === "pending" || continuation.value.status === "running")
-        ) {
-          return;
-        }
-      }
-
-      if (!interrupting && (yield* continueInPlace(thread, goal, records, progress, nowMs))) return;
-
-      const shell = yield* orchestrator
-        .getThreadShell(current.childThreadId)
-        .pipe(Effect.orElseSucceed(() => null));
-      const ended = childOutcome(progress.resultRun, shell);
-      // A Stop the restart cut off before it landed is still the user's Stop.
-      const outcome =
-        ended.outcome === "restarted" &&
-        records.turnItems.some(
-          (item) => item.type === "run_interrupt_request" && item.runId === progress.resultRun?.id,
-        )
-          ? "interrupted"
-          : ended.outcome;
-      const usage = childIterationTokens(records.providerTurns);
-      // Without a future reset time, back off rather than relaunching a child
-      // that will hit the same limit on the next sweep.
-      const resumeAt =
-        outcome !== "usage_limited"
-          ? null
-          : ended.resumeAt !== null && Date.parse(ended.resumeAt) > nowMs
-            ? ended.resumeAt
-            : DateTime.formatIso(DateTime.makeUnsafe(nowMs + USAGE_LIMIT_FALLBACK_BACKOFF_MS));
-      yield* finish({
-        childOutcome: outcome,
-        tokens: usage.tokens,
-        uncachedTokens: usage.uncachedTokens,
-        workspaceChanged: yield* workspaceChanged(thread, goal, current.baselineRef),
-        resumeAt,
-        userAnswers: childUserAnswers(records.turnItems),
-      });
-    });
-
-  const reconcile = (thread: OrchestrationV2AppThread, nowMs: number) =>
-    Effect.gen(function* () {
-      const goal = thread.goal;
-      if (goal == null) return;
-      if ((thread.archivedAt !== null || thread.deletedAt !== null) && isLiveGoal(goal)) {
-        return yield* advance(thread, goal, "stopped:parent", {
-          type: "stopped",
-          reason: "parent_unavailable",
-        });
-      }
-      if (goal.current !== null) return yield* reconcileRunning(thread, goal, nowMs);
-      if (goal.status === "usageLimited") {
-        if (goal.resumeAt === null || Date.parse(goal.resumeAt) <= nowMs) {
-          yield* advance(thread, goal, `resumed:limit:${goal.resumeAt ?? "now"}`, {
-            type: "resumed",
-          });
         }
         return;
       }
-      if (goal.status === "active") yield* startIteration(thread, goal);
+    }
+
+    // With "continue threads after a server update" on, a restart resumes the
+    // cut turn in this same thread, so the iteration is not over yet.
+    if (progress.resultRun?.status === "cancelled") {
+      const continuation = yield* outbox.get(
+        `effect:restart-continuation:${progress.resultRun.id}`,
+      );
+      if (
+        Option.isSome(continuation) &&
+        (continuation.value.status === "pending" || continuation.value.status === "running")
+      ) {
+        return;
+      }
+    }
+
+    if (!interrupting && (yield* continueInPlace(thread, goal, records, progress, nowMs))) return;
+
+    const shell = yield* orchestrator
+      .getThreadShell(current.childThreadId)
+      .pipe(Effect.orElseSucceed(() => null));
+    const ended = childOutcome(progress.resultRun, shell);
+    // A Stop the restart cut off before it landed is still the user's Stop.
+    const outcome =
+      ended.outcome === "restarted" &&
+      records.turnItems.some(
+        (item) => item.type === "run_interrupt_request" && item.runId === progress.resultRun?.id,
+      )
+        ? "interrupted"
+        : ended.outcome;
+    const usage = childIterationTokens(records.providerTurns);
+    // Without a future reset time, back off rather than relaunching a child
+    // that will hit the same limit on the next sweep.
+    const resumeAt =
+      outcome !== "usage_limited"
+        ? null
+        : ended.resumeAt !== null && Date.parse(ended.resumeAt) > nowMs
+          ? ended.resumeAt
+          : DateTime.formatIso(DateTime.makeUnsafe(nowMs + USAGE_LIMIT_FALLBACK_BACKOFF_MS));
+    yield* finish({
+      childOutcome: outcome,
+      tokens: usage.tokens,
+      uncachedTokens: usage.uncachedTokens,
+      workspaceChanged: yield* workspaceChanged(thread, goal, current.baselineRef),
+      resumeAt,
+      userAnswers: childUserAnswers(records.turnItems),
     });
+  });
+
+  const reconcile = Effect.fn("GoalLoopWorker.reconcile")(function* (
+    thread: OrchestrationV2AppThread,
+    nowMs: number,
+  ) {
+    const goal = thread.goal;
+    if (goal == null) return;
+    if ((thread.archivedAt !== null || thread.deletedAt !== null) && isLiveGoal(goal)) {
+      return yield* advance(thread, goal, "stopped:parent", {
+        type: "stopped",
+        reason: "parent_unavailable",
+      });
+    }
+    if (goal.current !== null) return yield* reconcileRunning(thread, goal, nowMs);
+    if (goal.status === "usageLimited") {
+      if (goal.resumeAt === null || Date.parse(goal.resumeAt) <= nowMs) {
+        yield* advance(thread, goal, `resumed:limit:${goal.resumeAt ?? "now"}`, {
+          type: "resumed",
+        });
+      }
+      return;
+    }
+    if (goal.status === "active") yield* startIteration(thread, goal);
+  });
 
   const sweep = Effect.fn("GoalLoopWorker.sweep")(function* () {
     const threads = yield* projections.getGoalThreads();

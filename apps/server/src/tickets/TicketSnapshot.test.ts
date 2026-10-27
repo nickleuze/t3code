@@ -106,7 +106,7 @@ it("renders frontmatter, description, ordered entries and links", () => {
       "",
       "## Links",
       "",
-      "- pr: https://github.com/nickleuze/lighting-director/pull/31 — Inverse-square falloff (work)",
+      "- pr: https://github.com/nickleuze/lighting-director/pull/31: Inverse-square falloff (work)",
       "",
     ].join("\n"),
   );

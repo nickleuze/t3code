@@ -20,7 +20,7 @@ const Recorded = Schema.Struct({ iteration: Schema.Number, recorded: Schema.Bool
 const GoalUpdateTool = Tool.make("t3_goal_update", {
   ...shared,
   description:
-    "Record a short progress note for the /t3-goal iteration this thread is running: one or two sentences on what changed. Detailed state belongs in the goal's handoff file; pass handoffPath (relative to the workspace) when you create or move it. Only works inside a goal iteration thread.",
+    "Record a one- or two-sentence progress note for this /t3-goal iteration. Details go in the handoff file; pass `handoffPath` (workspace-relative) when you create or move it. Goal iteration threads only.",
   parameters: Schema.Struct({
     note: Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(2_000)),
     handoffPath: Schema.optional(
@@ -35,7 +35,7 @@ const GoalUpdateTool = Tool.make("t3_goal_update", {
 const GoalCompleteTool = Tool.make("t3_goal_complete", {
   ...shared,
   description:
-    'End the /t3-goal loop from inside a goal iteration. Use status "complete" when the whole goal is achieved. Use status "blocked" only when work cannot continue for a long time, and say what you need; for a quick decision, ask the user with your question tool instead. Your turn should end soon after calling this.',
+    'End this /t3-goal loop from its iteration. "complete": the whole goal is achieved. "blocked": work cannot continue for a long time; say what you need. For a quick decision, ask the user instead. End your turn soon after.',
   parameters: Schema.Struct({
     status: Schema.Literals(["complete", "blocked"]),
     summary: Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(2_000)),
@@ -49,12 +49,8 @@ const text = (max: number) => Schema.String.check(Schema.isMinLength(1), Schema.
 
 const GoalProposeTool = Tool.make("t3_goal_propose", {
   ...shared,
-  description: [
-    "Propose a /t3-goal for this thread: a long-running loop in which T3 Code runs fresh agent iterations, each starting from the goal, its progress notes and a handoff file, until the goal is done. Nothing runs until the user clicks Start on the proposal card, so propose freely when it fits.",
-    "Call it when the user asks to make something a goal or to keep working on it over a long stretch, and on your own when the task clearly needs more than one session: many dependent steps, long build or CI cycles, broad migrations or refactors, or iterating until a test suite passes. Do not propose for work you can finish in this turn.",
-    "Infer every field from the conversation and the workspace instead of asking the user. Write background for a fresh agent that has not seen this conversation: decisions, constraints, relevant files and the plan. Only list preApprovedActions the user already approved here, such as committing or pushing to a branch; never invent permissions.",
-    "After proposing, tell the user in one short sentence that the goal is ready to start, and end your turn without starting the work yourself.",
-  ].join(" "),
+  description:
+    "Propose a /t3-goal: T3 Code runs fresh iterations from the goal, its notes and a handoff file until it is done. Nothing runs until the user clicks Start. Use it when asked for a goal or long-running work, or on your own when the task clearly needs more than one session (many dependent steps, long CI cycles, broad migrations, iterating until tests pass), never for work you can finish this turn. Infer every field; do not ask. Write `background` for a fresh agent: decisions, constraints, files, plan. List only `preApprovedActions` the user approved here. Then say in one sentence it is ready to start, and end your turn.",
   parameters: Schema.Struct({
     objective: text(500),
     doneWhen: text(1_000),

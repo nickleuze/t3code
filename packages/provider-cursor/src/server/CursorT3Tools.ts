@@ -1,11 +1,7 @@
 /**
- * T3's MCP tools as Cursor SDK custom tools.
- *
- * Local Cursor runs fail MCP server calls closed whenever the sandbox or
- * Auto-review is on, because the SDK has no approval callback for them. SDK
- * custom tools are in-process callbacks that never need approval, so each
- * T3 tool is registered as one that forwards to the thread's authenticated
- * MCP endpoint. T3's server still applies its own capability checks.
+ * T3's MCP tools as Cursor SDK custom tools. Local Cursor runs fail MCP calls
+ * closed under the sandbox or Auto-review; in-process custom tools need no
+ * approval and forward to the thread's authenticated MCP endpoint.
  */
 import type {
   SDKCustomTool,
@@ -87,29 +83,30 @@ function toDescriptor(value: unknown): T3McpToolDescriptor | undefined {
 }
 
 /** Lists every tool the thread's MCP credential can see. */
-export const listT3McpTools = (options: McpHttpSessionOptions) =>
-  Effect.gen(function* () {
-    const session = yield* openSession(options);
-    const tools: Array<T3McpToolDescriptor> = [];
-    let cursor: string | undefined;
-    const seen = new Set<string>();
-    do {
-      const page = record(
-        yield* session.request("tools/list", cursor === undefined ? {} : { cursor }),
-      );
-      for (const entry of Array.isArray(page?.tools) ? page.tools : []) {
-        const descriptor = toDescriptor(entry);
-        if (descriptor !== undefined) tools.push(descriptor);
-      }
-      cursor = typeof page?.nextCursor === "string" ? page.nextCursor : undefined;
-      if (cursor !== undefined) {
-        if (seen.has(cursor))
-          return yield* new CursorT3ToolsError({ cause: new Error("Repeated MCP cursor.") });
-        seen.add(cursor);
-      }
-    } while (cursor !== undefined);
-    return tools;
-  });
+export const listT3McpTools = Effect.fn("listT3McpTools")(function* (
+  options: McpHttpSessionOptions,
+) {
+  const session = yield* openSession(options);
+  const tools: Array<T3McpToolDescriptor> = [];
+  let cursor: string | undefined;
+  const seen = new Set<string>();
+  do {
+    const page = record(
+      yield* session.request("tools/list", cursor === undefined ? {} : { cursor }),
+    );
+    for (const entry of Array.isArray(page?.tools) ? page.tools : []) {
+      const descriptor = toDescriptor(entry);
+      if (descriptor !== undefined) tools.push(descriptor);
+    }
+    cursor = typeof page?.nextCursor === "string" ? page.nextCursor : undefined;
+    if (cursor !== undefined) {
+      if (seen.has(cursor))
+        return yield* new CursorT3ToolsError({ cause: new Error("Repeated MCP cursor.") });
+      seen.add(cursor);
+    }
+  } while (cursor !== undefined);
+  return tools;
+});
 
 function toContent(value: unknown): SDKCustomToolContent {
   const item = record(value);
@@ -150,8 +147,8 @@ export function makeCursorT3CustomTools(
 ) {
   const pending = new Set<AbortController>();
   let closed = false;
-  const call = (name: string, args: Record<string, SDKJsonValue>) =>
-    Effect.gen(function* () {
+  const call = Effect.fn("CursorT3Tools.call")(
+    function* (name: string, args: Record<string, SDKJsonValue>) {
       const options = yield* connection;
       if (closed || options === undefined) {
         return toCustomToolResult({
@@ -163,16 +160,16 @@ export function makeCursorT3CustomTools(
       }
       const session = yield* openSession(options);
       return toCustomToolResult(yield* session.request("tools/call", { name, arguments: args }));
-    }).pipe(
-      Effect.catch((error) =>
-        Effect.succeed(
-          toCustomToolResult({
-            isError: true,
-            content: [{ type: "text", text: error.message }],
-          }),
-        ),
+    },
+    Effect.catch((error) =>
+      Effect.succeed(
+        toCustomToolResult({
+          isError: true,
+          content: [{ type: "text", text: error.message }],
+        }),
       ),
-    );
+    ),
+  );
   const customTools = Object.fromEntries(
     tools.map((tool) => [
       tool.name,

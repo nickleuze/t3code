@@ -99,8 +99,8 @@ const make = Effect.gen(function* () {
       }),
     );
 
-  const guard: RunAdmissionGateShape["guard"] = (events) =>
-    Effect.gen(function* () {
+  const guard: RunAdmissionGateShape["guard"] = Effect.fn("RunAdmissionGate.guard")(
+    function* (events) {
       const reason = yield* Ref.get(closed);
       if (reason === undefined) return;
       const admits = events.some(
@@ -109,7 +109,8 @@ const make = Effect.gen(function* () {
           BLOCKING_RUN_STATUSES.includes(event.payload.status),
       );
       if (admits) return yield* new RunAdmissionClosedError({ reason });
-    });
+    },
+  );
 
   return RunAdmissionGate.of({
     closeWhenIdle,

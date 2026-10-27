@@ -1,14 +1,7 @@
 /**
- * Nightly Markdown snapshot of every Ticket into the backlog repo, so the
- * backlog stays readable without T3 (ADR 0002).
- *
- * Writes `snapshot/<projectKey>/<suffix>.md` (Ideas without a key go to
- * `snapshot/_inbox/<ULID>.md`). Output is a pure function of the ticket
- * events (plus the Project's README `area`), so unchanged Tickets produce no
- * diff. Files of deleted Tickets are removed. The commit goes through the
- * backlog clone that TicketSyncService owns.
- *
- * @module TicketSnapshot
+ * Nightly Markdown snapshot of every ticket into the backlog repo (ADR 0002), as
+ * `snapshot/<projectKey>/<suffix>.md` or `snapshot/_inbox/<ULID>.md`. Output is a
+ * pure function of ticket events, so unchanged tickets make no diff.
  */
 import type { Ticket, TicketError, TicketEvent } from "@t3tools/contracts";
 import * as Context from "effect/Context";
@@ -70,7 +63,7 @@ export function renderTicket({ ticket, events, area }: SnapshotTicket): string {
     ...new Set(
       (projectTicket(events)?.references ?? []).map(
         (link) =>
-          `- ${link.kind}: ${link.ref}${link.title?.trim() ? ` — ${link.title.trim()}` : ""} (${link.role})`,
+          `- ${link.kind}: ${link.ref}${link.title?.trim() ? `: ${link.title.trim()}` : ""} (${link.role})`,
       ),
     ),
   ].sort();
@@ -155,27 +148,26 @@ export const make = Effect.gen(function* () {
 });
 
 /** Checks hourly and snapshots once per local day while the backlog repo is configured. */
-const nightly = (
+const nightly = Effect.fn("nightly")(function* (
   snapshot: TicketSnapshot["Service"],
   sync: TicketSync.TicketSyncService["Service"],
-) =>
-  Effect.gen(function* () {
-    let lastDay: string | null = null;
-    yield* Effect.sleep("5 minutes");
-    while (true) {
-      const day = localDay(yield* DateTime.now);
-      const configured = yield* sync.status.pipe(
-        Effect.map((status) => status.configured),
-        Effect.orElseSucceed(() => false),
-      );
-      if (day !== lastDay && configured) {
-        const result = yield* Effect.result(snapshot.run);
-        if (result._tag === "Success") lastDay = day;
-        else yield* Effect.logWarning("tickets.snapshot.failed", { cause: result.failure });
-      }
-      yield* Effect.sleep("1 hour");
+) {
+  let lastDay: string | null = null;
+  yield* Effect.sleep("5 minutes");
+  while (true) {
+    const day = localDay(yield* DateTime.now);
+    const configured = yield* sync.status.pipe(
+      Effect.map((status) => status.configured),
+      Effect.orElseSucceed(() => false),
+    );
+    if (day !== lastDay && configured) {
+      const result = yield* Effect.result(snapshot.run);
+      if (result._tag === "Success") lastDay = day;
+      else yield* Effect.logWarning("tickets.snapshot.failed", { cause: result.failure });
     }
-  });
+    yield* Effect.sleep("1 hour");
+  }
+});
 
 export const layer = Layer.effect(
   TicketSnapshot,

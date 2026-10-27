@@ -69,7 +69,7 @@ const make = Effect.gen(function* () {
       .dispatch({
         type: "thread.goal.report",
         commandId: CommandId.make(
-          `goal-report:${caller.id}:${yield* crypto.randomUUIDv4.pipe(Effect.orDie)}`,
+          `goal-report:${caller.id}:${yield* crypto.randomUUIDv4().pipe(Effect.orDie)}`,
         ),
         threadId: marker.parentThreadId,
         goalId: marker.goalId,
@@ -96,7 +96,7 @@ const make = Effect.gen(function* () {
         ...input,
         type: "thread.goal.propose",
         commandId: CommandId.make(
-          `goal-propose:${threadId}:${yield* crypto.randomUUIDv4.pipe(Effect.orDie)}`,
+          `goal-propose:${threadId}:${yield* crypto.randomUUIDv4().pipe(Effect.orDie)}`,
         ),
         threadId,
         objective,

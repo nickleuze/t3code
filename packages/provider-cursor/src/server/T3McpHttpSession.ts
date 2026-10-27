@@ -47,39 +47,38 @@ export function openMcpHttpSession<E>(
     let sessionId: string | null = null;
     let protocolVersion: string | null = null;
 
-    const send = (message: unknown): Effect.Effect<ReadonlyArray<unknown>, E> =>
-      Effect.gen(function* () {
-        const response = yield* Effect.tryPromise({
-          try: (signal) =>
-            fetchImplementation(options.endpoint, {
-              method: "POST",
-              signal,
-              headers: {
-                "content-type": "application/json",
-                accept: "application/json, text/event-stream",
-                authorization: options.authorization,
-                ...(sessionId === null ? {} : { "mcp-session-id": sessionId }),
-                ...(protocolVersion === null ? {} : { "mcp-protocol-version": protocolVersion }),
-              },
-              body: JSON.stringify(message),
-            }),
-          catch: onError,
-        });
-        sessionId = response.headers.get("mcp-session-id") ?? sessionId;
-        if (!response.ok) {
-          yield* discardResponseBody(response);
-          return yield* Effect.fail(
-            onError(new Error(`T3 Code MCP endpoint responded with HTTP ${response.status}.`)),
-          );
-        }
-        const payloads = yield* Stream.runCollect(responsePayloads(response, onError)).pipe(
-          Effect.ensuring(discardResponseBody(response)),
-        );
-        for (const payload of payloads) {
-          protocolVersion = protocolVersionOf(payload) ?? protocolVersion;
-        }
-        return payloads;
+    const send = Effect.fn("T3McpHttpSession.send")(function* (message: unknown) {
+      const response = yield* Effect.tryPromise({
+        try: (signal) =>
+          fetchImplementation(options.endpoint, {
+            method: "POST",
+            signal,
+            headers: {
+              "content-type": "application/json",
+              accept: "application/json, text/event-stream",
+              authorization: options.authorization,
+              ...(sessionId === null ? {} : { "mcp-session-id": sessionId }),
+              ...(protocolVersion === null ? {} : { "mcp-protocol-version": protocolVersion }),
+            },
+            body: JSON.stringify(message),
+          }),
+        catch: onError,
       });
+      sessionId = response.headers.get("mcp-session-id") ?? sessionId;
+      if (!response.ok) {
+        yield* discardResponseBody(response);
+        return yield* Effect.fail(
+          onError(new Error(`T3 Code MCP endpoint responded with HTTP ${response.status}.`)),
+        );
+      }
+      const payloads = yield* Stream.runCollect(responsePayloads(response, onError)).pipe(
+        Effect.ensuring(discardResponseBody(response)),
+      );
+      for (const payload of payloads) {
+        protocolVersion = protocolVersionOf(payload) ?? protocolVersion;
+      }
+      return payloads;
+    });
 
     const initializeId = "t3-cursor-initialize";
     const initialized = yield* send({
@@ -101,8 +100,8 @@ export function openMcpHttpSession<E>(
     yield* send({ jsonrpc: "2.0", method: "notifications/initialized" });
 
     let nextId = 0;
-    const request: McpHttpSession<E>["request"] = (method, params) =>
-      Effect.gen(function* () {
+    const request: McpHttpSession<E>["request"] = Effect.fn("T3McpHttpSession.request")(
+      function* (method, params) {
         const id = `t3-mcp-request-${++nextId}`;
         const responses = yield* send({ jsonrpc: "2.0", id, method, params });
         const envelope = asEnvelope(responses.find((entry) => asEnvelope(entry)?.id === id));
@@ -110,7 +109,8 @@ export function openMcpHttpSession<E>(
           return yield* Effect.fail(onError(new Error(`T3 Code MCP ${method} failed.`)));
         }
         return envelope.result;
-      });
+      },
+    );
     return { request };
   });
 }

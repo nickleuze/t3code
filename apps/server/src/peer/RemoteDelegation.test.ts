@@ -50,6 +50,7 @@ import * as ProviderReplayHarness from "../orchestration-v2/testkit/ProviderRepl
 import * as SqlitePersistence from "../persistence/Sqlite.ts";
 import * as ManagedProjectFolders from "../project/ManagedProjectFolders.ts";
 import * as ProjectService from "../project/ProjectService.ts";
+import * as ProjectLaunchDefaults from "../project/ProjectLaunchDefaults.ts";
 import * as RepositoryIdentityResolver from "../project/RepositoryIdentityResolver.ts";
 import * as ProviderRegistry from "../provider/ProviderRegistry.ts";
 import * as ScheduledTaskService from "../scheduledTasks/ScheduledTaskService.ts";
@@ -63,6 +64,17 @@ import * as PeerLinks from "./PeerLinks.ts";
 import { descriptorOf, layerLinkingEnvironment, linkTo, servePeer } from "./PeerLinks.testkit.ts";
 import * as RemoteDelegation from "./RemoteDelegation.ts";
 import * as PeerLinkRequests from "./PeerLinkRequests.ts";
+
+// Fork: t3_thread_launch resolves missing launch defaults through ProjectLaunchDefaults.
+const layerProjectLaunchDefaults = Layer.mock(ProjectLaunchDefaults.ProjectLaunchDefaults)({
+  resolve: (project) =>
+    Effect.succeed({
+      modelSelection: project.defaultModelSelection,
+      runtimeMode: "full-access" as const,
+      envMode: "worktree" as const,
+    }),
+  runtimeMode: (mode) => Effect.succeed(mode),
+});
 
 // The laptop's agent delegates a task to the box through a link. The box is
 // its real /mcp behind real OAuth, with one thread the test finishes; the
@@ -496,6 +508,7 @@ const boxToolkitLayer = (thread: BoxThread) => {
       }),
     ),
     Layer.provide(Layer.mock(SecretRequests.SecretRequests)({})),
+    Layer.provide(layerProjectLaunchDefaults),
     Layer.provide(ServerSettings.layerTest()),
     Layer.provide(NodeServices.layer),
   );
@@ -595,6 +608,7 @@ const makeLaptop = (
       Layer.provide(Layer.mock(ScheduledTaskService.ScheduledTaskService)({})),
       Layer.provide(Layer.mock(ProjectService.ProjectService)({})),
       Layer.provide(Layer.mock(SecretRequests.SecretRequests)({})),
+      Layer.provide(layerProjectLaunchDefaults),
       Layer.provide(Layer.mock(ThreadLaunch.ThreadLaunchService)({})),
       Layer.provide(Layer.mock(GitVcsDriver.GitVcsDriver)({})),
       Layer.fresh,

@@ -97,6 +97,7 @@ const makeTestLayer = <E, R>(database: Layer.Layer<SqlClient.SqlClient, E, R>) =
             repositoryIdentityResolved: false,
           }),
         request: () => Effect.void,
+        readRepositoryIdentity: () => Effect.succeed(null),
         getAvailable: () =>
           Effect.succeed({
             repositoryIdentity: null,

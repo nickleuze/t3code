@@ -2,12 +2,14 @@ import * as NodeServices from "@effect/platform-node/NodeServices";
 import { expect, it } from "@effect/vitest";
 import { ProviderInstanceId } from "@t3tools/contracts";
 import { McpProviderSessions } from "@t3tools/provider-core/server/McpProviderSessions";
+import { T3_CODE_ORCHESTRATION_INSTRUCTIONS } from "@t3tools/provider-core/server/orchestrationInstructions";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import { McpServer } from "effect/ai";
 
 import { ServerSecretStore } from "../auth/ServerSecretStore.ts";
 import { ServerConfig } from "../config.ts";
+import { HostDeployment } from "../deploy/HostDeployment.ts";
 import { DeviceService } from "../device/DeviceService.ts";
 import { ServerEnvironment } from "../environment/ServerEnvironment.ts";
 import { GitWorkflowService } from "../git/GitWorkflowService.ts";
@@ -18,6 +20,8 @@ import {
   makeClaudeQueryOptions,
 } from "../orchestration-v2/Adapters/ClaudeAdapterV2.ts";
 import { OrchestratorV2 } from "../orchestration-v2/Orchestrator.ts";
+import { ProjectionStoreV2 } from "../orchestration-v2/ProjectionStore.ts";
+import { ProjectStoreV2 } from "../orchestration-v2/ProjectStore.ts";
 import { ProviderAdapterRegistryV2 } from "../orchestration-v2/ProviderAdapterRegistry.ts";
 import { ThreadLaunchService } from "../orchestration-v2/ThreadLaunchService.ts";
 import { ThreadManagementService } from "../orchestration-v2/ThreadManagementService.ts";
@@ -29,12 +33,16 @@ import { RemoteDelegation } from "../peer/RemoteDelegation.ts";
 import { PreviewManager } from "../preview/Manager.ts";
 import { PreviewBrowser } from "../preview/PreviewBrowser.ts";
 import { ManagedProjectFolders } from "../project/ManagedProjectFolders.ts";
+import { ProjectLaunchDefaults } from "../project/ProjectLaunchDefaults.ts";
 import { ProjectService } from "../project/ProjectService.ts";
 import { ProjectSetupScriptRunner } from "../project/ProjectSetupScriptRunner.ts";
 import { PullRequestReviewGuideService } from "../pullRequest/PullRequestReviewGuideService.ts";
 import { ScheduledTaskService } from "../scheduledTasks/ScheduledTaskService.ts";
 import { SecretRequests } from "../secrets/SecretRequests.ts";
 import { ServerSettingsService } from "../serverSettings.ts";
+import { SkillLibrary } from "../skills/SkillLibrary.ts";
+import { TicketLaunchService } from "../tickets/TicketLaunchService.ts";
+import { TicketService } from "../tickets/TicketService.ts";
 import { SourceControlRepositoryService } from "../sourceControl/SourceControlRepositoryService.ts";
 import { GitVcsDriver } from "../vcs/GitVcsDriver.ts";
 import { VcsStatusBroadcaster } from "../vcs/VcsStatusBroadcaster.ts";
@@ -46,6 +54,13 @@ import budget from "./agentContextBudget.json" with { type: "json" };
 // Registration only stores tool definitions, so the handlers' services are never called.
 const toolHandlerServices = Layer.mergeAll(
   Layer.mock(DeviceService)({}),
+  Layer.mock(HostDeployment)({}),
+  Layer.mock(ProjectLaunchDefaults)({}),
+  Layer.mock(ProjectionStoreV2)({}),
+  Layer.mock(ProjectStoreV2)({}),
+  Layer.mock(SkillLibrary)({}),
+  Layer.mock(TicketLaunchService)({}),
+  Layer.mock(TicketService)({ author: () => ({ actor: "user", machine: "test" }) }),
   Layer.mock(DocumentText)({}),
   Layer.mock(GitVcsDriver)({}),
   Layer.mock(GitWorkflowService)({}),
@@ -76,6 +91,11 @@ const toolHandlerServices = Layer.mergeAll(
   Layer.mock(ThreadSearch)({}),
   Layer.mock(VcsStatusBroadcaster)({}),
 ).pipe(Layer.provideMerge(NodeServices.layer));
+
+const layerRegisteredTools = McpHttpServer.layerTools.pipe(
+  Layer.provideMerge(McpServer.McpServer.layer),
+  Layer.provide(toolHandlerServices),
+);
 
 const utf8Bytes = (text: string) => Buffer.byteLength(text, "utf8");
 
@@ -124,12 +144,24 @@ it.effect("agent context matches the committed budget", () =>
     };
 
     expect(measured).toEqual(budget);
-  }).pipe(
-    Effect.provide(
-      McpHttpServer.layerTools.pipe(
-        Layer.provideMerge(McpServer.McpServer.layer),
-        Layer.provide(toolHandlerServices),
+  }).pipe(Effect.provide(layerRegisteredTools)),
+);
+
+// Fork: Settings → Tools lists t3-code from T3_MCP_TOOLKITS without a session, and the
+// fork's instructions point agents at its goal, ticket and Tools tools by name.
+it.effect("T3_MCP_TOOLKITS and the fork instructions match the served tools", () =>
+  Effect.gen(function* () {
+    const mcp = yield* McpServer.McpServer;
+    const served = mcp.tools.map(({ tool }) => tool.name);
+    expect(
+      new Set(
+        McpHttpServer.T3_MCP_TOOLKITS.flatMap((toolkit) =>
+          Object.values(toolkit.tools).map((tool) => tool.name),
+        ),
       ),
-    ),
-  ),
+    ).toEqual(new Set(served));
+    const named = T3_CODE_ORCHESTRATION_INSTRUCTIONS.match(/\bt3_(?:goal|ticket)_[a-z_]+/g) ?? [];
+    expect(named.length).toBeGreaterThan(0);
+    for (const name of named) expect(served, name).toContain(name);
+  }).pipe(Effect.provide(layerRegisteredTools)),
 );

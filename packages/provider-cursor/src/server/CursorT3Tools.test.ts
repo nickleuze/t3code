@@ -114,6 +114,7 @@ describe("Cursor T3 custom tools", () => {
       );
       const closed = makeCursorT3CustomTools(
         [{ name: "orchestrator_capabilities" }],
+        // @effect-diagnostics-next-line effectSucceedWithVoid:off - The connection is an optional value, not void.
         Effect.succeed(undefined),
       );
 
