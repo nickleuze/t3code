@@ -46,7 +46,12 @@ const EDITS = [
   ["macOS runners", /runs-on: blacksmith-\d+vcpu-macos-\d+$/gm, "runs-on: macos-15"],
   // GitHub-hosted runners are slower than Blacksmith's.
   ["job timeouts", /^ {4}timeout-minutes: 10$/gm, "    timeout-minutes: 30"],
-  ["Blacksmith apt mirrors", /^ {6}- uses: \.\/\.github\/actions\/setup-apt-mirrors\n\n/gm, "", 2],
+  [
+    "Blacksmith apt mirrors",
+    /^ {6}- uses: \.\/\.github\/actions\/setup-apt-mirrors\n(?: {8}if: .*\n)?\n/gm,
+    "",
+    2,
+  ],
   ["Blacksmith apt mirror rewrite", /^.*\/etc\/apt\/blacksmith-ubuntu-mirrors\.txt.*\n/gm, "", 2],
   [
     "fork script tests",
@@ -57,12 +62,6 @@ const EDITS = [
       - name: Check
         run: vp check
 `,
-    1,
-  ],
-  [
-    "native mobile change detection",
-    /\^\\\.github\/workflows\/ci\\\.yml\$/g,
-    "^\\.github/workflows/(ci|fork-ci)\\.yml$",
     1,
   ],
 ];
