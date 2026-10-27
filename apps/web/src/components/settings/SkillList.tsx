@@ -2,7 +2,9 @@ import { ChevronDownIcon, ChevronRightIcon, PackageIcon } from "lucide-react";
 import { memo, useState, type MouseEvent } from "react";
 
 import { cn } from "../../lib/utils";
-import { GitHubIcon } from "../Icons";
+import { getSourceControlPresentationForKind } from "../../sourceControlPresentation";
+
+const GitHubIcon = getSourceControlPresentationForKind("github").Icon;
 import { Badge } from "../ui/badge";
 import { Switch } from "../ui/switch";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
@@ -22,7 +24,7 @@ import {
 
 /*
  * The Skills list: dense one-line rows grouped by section and by the source a
- * pack was installed from. Adapted from the skills list in #17513.
+ * pack was installed from.
  */
 
 /** Keeps a click on a control inside a clickable row from also opening the row. */

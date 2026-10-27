@@ -109,6 +109,8 @@ const thread = {
   hasPendingUserInput: false,
   session: null as { status: string } | null,
   latestTurn: { turnId: "turn", state: "running", completedAt: null as string | null },
+  t3Goal: null as Record<string, unknown> | null,
+  goalIteration: null as Record<string, unknown> | null,
 };
 let focused = false;
 let visibility = "visible";
@@ -133,6 +135,8 @@ function toV2ThreadShell(input: typeof thread) {
       parentThreadId: null,
       relationshipToParent: null,
     },
+    t3Goal: input.t3Goal,
+    goalIteration: input.goalIteration,
     forkedFrom: null,
     createdBy: "user",
     creationSource: "web",
@@ -259,4 +263,46 @@ it("holds a completion through a continuation gap and notifies once it settles",
   expect(TestNotification.sent).toEqual([]);
   await vi.advanceTimersByTimeAsync(1);
   expect(TestNotification.sent.map((sent) => sent.title)).toEqual(["Thread completed"]);
+});
+
+it("announces a goal's completion once on its owner and keeps its iterations silent", async () => {
+  await using app = setup();
+  app.start();
+  using _timers = fakeTimers();
+  const goal = (status: string) => ({
+    id: "goal-1",
+    objective: "Fix the login form",
+    status,
+    statusReason: null,
+    iteration: 1,
+    tokensUsed: 0,
+    needsInput: false,
+    currentChildThreadId: null,
+  });
+  const finished = {
+    turnId: "turn-1",
+    state: "completed",
+    completedAt: "2026-09-13T07:00:01.000Z",
+  };
+  const iteration = (state: string) => ({
+    id: "iteration",
+    goalIteration: { parentThreadId: "thread", goalId: "goal-1", iteration: 1 },
+    latestTurn: {
+      ...finished,
+      state,
+      completedAt: state === "completed" ? finished.completedAt : null,
+    },
+  });
+  state.shells.set("one", shell({ t3Goal: goal("active") }, iteration("running")));
+  // The owner's run and the iteration both finish while the goal works: no completion.
+  state.shells.set(
+    "one",
+    shell({ t3Goal: goal("active"), latestTurn: finished }, iteration("completed")),
+  );
+  await vi.advanceTimersByTimeAsync(WORKING_EXIT_GRACE_MS * 2);
+  expect(TestNotification.sent).toEqual([]);
+  state.shells.set("one", shell({ t3Goal: goal("complete"), latestTurn: finished }));
+  state.shells.set("one", shell({ t3Goal: goal("complete"), latestTurn: { ...finished } }));
+  await vi.advanceTimersByTimeAsync(WORKING_EXIT_GRACE_MS * 2);
+  expect(TestNotification.sent.map((sent) => sent.title)).toEqual(["Goal complete"]);
 });

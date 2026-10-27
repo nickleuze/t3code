@@ -62,6 +62,7 @@ export function useComposerMenuItems({
   pullRequestRepository,
   threadPullRequests,
   planModeUiEnabled,
+  goalCommandAvailable = false,
   compactSlashCommandAvailable,
   selectedProvider,
   selectedProviderSkills,
@@ -77,6 +78,8 @@ export function useComposerMenuItems({
   readonly pullRequestRepository: string | null;
   readonly threadPullRequests: ReadonlyArray<ThreadPullRequestLink> | undefined;
   readonly planModeUiEnabled: boolean;
+  /** Offers `/t3-goal` at the start of the prompt. */
+  readonly goalCommandAvailable?: boolean;
   readonly compactSlashCommandAvailable: boolean;
   readonly selectedProvider: ProviderDriverKind;
   readonly selectedProviderSkills: ServerProvider["skills"];
@@ -231,6 +234,17 @@ export function useComposerMenuItems({
                 description: "Switch this thread back to normal build mode",
               },
             ] as const)
+          : []),
+        ...(goalCommandAvailable && composerTrigger.rangeStart === 0
+          ? [
+              {
+                id: "slash:t3-goal",
+                type: "slash-command" as const,
+                command: "t3-goal" as const,
+                label: "/t3-goal",
+                description: "Draft a goal to start in fresh iterations",
+              },
+            ]
           : []),
       ] satisfies ReadonlyArray<Extract<ComposerCommandItem, { type: "slash-command" }>>;
       const slashMenuSkills = getProviderSkillsForSlashMenu(

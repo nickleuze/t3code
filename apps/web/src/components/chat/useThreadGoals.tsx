@@ -16,7 +16,7 @@ import {
   type ThreadId,
 } from "@t3tools/contracts";
 import { useNavigate } from "@tanstack/react-router";
-import { useCallback, useMemo, useRef, useState, type ReactNode } from "react";
+import { useRef, useState, type ReactNode } from "react";
 
 import { randomUUID } from "~/lib/utils";
 import { useEnvironmentScope } from "~/state/session";
@@ -26,7 +26,8 @@ import { useAtomCommand } from "../../state/use-atom-command";
 import { buildThreadRouteParams } from "../../threadRoutes";
 import { stackedThreadToast, toastManager } from "../ui/toast";
 import type { ComposerBannerStackItem } from "./ComposerBannerStack";
-import { goalBannerItem, goalIterationBannerItem, goalProposalBannerItem } from "./GoalBanner";
+import { goalIterationBannerItem, goalNowItem, goalProposalBannerItem } from "./GoalBanner";
+import type { ThreadNowItem } from "./ThreadNow";
 import { GoalDialog, type GoalBrief } from "./GoalDialog";
 
 type GoalSendRoute =
@@ -35,8 +36,9 @@ type GoalSendRoute =
   | { readonly kind: "handled" };
 
 /**
- * Everything a thread's chat view needs for `/t3-goal`: composer banners,
- * the brief dialog, and routing of sends to the goal while it is live.
+ * Everything a thread's chat view needs for `/t3-goal`: the goal's line at the
+ * end of the timeline, composer banners for a proposal or an iteration, the
+ * brief dialog, and routing of sends to the goal while it is live.
  */
 export function useThreadGoals(input: {
   readonly environmentId: EnvironmentId;
@@ -47,6 +49,7 @@ export function useThreadGoals(input: {
 }): {
   readonly commandAvailable: boolean;
   readonly placeholder: string | undefined;
+  readonly nowItem: ThreadNowItem | null;
   readonly bannerItems: readonly ComposerBannerStackItem[];
   readonly dialog: ReactNode;
   /** Where a composer send goes: an ordinary turn (maybe rewritten), a goal reply, or nowhere. */
@@ -88,43 +91,35 @@ export function useThreadGoals(input: {
   const commandAvailable =
     supportsGoals && canMutate && input.isServerThread && iteration === null && !input.isSubagent;
 
-  const openThread = useCallback(
-    (target: ThreadId) =>
-      void navigate({
-        to: "/$environmentId/$threadId",
-        params: buildThreadRouteParams(scopeThreadRef(environmentId, target)),
-      }),
-    [environmentId, navigate],
-  );
-  const startGoal = useCallback(
-    async (brief: GoalBrief | OrchestrationV2GoalProposal) => {
-      if (threadId === null) throw new Error("T3 goals are unavailable in this thread.");
-      const result = await setGoal({
-        environmentId,
-        input: {
-          type: "thread.goal.set",
-          commandId: CommandId.make(randomUUID()),
-          threadId,
-          objective: brief.objective,
-          doneWhen: brief.doneWhen,
-          background: brief.background,
-          permissions: brief.permissions,
-          ...(brief.iterationTimeoutMins === null
-            ? {}
-            : { iterationTimeoutMins: brief.iterationTimeoutMins }),
-        },
-      });
-      if (result._tag === "Failure") throw squashAtomCommandFailure(result);
-    },
-    [environmentId, setGoal, threadId],
-  );
+  const openThread = (target: ThreadId) =>
+    void navigate({
+      to: "/$environmentId/$threadId",
+      params: buildThreadRouteParams(scopeThreadRef(environmentId, target)),
+    });
+  const startGoal = async (brief: GoalBrief | OrchestrationV2GoalProposal) => {
+    if (threadId === null) throw new Error("T3 goals are unavailable in this thread.");
+    const result = await setGoal({
+      environmentId,
+      input: {
+        type: "thread.goal.set",
+        commandId: CommandId.make(randomUUID()),
+        threadId,
+        objective: brief.objective,
+        doneWhen: brief.doneWhen,
+        background: brief.background,
+        permissions: brief.permissions,
+        ...(brief.iterationTimeoutMins === null
+          ? {}
+          : { iterationTimeoutMins: brief.iterationTimeoutMins }),
+      },
+    });
+    if (result._tag === "Failure") throw squashAtomCommandFailure(result);
+  };
 
-  const bannerItems = useMemo(() => {
-    if (threadId === null) return [];
-    const items: ComposerBannerStackItem[] = [];
-    if (goal !== null) {
-      items.push(
-        goalBannerItem({
+  const nowItem =
+    threadId === null || goal === null
+      ? null
+      : goalNowItem({
           goal,
           canControl: canMutate,
           onControl: async (action: GoalControlAction) => {
@@ -142,9 +137,11 @@ export function useThreadGoals(input: {
           },
           onOpenIteration: openThread,
           onEdit: canEditGoal ? () => setEditing({ threadId, proposal: null }) : null,
-        }),
-      );
-    }
+        });
+
+  const bannerItems = (() => {
+    if (threadId === null) return [];
+    const items: ComposerBannerStackItem[] = [];
     if (proposal !== null && liveGoal === null) {
       items.push(
         goalProposalBannerItem({
@@ -170,74 +167,54 @@ export function useThreadGoals(input: {
     }
     if (iteration !== null) items.push(goalIterationBannerItem(iteration, openThread));
     return items;
-  }, [
-    canEditGoal,
-    canMutate,
-    commandAvailable,
-    controlGoal,
-    dismissProposal,
-    environmentId,
-    goal,
-    iteration,
-    liveGoal,
-    openThread,
-    proposal,
-    startGoal,
-    threadId,
-  ]);
+  })();
 
-  const routeSend = useCallback(
-    (text: string, hasNonTextContent: boolean): GoalSendRoute => {
-      const intent = resolveGoalComposerIntent({
-        text,
-        goal: liveGoal,
-        supportsGoals,
-        canMutate,
-        isIteration: iteration !== null,
-        isSubagent: input.isSubagent,
-        hasNonTextContent,
+  const routeSend = (text: string, hasNonTextContent: boolean): GoalSendRoute => {
+    const intent = resolveGoalComposerIntent({
+      text,
+      goal: liveGoal,
+      supportsGoals,
+      canMutate,
+      isIteration: iteration !== null,
+      isSubagent: input.isSubagent,
+      hasNonTextContent,
+    });
+    if (intent.kind === "blocked") {
+      toastManager.add(stackedThreadToast({ type: "info", title: intent.reason }));
+      return { kind: "handled" };
+    }
+    return intent.kind === "reply" ? intent : { kind: "send", text: intent.text };
+  };
+  const sendReply = async (reply: Extract<GoalSendRoute, { kind: "reply" }>) => {
+    // A second Enter while the first reply is in flight must not send it twice.
+    if (threadId === null || replying.current) return false;
+    replying.current = true;
+    try {
+      const result = await messageGoal({
+        environmentId,
+        input: {
+          type: "thread.goal.message",
+          commandId: CommandId.make(randomUUID()),
+          threadId,
+          goalId: reply.goalId,
+          text: reply.text,
+        },
       });
-      if (intent.kind === "blocked") {
-        toastManager.add(stackedThreadToast({ type: "info", title: intent.reason }));
-        return { kind: "handled" };
-      }
-      return intent.kind === "reply" ? intent : { kind: "send", text: intent.text };
-    },
-    [canMutate, input.isSubagent, iteration, liveGoal, supportsGoals],
-  );
-  const sendReply = useCallback(
-    async (reply: Extract<GoalSendRoute, { kind: "reply" }>) => {
-      // A second Enter while the first reply is in flight must not send it twice.
-      if (threadId === null || replying.current) return false;
-      replying.current = true;
-      try {
-        const result = await messageGoal({
-          environmentId,
-          input: {
-            type: "thread.goal.message",
-            commandId: CommandId.make(randomUUID()),
-            threadId,
-            goalId: reply.goalId,
-            text: reply.text,
-          },
-        });
-        if (result._tag === "Failure") throw squashAtomCommandFailure(result);
-        return true;
-      } catch (cause) {
-        toastManager.add(
-          stackedThreadToast({
-            type: "error",
-            title: "Could not message the goal",
-            description: cause instanceof Error ? cause.message : String(cause),
-          }),
-        );
-        return false;
-      } finally {
-        replying.current = false;
-      }
-    },
-    [environmentId, messageGoal, threadId],
-  );
+      if (result._tag === "Failure") throw squashAtomCommandFailure(result);
+      return true;
+    } catch (cause) {
+      toastManager.add(
+        stackedThreadToast({
+          type: "error",
+          title: "Could not message the goal",
+          description: cause instanceof Error ? cause.message : String(cause),
+        }),
+      );
+      return false;
+    } finally {
+      replying.current = false;
+    }
+  };
 
   const saveBrief = async (brief: GoalBrief) => {
     if (threadId === null || goal === null) throw new Error("This thread has no goal to edit.");
@@ -296,6 +273,7 @@ export function useThreadGoals(input: {
   return {
     commandAvailable,
     placeholder: liveGoal === null ? undefined : goalComposerPlaceholder(liveGoal),
+    nowItem,
     bannerItems,
     dialog,
     routeSend,

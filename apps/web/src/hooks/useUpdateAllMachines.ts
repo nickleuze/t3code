@@ -2,7 +2,7 @@ import { useAtomValue } from "@effect/atom-react";
 import type { DesktopUpdateState } from "@t3tools/contracts";
 import { Atom } from "effect/reactivity";
 import * as Schema from "effect/Schema";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { requestConfirmDialog } from "../confirmDialog";
 import { hasPendingServerUpdates, useServerUpdate } from "../components/ServerUpdateAction";
 import { resolveDesktopUpdateButtonAction } from "../components/desktopUpdate.logic";
@@ -16,6 +16,7 @@ import {
   runUpdateAll,
   updateAllConfirmation,
   updateAllLabel,
+  type MachineUpdateResult,
   type UpdateAllState,
 } from "@t3tools/client-runtime/state/updateAllMachines";
 import { useServerUpdateTargets } from "./useServerUpdateTargets";
@@ -34,19 +35,27 @@ const Receipt = Schema.Struct({
 
 export function useUpdateAllMachines(localState: DesktopUpdateState | null) {
   const targets = useServerUpdateTargets(newestKnownUpdateVersion(localState), true);
-  const updateRemote = useServerUpdate();
+  const updateServer = useServerUpdate();
+  const updateRemote = async (target: (typeof targets)[number]): Promise<MachineUpdateResult> => {
+    const outcome = await updateServer(target);
+    if (outcome.status === "updated")
+      return { status: "succeeded", targetVersion: outcome.targetVersion };
+    return {
+      status: "failed",
+      message:
+        outcome.status === "failed"
+          ? outcome.message
+          : "Update access is missing, the update was interrupted, or one is already running.",
+    };
+  };
   const primary = usePrimaryEnvironment();
   const { environments } = useEnvironments();
-  const localThreadsAtom = useMemo(
-    () =>
-      Atom.make((get) =>
-        primary === null
-          ? 0
-          : get(environmentThreadShells.environmentThreadsAtom(primary.environmentId)).filter(
-              (thread) => ["preparing", "starting", "running"].includes(thread.status),
-            ).length,
-      ),
-    [primary],
+  const localThreadsAtom = Atom.make((get) =>
+    primary === null
+      ? 0
+      : get(environmentThreadShells.environmentThreadsAtom(primary.environmentId)).filter(
+          (thread) => ["preparing", "starting", "running"].includes(thread.status),
+        ).length,
   );
   const runningThreadCount = useAtomValue(localThreadsAtom);
   const [run, setRun] = useState<UpdateAllState | null>(null);
@@ -58,6 +67,7 @@ export function useUpdateAllMachines(localState: DesktopUpdateState | null) {
     (resolveDesktopUpdateButtonAction(localState) !== "none" ||
       localState.status === "downloading");
 
+  // oxlint-disable-next-line t3code/react-effect-budget -- reports a saved update receipt once the relaunched app reads its new version.
   useEffect(() => {
     if (!localState) return;
     try {

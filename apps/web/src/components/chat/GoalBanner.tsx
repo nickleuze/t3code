@@ -6,7 +6,6 @@ import type {
 } from "@t3tools/contracts";
 import {
   goalControlActions,
-  goalIsRunning,
   goalNeedsAttention,
   presentT3Goal,
   type GoalControlAction,
@@ -14,11 +13,13 @@ import {
 import { TargetIcon } from "lucide-react";
 import { useRef, useState } from "react";
 
-import { Button } from "../ui/button";
+import { Button, InlineButton } from "../ui/button";
 import { stackedThreadToast, toastManager } from "../ui/toast";
 import type { ComposerBannerStackItem } from "./ComposerBannerStack";
+import type { ThreadNowItem } from "./ThreadNow";
 
-const CONTROL_LABELS: Record<Exclude<GoalControlAction, "clear">, [string, string]> = {
+const CONTROL_LABELS: Record<GoalControlAction, [string, string]> = {
+  clear: ["Clear", "Clearing..."],
   resume: ["Resume", "Resuming..."],
   pause: ["Pause", "Pausing..."],
   stop: ["Stop", "Stopping..."],
@@ -44,90 +45,54 @@ interface GoalBannerProps {
   readonly onEdit: (() => void) | null;
 }
 
-/** Composer banner for a thread's `/t3-goal` loop, laid out like the native `/goal` row. */
-export function goalBannerItem(props: GoalBannerProps): ComposerBannerStackItem {
+/** A thread's `/t3-goal` loop at the end of the timeline, where the native `/goal` line sits. */
+export function goalNowItem(props: GoalBannerProps): ThreadNowItem {
   const { goal } = props;
   const presentation = presentT3Goal(goal);
-  const attention = goalNeedsAttention(goal);
   return {
     id: `t3-goal:${goal.id}`,
-    variant: goal.status === "complete" ? "success" : attention ? "warning" : "info",
-    priority: attention ? "urgent" : goalIsRunning(goal) ? "activity" : "notice",
-    icon: <TargetIcon />,
+    icon: <TargetIcon className={goalNeedsAttention(goal) ? "text-info-foreground" : undefined} />,
     // Usage stays in the title so a long objective cannot clip it.
     title:
       presentation.usage === null
         ? presentation.title
         : `${presentation.title} · ${presentation.usage}`,
     description: presentation.objective,
-    actions: <GoalBannerActions key={`${goal.id}:${goal.status}`} {...props} />,
-    ...(goalControlActions(goal).includes("clear") && props.canControl
-      ? {
-          dismissLabel: "Clear goal",
-          onDismiss: () =>
-            void props.onControl("clear").catch(toastFailure("Could not clear the goal")),
-        }
-      : {}),
+    actions: <GoalNowActions key={`${goal.id}:${goal.status}`} {...props} />,
   };
 }
 
-function GoalBannerActions({
-  goal,
-  canControl,
-  onControl,
-  onOpenIteration,
-  onEdit,
-}: GoalBannerProps) {
+function GoalNowActions({ goal, canControl, onControl, onOpenIteration, onEdit }: GoalBannerProps) {
   const [pending, setPending] = useState<GoalControlAction | null>(null);
-  const [error, setError] = useState<string | null>(null);
   const run = async (action: GoalControlAction) => {
     if (!canControl || pending !== null) return;
     setPending(action);
-    setError(null);
-    try {
-      await onControl(action);
-    } catch (cause) {
-      setError(cause instanceof Error ? cause.message : "Could not update the goal.");
-    }
+    await onControl(action).catch(toastFailure("Could not update the goal"));
     setPending(null);
   };
   const child = goal.currentChildThreadId;
   return (
-    <div className="flex flex-wrap items-center gap-2">
+    <>
       {child !== null ? (
-        <Button size="xs" variant="ghost" onClick={() => onOpenIteration(child)}>
+        <InlineButton onClick={() => onOpenIteration(child)}>
           {goal.needsInput ? "Answer" : "Open iteration"}
-        </Button>
+        </InlineButton>
       ) : null}
       {onEdit !== null ? (
-        <Button
-          size="xs"
-          variant="ghost"
-          disabled={!canControl || pending !== null}
-          onClick={onEdit}
-        >
+        <InlineButton disabled={!canControl || pending !== null} onClick={onEdit}>
           Edit
-        </Button>
+        </InlineButton>
       ) : null}
-      {goalControlActions(goal).map((action) =>
-        action === "clear" ? null : (
-          <Button
-            key={action}
-            size="xs"
-            variant="ghost"
-            disabled={!canControl || pending !== null}
-            onClick={() => void run(action)}
-          >
-            {CONTROL_LABELS[action][pending === action ? 1 : 0]}
-          </Button>
-        ),
-      )}
-      {error ? (
-        <p role="alert" className="basis-full text-xs text-destructive">
-          {error}
-        </p>
-      ) : null}
-    </div>
+      {goalControlActions(goal).map((action) => (
+        <InlineButton
+          key={action}
+          disabled={!canControl || pending !== null}
+          onClick={() => void run(action)}
+        >
+          {CONTROL_LABELS[action][pending === action ? 1 : 0]}
+        </InlineButton>
+      ))}
+    </>
   );
 }
 
@@ -146,7 +111,6 @@ export function goalProposalBannerItem(props: GoalProposalBannerProps): Composer
   return {
     id: `goal-proposal:${proposal.id}`,
     variant: "info",
-    priority: "urgent",
     icon: <TargetIcon />,
     title: `Proposed goal: ${proposal.objective}`,
     description: [
@@ -206,7 +170,6 @@ export function goalIterationBannerItem(
   return {
     id: `t3-goal-iteration:${marker.goalId}:${marker.iteration}`,
     variant: "info",
-    priority: "notice",
     icon: <TargetIcon />,
     title: `Goal iteration ${marker.iteration}`,
     description: "Progress in this iteration goes to the goal thread.",

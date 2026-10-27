@@ -3,9 +3,10 @@ import { useRef, useState } from "react";
 import { useNavigate } from "@tanstack/react-router";
 import { scopeProjectRef } from "@t3tools/client-runtime/environment";
 import {
-  getNewProjectGitHubRepository,
-  getNewProjectGitHubTarget,
   getNewProjectPathPreview,
+  getNewProjectPublishTargets,
+  getNewProjectRepository,
+  type NewProjectPublishTarget,
 } from "@t3tools/client-runtime/operations/projects";
 import { newProjectFolderName } from "@t3tools/shared/path";
 import {
@@ -67,11 +68,14 @@ function ProjectDialog() {
   const discovery = useEnvironmentQuery(
     sourceControlEnvironment.discovery({ environmentId, input: {} }),
   );
-  const githubTarget = discovery.error ? null : getNewProjectGitHubTarget(discovery.data);
+  // Work Model publication stays GitHub-only and private.
+  const githubTarget = discovery.error
+    ? null
+    : (getNewProjectPublishTargets(discovery.data).find(
+        (target) => target.definition.kind === "github",
+      ) ?? null);
   const [publish, setPublish] = useState(false);
-  const [reviewedGitHub, setReviewedGitHub] = useState<{ readonly account: string | null } | null>(
-    null,
-  );
+  const [reviewedGitHub, setReviewedGitHub] = useState<NewProjectPublishTarget | null>(null);
   const [name, setName] = useState(request.name ?? "");
   const [slug, setSlug] = useState<string | null>(null);
   const [area, setArea] = useState("");
@@ -150,7 +154,7 @@ function ProjectDialog() {
       }
       if (
         reviewedGitHub &&
-        (!canPublish || !githubTarget || githubTarget.account !== reviewedGitHub.account)
+        (!canPublish || !githubTarget || githubTarget.owner !== reviewedGitHub.owner)
       ) {
         setError("GitHub availability changed. Go back and review the publication option again.");
         return;
@@ -158,7 +162,7 @@ function ProjectDialog() {
       const result = await create({
         environmentId,
         name: name.trim(),
-        github: reviewedGitHub,
+        publishTo: reviewedGitHub,
         ...(inArea ? { workModel: details } : {}),
       });
       if (result) {
@@ -283,7 +287,7 @@ function ProjectDialog() {
                       {preview?.existingHome
                         ? "Not offered when adopting. Use Publish Repository in the Git menu if needed."
                         : reviewedGitHub && reviewedPath
-                          ? `Create private repository: ${getNewProjectGitHubRepository(reviewedGitHub, reviewedPath)}`
+                          ? `Create private repository: ${getNewProjectRepository(reviewedGitHub, reviewedPath)}`
                           : "None"}
                     </dd>
                   </div>

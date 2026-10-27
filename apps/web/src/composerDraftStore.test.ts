@@ -1287,6 +1287,8 @@ function modelReconciliationHarness(
   const selectedThreadId = ThreadId.make("another-selected-thread");
   const thread: OrchestrationV2ThreadShell = {
     ...makeThreadProjectionFixture().thread,
+    // The projection's `goal` is the fork's T3 goal; a shell's is the provider goal.
+    goal: null,
     latestRunId: null,
     activeRunId: null,
     status: "idle",

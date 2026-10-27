@@ -1,10 +1,11 @@
-import type { DesktopUpdateState } from "@t3tools/contracts";
+import { EnvironmentId, type DesktopUpdateState } from "@t3tools/contracts";
+import type { ComponentProps } from "react";
 import { describe, expect, it, vi } from "vite-plus/test";
 import { page, userEvent } from "vite-plus/test/browser";
 
 import "~/index.css";
 import { act, render } from "../../../test/render";
-import { SidebarUpdatePill } from "./SidebarUpdatePill";
+import { SidebarMachineUpdateDetails, SidebarUpdatePill } from "./SidebarUpdatePill";
 
 const mocks = vi.hoisted(() => {
   const listeners = new Set<() => void>();
@@ -32,6 +33,28 @@ vi.mock("../../state/desktopUpdate", async (importOriginal) => ({
 vi.mock("../../env", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../env")>()),
   isElectron: true,
+}));
+// The fork's machine updates and approved releases stay idle here.
+vi.mock("../../hooks/useUpdateAllMachines", () => ({
+  useUpdateAllMachines: () => ({
+    targets: [],
+    run: null,
+    pending: false,
+    hasLocalUpdate: false,
+    label: null,
+    start: async () => {},
+  }),
+}));
+vi.mock("../../hooks/useReleaseDeployment", () => ({
+  useReleaseDeployment: () => ({
+    eligible: false,
+    preparing: false,
+    running: false,
+    request: null,
+    summary: null,
+    approval: null,
+    acceptance: null,
+  }),
 }));
 vi.mock("./useUpdateEverything", () => ({
   useUpdateEverything: () => ({
@@ -127,5 +150,88 @@ describe("SidebarUpdatePill update everything", () => {
 
     await userEvent.keyboard("{Escape}");
     await vi.waitFor(() => expect(document.activeElement).toBe(button.element()));
+  });
+});
+
+describe("SidebarMachineUpdateDetails", () => {
+  const machines: ComponentProps<typeof SidebarMachineUpdateDetails>["machines"] = {
+    targets: [
+      {
+        environmentId: EnvironmentId.make("mini"),
+        serverLabel: "nick-mini",
+        selfUpdate: "desktop-managed",
+        desktopAppUpdate: true,
+        fromVersion: "0.0.45-nick.10",
+        targetVersion: "0.0.45-nick.11",
+        runningThreadCount: 0,
+      },
+    ],
+    run: { remotes: { mini: { status: "failed", message: "Remote timed out" } }, local: "ready" },
+    pending: false,
+    hasLocalUpdate: true,
+    label: "Update all (2)",
+    start: async () => {},
+  };
+  const state = nightlyUpdate(RELEASE_NOTES);
+
+  it("shows which machine failed and retries it or installs on this machine only", async () => {
+    const start = vi.fn(async () => {});
+    await using screen = await render(
+      <SidebarMachineUpdateDetails
+        machines={{ ...machines, start }}
+        state={state}
+        tooltip="Machine update failed"
+      />,
+    );
+    await expect.element(screen.getByRole("alert").first()).toHaveTextContent("Remote timed out");
+    await userEvent.click(screen.getByRole("button", { name: "Retry nick-mini" }));
+    expect(start).toHaveBeenLastCalledWith("mini");
+    await userEvent.click(screen.getByRole("button", { name: "Install on this machine only" }));
+    expect(start).toHaveBeenLastCalledWith(undefined, true);
+  });
+
+  it("keeps recovery disabled while a machine is still running", async () => {
+    await using screen = await render(
+      <SidebarMachineUpdateDetails
+        machines={{ ...machines, pending: true }}
+        state={state}
+        tooltip="Updating machines…"
+      />,
+    );
+    await expect.element(screen.getByRole("button", { name: "Retry nick-mini" })).toBeDisabled();
+    await expect
+      .element(screen.getByRole("button", { name: "Install on this machine only" }))
+      .toBeDisabled();
+  });
+
+  it("offers no local install without a local update", async () => {
+    await using screen = await render(
+      <SidebarMachineUpdateDetails
+        machines={{ ...machines, hasLocalUpdate: false }}
+        state={state}
+        tooltip="Machine update failed"
+      />,
+    );
+    await expect.element(screen.getByRole("button", { name: "Retry nick-mini" })).toBeVisible();
+    expect(document.body.textContent).not.toContain("This machine:");
+    expect(document.body.textContent).not.toContain("Install on this machine only");
+  });
+
+  it("lists the version the remote's feed actually installed", async () => {
+    await using _screen = await render(
+      <SidebarMachineUpdateDetails
+        machines={{
+          ...machines,
+          run: {
+            local: "none",
+            remotes: { mini: { status: "succeeded", targetVersion: "0.0.45-nick.12" } },
+          },
+        }}
+        state={state}
+        tooltip="Updated"
+      />,
+    );
+    expect(document.body.textContent).toContain("0.0.45-nick.12");
+    expect(document.body.textContent).not.toContain("Retry nick-mini");
   });
 });

@@ -1,4 +1,6 @@
 import { ThreadHoverCard, ThreadHoverCardPopup } from "../ThreadHoverCard";
+import { goalRowStatusLabel } from "@t3tools/client-runtime/state/thread-goals";
+import { SidebarGoalIterations } from "./SidebarGoalIterations";
 import { ThreadTerminalStatusButton } from "../ThreadStatusIndicators";
 import { discardComposerDraft } from "../../lib/discardComposerDraft";
 import { requestCustomSnooze } from "../CustomSnoozeDialog";
@@ -512,6 +514,10 @@ const dropVerbBadge: Record<SidebarDropVerb, ReactNode> = {
 
 type SidebarThreadRowProps = {
   thread: SidebarThreadSummary;
+  /** A T3 goal owner's iterations, nested under its row. */
+  goalIterations: readonly SidebarThreadSummary[];
+  /** The open iteration's key when it is one of these, else null. */
+  activeRouteThreadKey: string | null;
   variant: "card" | "slim";
   variantAction: SidebarSweepAction;
   settlementSupported: boolean;
@@ -696,7 +702,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
     isActive: props.isActive,
     isSelected,
   });
-  const topStatus =
+  const baseTopStatus =
     status === "working"
       ? {
           label: thread.goal?.status === "active" ? "Goal" : "Working",
@@ -752,6 +758,11 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
                           className: "text-success-foreground",
                         }
                       : null;
+  const goalStatusLabel = goalRowStatusLabel(thread.t3Goal, status);
+  const topStatus =
+    goalStatusLabel !== null && baseTopStatus !== null
+      ? { ...baseTopStatus, label: goalStatusLabel }
+      : baseTopStatus;
   const isWokeStatus = topStatus?.icon === "woke";
 
   const branchMismatch = resolveLocalCheckoutBranchMismatch({
@@ -1244,6 +1255,13 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
           </TooltipTrigger>
           {detailsTooltip}
         </Tooltip>
+        <SidebarGoalIterations
+          goal={thread.t3Goal}
+          iterations={props.goalIterations}
+          parked
+          activeRouteThreadKey={props.activeRouteThreadKey}
+          onOpen={onThreadActivate}
+        />
       </li>
     );
   }
@@ -1525,6 +1543,13 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
         </TooltipTrigger>
         {detailsTooltip}
       </Tooltip>
+      <SidebarGoalIterations
+        goal={thread.t3Goal}
+        iterations={props.goalIterations}
+        parked={false}
+        activeRouteThreadKey={props.activeRouteThreadKey}
+        onOpen={onThreadActivate}
+      />
     </li>
   );
 });

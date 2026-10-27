@@ -6,8 +6,9 @@ import {
   type OrchestrationV2ThreadGoalSummary,
 } from "@t3tools/contracts";
 import { useEffect, type ReactNode } from "react";
-import { act, create, type ReactTestRenderer } from "react-test-renderer";
-import { afterEach, beforeEach, expect, it, vi } from "vite-plus/test";
+import { expect, it, vi } from "vite-plus/test";
+
+import { act, render as renderUi, type Screen } from "../../../test/render";
 
 import type { GoalBrief } from "./GoalDialog";
 import { useThreadGoals } from "./useThreadGoals";
@@ -31,9 +32,6 @@ vi.mock("../../state/use-atom-command", () => ({
     command === "message" ? fixture.message : command === "update" ? fixture.update : fixture.other,
 }));
 vi.mock("../../threadRoutes", () => ({ buildThreadRouteParams: () => ({}) }));
-vi.mock("../ui/button", () => ({
-  Button: (props: React.ComponentProps<"button">) => <button {...props} />,
-}));
 vi.mock("../ui/toast", () => ({
   toastManager: { add: vi.fn() },
   stackedThreadToast: (x: unknown) => x,
@@ -66,7 +64,7 @@ const thread = (t3Goal: OrchestrationV2ThreadGoalSummary) =>
   }) as unknown as EnvironmentThreadShell;
 
 let hook: ReturnType<typeof useThreadGoals>;
-let renderer: ReactTestRenderer;
+let screen: Screen | undefined;
 function Probe(props: { readonly thread: EnvironmentThreadShell }) {
   const result = useThreadGoals({
     environmentId,
@@ -80,6 +78,7 @@ function Probe(props: { readonly thread: EnvironmentThreadShell }) {
   });
   return (
     <>
+      {result.nowItem ? <div>{result.nowItem.actions}</div> : null}
       {result.bannerItems.map((item) => (
         <div key={item.id}>{item.actions as ReactNode}</div>
       ))}
@@ -88,25 +87,28 @@ function Probe(props: { readonly thread: EnvironmentThreadShell }) {
   );
 }
 async function render(t3Goal: OrchestrationV2ThreadGoalSummary) {
-  await act(async () => {
-    if (renderer) renderer.update(<Probe thread={thread(t3Goal)} />);
-    else renderer = create(<Probe thread={thread(t3Goal)} />);
-  });
+  if (screen) await screen.rerender(<Probe thread={thread(t3Goal)} />);
+  else screen = await renderUi(<Probe thread={thread(t3Goal)} />, { router: false });
 }
-const buttons = () => renderer.root.findAllByType("button").map((node) => node.props.children);
+const buttonElements = () => [...(screen?.container.querySelectorAll("button") ?? [])];
+const buttons = () => buttonElements().map((node) => node.textContent);
 
-beforeEach(() => {
+/** Resets the fixtures; disposing it unmounts whatever the test rendered. */
+function setup(): AsyncDisposable {
   fixture.message.mockReset().mockResolvedValue({ _tag: "Success" });
   fixture.update.mockReset().mockResolvedValue({ _tag: "Success" });
   fixture.projection = null;
   fixture.dialog = null;
-});
-afterEach(async () => {
-  await act(async () => renderer.unmount());
-  renderer = undefined as unknown as ReactTestRenderer;
-});
+  return {
+    async [Symbol.asyncDispose]() {
+      await screen?.[Symbol.asyncDispose]();
+      screen = undefined;
+    },
+  };
+}
 
 it("routes live-goal sends to the goal and drops a second Enter while the reply is in flight", async () => {
+  await using _setup = setup();
   await render({ ...goal, status: "active", currentChildThreadId: ThreadId.make("child") });
   const route = hook.routeSend("  keep the candidate ", false);
   expect(route).toEqual({ kind: "reply", goalId: goal.id, text: "keep the candidate" });
@@ -126,6 +128,7 @@ it("routes live-goal sends to the goal and drops a second Enter while the reply 
 });
 
 it("edits a paused goal's brief through thread.goal.update and offers no edit while it runs", async () => {
+  await using _setup = setup();
   await render({ ...goal, status: "active" });
   expect(buttons()).not.toContain("Edit");
   fixture.projection = {
@@ -142,8 +145,8 @@ it("edits a paused goal's brief through thread.goal.update and offers no edit wh
     },
   };
   await render(goal);
-  const edit = renderer.root.findAllByType("button").find((node) => node.props.children === "Edit");
-  await act(async () => edit!.props.onClick());
+  const edit = buttonElements().find((node) => node.textContent === "Edit");
+  await act(() => edit!.click());
   expect(fixture.dialog?.mode).toBe("edit");
   await act(async () =>
     fixture.dialog!.onSubmit({

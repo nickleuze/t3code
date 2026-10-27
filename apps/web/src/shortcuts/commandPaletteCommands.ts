@@ -14,6 +14,9 @@ import { selectActiveRightPanel, useRightPanelStore } from "../rightPanelStore";
 import { type CommandHandler, type CommandScopeOptions, registerCommands } from "./dispatcher";
 import { selectThreadTerminalUiState, useTerminalUiStateStore } from "../terminalUiStateStore";
 import { resolveThreadRouteTarget } from "../threadRoutes";
+import { appAtomRegistry } from "../rpc/atomRegistry";
+import { ticketEnvironmentIdsAtom } from "../state/tickets";
+import { openTicketCapture } from "../ticketCapture";
 
 function consume(event: KeyboardEvent): void {
   event.preventDefault();
@@ -91,6 +94,21 @@ export function installCommandPaletteCommands(
         consume(event);
         dispatchCommandPalette({ _tag: "SetOpen", open: false });
         void router.navigate({ to: "/usage" });
+      },
+      // Fork: tickets, only while a connected environment serves them.
+      "ticket.new": (event) => {
+        if (appAtomRegistry.get(ticketEnvironmentIdsAtom).length === 0) return false;
+        consume(event);
+        if (event.repeat) return;
+        dispatchCommandPalette({ _tag: "SetOpen", open: false });
+        openTicketCapture();
+      },
+      "tickets.open": (event) => {
+        if (appAtomRegistry.get(ticketEnvironmentIdsAtom).length === 0) return false;
+        consume(event);
+        if (event.repeat) return;
+        dispatchCommandPalette({ _tag: "SetOpen", open: false });
+        void router.navigate({ to: "/tickets" });
       },
       "commandPalette.toggle": toggleOverlay("commandPalette.toggle"),
       "filePicker.toggle": toggleOverlay("filePicker.toggle"),

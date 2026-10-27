@@ -1,3 +1,4 @@
+import { EnvironmentDeploymentStatus } from "../ReleaseDeployment";
 import { SessionPermissions } from "./SessionPermissions";
 import {
   ChevronRightIcon,
@@ -322,6 +323,7 @@ export function SavedBackendListRow({
               <ServerUpdateProgress state={serverUpdateState} />
             </div>
           ) : null}
+          <EnvironmentDeploymentStatus environment={environment} />
         </>
       }
       detail={

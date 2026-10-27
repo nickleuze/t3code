@@ -1,3 +1,4 @@
+import type { useThreadGoals } from "./useThreadGoals";
 import {
   mergeDirectPreviewAnnotation,
   resolveBackgroundDraftWorkspaceOptions,
@@ -159,6 +160,8 @@ type UsageLimitsPanel = ReturnType<typeof useUsageLimitsPanel>;
 type TimelineFollow = ReturnType<typeof useTimelineFollow>;
 
 interface ComposerSendInput {
+  /** `/t3-goal` routing: a live goal takes the send as a reply instead of a turn. */
+  readonly goals?: Pick<ReturnType<typeof useThreadGoals>, "routeSend" | "sendReply">;
   readonly environmentId: EnvironmentId;
   readonly routeThreadKey: string;
   readonly currentRouteThreadKeyRef: { readonly current: string | null };
@@ -254,6 +257,7 @@ interface ComposerSendInput {
  */
 export function useComposerSend(input: ComposerSendInput) {
   const {
+    goals,
     environmentId,
     routeThreadKey,
     currentRouteThreadKeyRef,
@@ -417,6 +421,25 @@ export function useComposerSend(input: ComposerSendInput) {
         composerRef.current?.resetCursorState();
       }
       return;
+    }
+
+    if (goals) {
+      const goalSend = goals.routeSend(
+        promptRef.current,
+        Boolean(directAnnotation) || draftHasNonPromptContent(composerDraftTarget),
+      );
+      if (goalSend.kind === "handled") return;
+      if (goalSend.kind === "reply") {
+        const draft = promptRef.current;
+        // Keep anything typed while the reply was in flight.
+        if ((await goals.sendReply(goalSend)) && promptRef.current === draft) {
+          promptRef.current = "";
+          setComposerDraftPrompt(composerDraftTarget, "");
+          composerRef.current?.resetCursorState();
+        }
+        return;
+      }
+      promptRef.current = goalSend.text;
     }
 
     const notifyDirectAnnotationAttached = () => {

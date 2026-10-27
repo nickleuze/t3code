@@ -1,14 +1,14 @@
+import type { EnvironmentServerConfig } from "@t3tools/client-runtime/connection";
 import {
   type EnvironmentId,
   resolveEnvironmentMachineKind,
-  type ServerConfig,
   type SkillFolderInfo,
 } from "@t3tools/contracts";
 import { RegistryContext, useAtomValue } from "@effect/atom-react";
 import { NetworkIcon } from "lucide-react";
 import * as Option from "effect/Option";
 import { AsyncResult, Atom } from "effect/reactivity";
-import { useCallback, useContext, useMemo } from "react";
+import { useContext } from "react";
 
 import { serverEnvironment } from "../../state/server";
 import { EnvironmentMachineIcon } from "../EnvironmentMachineIcon";
@@ -18,7 +18,7 @@ import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 export interface SkillEnvironment {
   readonly environmentId: EnvironmentId;
   readonly label: string;
-  readonly serverConfig: ServerConfig | null;
+  readonly serverConfig: EnvironmentServerConfig | null;
   /** The project's checkout there, at project scope. */
   readonly cwd: string | null;
 }
@@ -75,23 +75,19 @@ export function useEnvironmentSkillFolders(environments: ReadonlyArray<SkillEnvi
   const keys = JSON.stringify(environments.map(folderKey));
   const results = useAtomValue(foldersByEnvironment(keys));
   const registry = useContext(RegistryContext);
-  const refresh = useCallback(() => {
+  const refresh = () => {
     for (const key of JSON.parse(keys) as string[]) registry.refresh(inspectAtom(key));
-  }, [keys, registry]);
-  const folders = useMemo(
-    () =>
-      new Map(
-        results.map(({ environmentId, result }) => [
-          environmentId,
-          new Map<string, SkillFolderInfo>(
-            (Option.getOrNull(AsyncResult.value(result))?.folders ?? []).map((folder) => [
-              folder.path,
-              folder,
-            ]),
-          ),
+  };
+  const folders = new Map(
+    results.map(({ environmentId, result }) => [
+      environmentId,
+      new Map<string, SkillFolderInfo>(
+        (Option.getOrNull(AsyncResult.value(result))?.folders ?? []).map((folder) => [
+          folder.path,
+          folder,
         ]),
       ),
-    [results],
+    ]),
   );
   return { folders, refresh };
 }

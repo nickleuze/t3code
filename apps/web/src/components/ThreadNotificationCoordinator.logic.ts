@@ -1,4 +1,12 @@
 import { WORKING_EXIT_GRACE_MS } from "@t3tools/client-runtime/state/thread-inbox";
+import type { OrchestrationV2ThreadShell } from "@t3tools/contracts";
+import {
+  t3GoalAttention,
+  t3GoalHeadline,
+  t3GoalOwnsActivity,
+} from "@t3tools/shared/agentAwareness";
+
+import type { SidebarThreadStatus } from "./Sidebar.logic";
 
 export type ThreadNotificationKind = "input" | "completion";
 
@@ -74,5 +82,59 @@ export function createThreadNotificationGate<Key>(
       handled.clear();
       lastSettled.clear();
     },
+  };
+}
+
+type GoalNotificationThread = Pick<OrchestrationV2ThreadShell, "t3Goal" | "latestRunRequestedAt">;
+
+export interface ThreadGoalNotification {
+  /** The status to notify on, with the owner's goal speaking for its runs. */
+  readonly status: SidebarThreadStatus;
+  /** Part of the attention key, so each goal state change notifies once. */
+  readonly attentionKey: string;
+  /** Run completions stay quiet while the goal owns the thread's activity. */
+  readonly holdsRunCompletion: boolean;
+  /** The goal id once it completed; a change to it is a "Goal complete" notification. */
+  readonly completedGoalId: string | null;
+  /** Headline for goal attention, or null when the run's own title applies. */
+  readonly attentionTitle: string | null;
+}
+
+/**
+ * How a goal owner's thread notifies. Approvals and questions on the owner keep
+ * their own status; otherwise the goal's attention replaces the run's.
+ */
+export function resolveThreadGoalNotification(
+  raw: GoalNotificationThread,
+  thread: { readonly hasPendingApprovals: boolean; readonly hasPendingUserInput: boolean },
+  runStatus: SidebarThreadStatus,
+): ThreadGoalNotification {
+  const goal = raw.t3Goal ?? null;
+  const holdsRunCompletion = t3GoalOwnsActivity(raw);
+  let status = runStatus;
+  if (
+    goal !== null &&
+    holdsRunCompletion &&
+    !thread.hasPendingApprovals &&
+    !thread.hasPendingUserInput
+  ) {
+    const goalAttention = t3GoalAttention(goal);
+    status =
+      goalAttention === "input" || goalAttention === "limited" || goalAttention === "working"
+        ? goalAttention
+        : "ready";
+  }
+  return {
+    status,
+    attentionKey:
+      goal === null
+        ? ""
+        : `${goal.id}:${goal.status}:${goal.statusReason ?? ""}:${goal.needsInput}`,
+    holdsRunCompletion,
+    completedGoalId: goal?.status === "complete" ? goal.id : null,
+    attentionTitle:
+      goal === null || status !== "input" || thread.hasPendingUserInput
+        ? null
+        : t3GoalHeadline(goal),
   };
 }

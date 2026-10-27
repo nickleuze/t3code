@@ -42,7 +42,7 @@ function SettingsToolsRoute() {
   );
 }
 
-export const Route = createFileRoute("/settings/tools")({
+export const Route = createFileRoute("/_chat/settings/tools")({
   validateSearch: validateToolsSearch,
   component: SettingsToolsRoute,
 });

@@ -1,5 +1,5 @@
 import { Dialog as DialogPrimitive } from "@base-ui/react/dialog";
-import { useEffect, useState } from "react";
+import { useEffect } from "react";
 import { useMobileFullscreen } from "~/hooks/useMobileFullscreen";
 import { XIcon } from "lucide-react";
 import { type ComponentProps, createContext, type ReactNode, use, useState } from "react";
@@ -97,6 +97,7 @@ function DialogPopup({
 }) {
   const fullscreen = useMobileFullscreen(variant === "mobile-fullscreen");
   const [viewport, setViewport] = useState<{ height: number; top: number } | null>(null);
+  // oxlint-disable-next-line t3code/react-effect-budget -- subscribes to visualViewport so a fullscreen dialog tracks the software keyboard.
   useEffect(() => {
     if (!fullscreen || !window.visualViewport) return;
     const visual = window.visualViewport;

@@ -22,7 +22,11 @@ export function SkillAgentIcon({
         driverKind={agent.driverKind}
         displayName={agent.displayName}
         accentColor={agent.accentColor}
-        showBadge={shouldShowInstanceBadge(agent, agents)}
+        // Agents here are the enabled providers only.
+        showBadge={shouldShowInstanceBadge(
+          { ...agent, enabled: true },
+          agents.map((other) => ({ ...other, enabled: true })),
+        )}
         iconClassName="size-4"
       />
     </span>
