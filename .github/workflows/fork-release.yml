@@ -26,8 +26,10 @@ jobs:
   checks:
     if: github.repository == 'nickleuze/t3code'
     uses: ./.github/workflows/fork-ci.yml
+    # A called workflow cannot request more than this grant; its jobs ask for id-token.
     permissions:
       contents: read
+      id-token: write
       pull-requests: read
 
   # Checks, builds and release share this run's github.sha, so a release can
