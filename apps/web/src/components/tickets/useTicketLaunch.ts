@@ -42,7 +42,7 @@ export function useTicketLaunch(onNeedsProject?: (request: TicketLaunchRequest) 
     pending.current = request;
     submitting.current = true;
     setBusy(true);
-    try {
+    const start = async () => {
       const result = await startTicketWithRefresh(request, startTicket, () =>
         refresh({ environmentId: request.environmentId, input: {} }),
       );
@@ -90,10 +90,11 @@ export function useTicketLaunch(onNeedsProject?: (request: TicketLaunchRequest) 
           },
         },
       });
-    } finally {
+    };
+    await start().finally(() => {
       submitting.current = false;
       setBusy(false);
-    }
+    });
   };
   return { busy, launch };
 }

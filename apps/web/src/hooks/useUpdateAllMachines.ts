@@ -104,7 +104,7 @@ export function useUpdateAllMachines(localState: DesktopUpdateState | null) {
     setPending(true);
     let installing = false;
     let finalState: UpdateAllState | undefined;
-    try {
+    const update = async () => {
       const selected = localOnly
         ? []
         : run
@@ -199,6 +199,9 @@ export function useUpdateAllMachines(localState: DesktopUpdateState | null) {
         setRun(null);
         setRunTargets([]);
       }
+    };
+    try {
+      await update();
     } catch (error) {
       installing = false;
       const message = error instanceof Error ? error.message : "Update failed.";
@@ -210,12 +213,11 @@ export function useUpdateAllMachines(localState: DesktopUpdateState | null) {
         title: "Could not update this machine",
         description: message,
       });
-    } finally {
-      // Only failure/cancellation/remote-only completion can need this client again.
-      if (!installing) {
-        active.current = false;
-        setPending(false);
-      }
+    }
+    // Only failure/cancellation/remote-only completion can need this client again.
+    if (!installing) {
+      active.current = false;
+      setPending(false);
     }
   };
 

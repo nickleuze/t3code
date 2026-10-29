@@ -129,7 +129,7 @@ function ProjectDialog() {
     submitting.current = true;
     setBusy(true);
     setError(null);
-    try {
+    const reviewOrCreate = async () => {
       if (!isReviewed) {
         if (inArea) {
           const result = await review({ environmentId, input: { name: name.trim(), ...details } });
@@ -177,10 +177,11 @@ function ProjectDialog() {
         setPreview(null);
         setBasicReviewed(false);
       }
-    } finally {
+    };
+    await reviewOrCreate().finally(() => {
       submitting.current = false;
       setBusy(false);
-    }
+    });
   };
   const size = narrow ? ("touch" as const) : ("default" as const);
   const reviewedPath = preview?.workspaceRoot ?? basicPath;

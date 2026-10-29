@@ -79,13 +79,11 @@ function EnvironmentTicketSettings({ environmentId }: { environmentId: Environme
   const run = async (action: () => Promise<void>) => {
     setBusy(true);
     setError(null);
-    try {
-      await action();
-    } finally {
+    await action().finally(() => {
       setBusy(false);
       reload();
       reloadProjects();
-    }
+    });
   };
   return (
     <div className="grid gap-5">

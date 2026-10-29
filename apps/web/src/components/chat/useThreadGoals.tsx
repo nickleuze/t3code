@@ -189,31 +189,27 @@ export function useThreadGoals(input: {
     // A second Enter while the first reply is in flight must not send it twice.
     if (threadId === null || replying.current) return false;
     replying.current = true;
-    try {
-      const result = await messageGoal({
-        environmentId,
-        input: {
-          type: "thread.goal.message",
-          commandId: CommandId.make(randomUUID()),
-          threadId,
-          goalId: reply.goalId,
-          text: reply.text,
-        },
-      });
-      if (result._tag === "Failure") throw squashAtomCommandFailure(result);
-      return true;
-    } catch (cause) {
-      toastManager.add(
-        stackedThreadToast({
-          type: "error",
-          title: "Could not message the goal",
-          description: cause instanceof Error ? cause.message : String(cause),
-        }),
-      );
-      return false;
-    } finally {
-      replying.current = false;
-    }
+    const result = await messageGoal({
+      environmentId,
+      input: {
+        type: "thread.goal.message",
+        commandId: CommandId.make(randomUUID()),
+        threadId,
+        goalId: reply.goalId,
+        text: reply.text,
+      },
+    });
+    replying.current = false;
+    if (result._tag === "Success") return true;
+    const cause = squashAtomCommandFailure(result);
+    toastManager.add(
+      stackedThreadToast({
+        type: "error",
+        title: "Could not message the goal",
+        description: cause instanceof Error ? cause.message : String(cause),
+      }),
+    );
+    return false;
   };
 
   const saveBrief = async (brief: GoalBrief) => {

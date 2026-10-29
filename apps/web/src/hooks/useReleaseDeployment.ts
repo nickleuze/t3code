@@ -179,13 +179,12 @@ export function useReleaseDeployment(
         title: `Could not deploy ${request.version}`,
         description: errorMessage(error),
       });
-    } finally {
-      active.current = false;
-      setRunning(false);
-      const next = rerun.current;
-      rerun.current = null;
-      if (next !== null) void sequence(next);
     }
+    active.current = false;
+    setRunning(false);
+    const next = rerun.current;
+    rerun.current = null;
+    if (next !== null) void sequence(next);
   };
 
   const records =
@@ -235,27 +234,26 @@ export function useReleaseDeployment(
     setPreparing(true);
     try {
       const result = await bridge.getReleaseManifest(version);
-      if (!result.ok) {
+      if (result.ok) {
+        setApproval({
+          manifest: result.manifest,
+          targets: orderReleaseTargets(remoteTargets, hasLocalUpdate ? primaryId : null),
+        });
+      } else {
         toastManager.add({
           type: "error",
           title: `Could not read release ${version}`,
           description: result.reason,
         });
-        return;
       }
-      setApproval({
-        manifest: result.manifest,
-        targets: orderReleaseTargets(remoteTargets, hasLocalUpdate ? primaryId : null),
-      });
     } catch (error) {
       toastManager.add({
         type: "error",
         title: `Could not read release ${version}`,
         description: errorMessage(error),
       });
-    } finally {
-      setPreparing(false);
     }
+    setPreparing(false);
   };
 
   const approve = async () => {

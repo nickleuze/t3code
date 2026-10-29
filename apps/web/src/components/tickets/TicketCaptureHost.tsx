@@ -122,7 +122,7 @@ function TicketCaptureDialog() {
     submitting.current = true;
     setBusy(true);
     setError(null);
-    try {
+    const saveTicket = async () => {
       const result = await upsert({
         environmentId,
         input: {
@@ -170,10 +170,11 @@ function TicketCaptureDialog() {
         setBody("");
         input.current?.focus();
       } else close();
-    } finally {
+    };
+    await saveTicket().finally(() => {
       submitting.current = false;
       setBusy(false);
-    }
+    });
   };
   return (
     <Dialog

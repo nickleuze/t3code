@@ -319,30 +319,28 @@ function SkillsPanel({
   const refresh = async (fresh: boolean) => {
     if (environments.length === 0) return;
     setRefreshing(true);
-    try {
-      await Promise.all(
-        environments.flatMap((environment) =>
-          (
-            environmentProviders.find((entry) => entry.environmentId === environment.environmentId)
-              ?.providers ?? EMPTY_PROVIDERS
-          )
-            .filter((provider) => provider.enabled)
-            .map((provider) =>
-              refreshProviders({
-                environmentId: environment.environmentId,
-                input: {
-                  instanceId: provider.instanceId,
-                  ...(environment.cwd === null ? {} : { cwd: environment.cwd }),
-                  ...(fresh ? { fresh: true } : {}),
-                },
-              }),
-            ),
-        ),
-      );
-    } finally {
+    await Promise.all(
+      environments.flatMap((environment) =>
+        (
+          environmentProviders.find((entry) => entry.environmentId === environment.environmentId)
+            ?.providers ?? EMPTY_PROVIDERS
+        )
+          .filter((provider) => provider.enabled)
+          .map((provider) =>
+            refreshProviders({
+              environmentId: environment.environmentId,
+              input: {
+                instanceId: provider.instanceId,
+                ...(environment.cwd === null ? {} : { cwd: environment.cwd }),
+                ...(fresh ? { fresh: true } : {}),
+              },
+            }),
+          ),
+      ),
+    ).finally(() => {
       setRefreshing(false);
       inspected.refresh();
-    }
+    });
   };
 
   const afterSkillChange = () => {
@@ -503,7 +501,7 @@ function SkillsPanel({
   ) => {
     setSkillActionError(null);
     setSyncing((current) => new Set([...current, name]));
-    try {
+    const copy = async () => {
       const bundle = await exportSkill({ environmentId: from, input: { name, target: level } });
       if (bundle._tag === "Failure") {
         setSkillActionError(
@@ -531,14 +529,15 @@ function SkillsPanel({
       );
       const messages = failures.filter((message) => message !== null);
       if (messages.length > 0) setSkillActionError(`Couldn't copy ${name}. ${messages.join(" ")}`);
-    } finally {
+    };
+    await copy().finally(() => {
       setSyncing((current) => {
         const next = new Set(current);
         next.delete(name);
         return next;
       });
       afterSkillChange();
-    }
+    });
   };
 
   /** Update and remove reach every environment in scope that has the skill. */

@@ -155,10 +155,6 @@ export function goalAwareThreadWorking(
   return attention === "working" || (threadWorking && attention !== "input");
 }
 
-export function goalIsRunning(goal: OrchestrationV2ThreadGoalSummary): boolean {
-  return goal.status === "active" || goal.status === "usageLimited";
-}
-
 /** Same units as the native `/goal` row: "950 tokens", "12k tokens", "2.4m tokens". */
 export function formatGoalTokens(tokens: number): string {
   return `${formatTokenCount(tokens)} tokens`;

@@ -16,13 +16,10 @@ export function TicketActions({ entry }: { entry: EnvironmentTicket }) {
   const narrow = useMediaQuery("(max-width: 480px)");
   const run = async (type: "accept" | "drop" | "reopen") => {
     setBusy(true);
-    try {
-      const result = await action({ environmentId, input: { id: ticket.id, action: type } });
-      if (result._tag === "Failure")
-        toastManager.add({ type: "error", title: "Could not change ticket stage" });
-    } finally {
-      setBusy(false);
-    }
+    const result = await action({ environmentId, input: { id: ticket.id, action: type } });
+    setBusy(false);
+    if (result._tag === "Failure")
+      toastManager.add({ type: "error", title: "Could not change ticket stage" });
   };
   return (
     <div className="flex flex-wrap gap-2">

@@ -75,17 +75,14 @@ export function TicketTimeline({
   const submit = async (input: TicketEntryInput) => {
     setBusy(true);
     setError(null);
-    try {
-      const result = await add({ environmentId, input });
-      if (result._tag === "Success") {
-        refresh();
-        return true;
-      }
-      setError("Could not record entry. Your text is kept.");
-      return false;
-    } finally {
-      setBusy(false);
+    const result = await add({ environmentId, input });
+    setBusy(false);
+    if (result._tag === "Success") {
+      refresh();
+      return true;
     }
+    setError("Could not record entry. Your text is kept.");
+    return false;
   };
   const author = (event: Pick<TicketEvent, "by">) =>
     `${event.by.model ? formatModelSlugName(event.by.model).replace(/^Claude /, "") : event.by.actor === "user" ? "Nick" : "Agent"} on ${machines[event.by.machine] ?? event.by.machine}${event.by.thread ? `, in ${events.filter((e): e is Extract<TicketEvent, { type: "link" | "unlink" }> => e.type === "link" || e.type === "unlink").findLast((e) => e.kind === "thread" && e.ref === event.by.thread && e.machine === event.by.machine)?.title ?? event.by.thread}` : ""}`;
