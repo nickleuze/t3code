@@ -1136,7 +1136,7 @@ export function AddProjectNewScreen(props: { readonly environmentId?: string | s
     setSelectedEnvironmentId(environment.environmentId);
     setError(null);
     setIsSubmitting(true);
-    try {
+    const reviewOrCreate = async () => {
       if (inArea && !isReviewed) {
         const reviewed = await reviewHome({
           environmentId: environment.environmentId,
@@ -1230,10 +1230,11 @@ export function AddProjectNewScreen(props: { readonly environmentId?: string | s
         },
         originRoute,
       );
-    } finally {
+    };
+    await reviewOrCreate().finally(() => {
       submittingRef.current = false;
       setIsSubmitting(false);
-    }
+    });
   };
 
   if (created)

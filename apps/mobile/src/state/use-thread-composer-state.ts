@@ -583,29 +583,28 @@ export function useThreadComposerState() {
       if (goalSendPending.current) return null;
       goalSendPending.current = true;
       clearThreadComposerError(threadKey);
-      try {
-        const result = await messageGoal({
-          environmentId: thread.environmentId,
-          input: {
-            type: "thread.goal.message",
-            commandId: CommandId.make(uuidv4()),
-            threadId: thread.id,
-            goalId: goalIntent.goalId,
-            text: goalIntent.text,
-          },
-        });
-        if (result._tag === "Failure") throw squashAtomCommandFailure(result);
-        // Preserve anything typed while the acknowledgement was in flight.
-        if (getComposerDraftSnapshot(threadKey).text === draft.text)
-          setComposerDraftText(threadKey, "");
-      } catch (cause) {
+      const result = await messageGoal({
+        environmentId: thread.environmentId,
+        input: {
+          type: "thread.goal.message",
+          commandId: CommandId.make(uuidv4()),
+          threadId: thread.id,
+          goalId: goalIntent.goalId,
+          text: goalIntent.text,
+        },
+      });
+      goalSendPending.current = false;
+      if (result._tag === "Failure") {
+        const cause = squashAtomCommandFailure(result);
         setThreadComposerError(
           threadKey,
           cause instanceof Error ? cause.message : "Could not message the goal.",
         );
-      } finally {
-        goalSendPending.current = false;
+        return null;
       }
+      // Preserve anything typed while the acknowledgement was in flight.
+      if (getComposerDraftSnapshot(threadKey).text === draft.text)
+        setComposerDraftText(threadKey, "");
       return null;
     }
     text = goalIntent.text;

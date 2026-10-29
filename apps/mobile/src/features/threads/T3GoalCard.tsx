@@ -93,32 +93,35 @@ export function T3GoalCard(props: {
       await action();
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "Could not update the T3 goal.");
-    } finally {
-      inFlight.current = false;
-      setPending(null);
     }
+    inFlight.current = false;
+    setPending(null);
   };
   const start = async (fields: GoalFields) => {
     if (!canStart || proposal === null || startedProposal.current === proposal.id) return;
     startedProposal.current = proposal.id;
     setStartedProposalId(proposal.id);
-    try {
-      const result = await setGoal({
-        environmentId: thread.environmentId,
-        input: {
-          type: "thread.goal.set",
-          commandId: CommandId.make(uuidv4()),
-          threadId: thread.id,
-          ...fields,
-        },
-      });
-      if (result._tag === "Failure") throw squashAtomCommandFailure(result);
-      setEditing(false);
-    } catch (cause) {
+    const release = () => {
       startedProposal.current = null;
       setStartedProposalId(null);
+    };
+    const result = await setGoal({
+      environmentId: thread.environmentId,
+      input: {
+        type: "thread.goal.set",
+        commandId: CommandId.make(uuidv4()),
+        threadId: thread.id,
+        ...fields,
+      },
+    }).catch((cause: unknown) => {
+      release();
       throw cause;
+    });
+    if (result._tag === "Failure") {
+      release();
+      throw squashAtomCommandFailure(result);
     }
+    setEditing(false);
   };
   const fullGoal = projection?.projection.thread.goal ?? null;
   const showProposal = proposal !== null && !(goal !== null && goalIsLive(goal));
