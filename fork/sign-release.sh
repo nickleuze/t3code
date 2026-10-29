@@ -16,7 +16,6 @@ set -euo pipefail
 : "${FORK_SIGNING_P12:?FORK_SIGNING_P12 must point at the signing .p12}"
 : "${FORK_SIGNING_P12_PASSWORD:?FORK_SIGNING_P12_PASSWORD must be set}"
 zip="$(cd "$(dirname "$1")" && pwd)/$(basename "$1")"
-app_name="T3 Code (Alpha).app"
 work="$(mktemp -d)"
 keychain="$work/fork-signing.keychain-db"
 keychain_password="$(uuidgen)"
@@ -49,8 +48,10 @@ identity="$(security find-identity -p codesigning "$keychain" | awk '$1 ~ /^[0-9
 [ -n "$identity" ] || { echo "No signing identity in $FORK_SIGNING_P12" >&2; exit 1; }
 
 ditto -x -k "$zip" "$work/unpacked"
-app="$work/unpacked/$app_name"
-[ -d "$app" ] || { echo "$zip has no $app_name" >&2; exit 1; }
+apps=("$work/unpacked"/*.app)
+[ "${#apps[@]}" -eq 1 ] && [ -d "${apps[0]}" ] || { echo "$zip does not hold exactly one app" >&2; exit 1; }
+app="${apps[0]}"
+app_name="$(basename "$app")"
 # --deep signs the helper apps and frameworks inside out. No hardened runtime,
 # matching the ad-hoc builds, so the bundled native modules keep loading.
 codesign --force --deep --timestamp=none --keychain "$keychain" --sign "$identity" "$app"

@@ -104,7 +104,8 @@ jobs:
           done
           PATH="$PWD/node_modules/.bin:$PATH" \
             node scripts/build-desktop-artifact.ts --platform mac --target dmg --arch arm64
-          feed="$(unzip -p "release/T3-Code-${T3CODE_DESKTOP_VERSION}-arm64.zip" "T3 Code (Alpha).app/Contents/Resources/app-update.yml")"
+          app="$(node -p "require('./apps/desktop/package.json').productName").app"
+          feed="$(unzip -p "release/T3-Code-${T3CODE_DESKTOP_VERSION}-arm64.zip" "$app/Contents/Resources/app-update.yml")"
           if ! grep -qx "owner: ${GITHUB_REPOSITORY%/*}" <<<"$feed" || ! grep -qx "repo: ${GITHUB_REPOSITORY#*/}" <<<"$feed"; then
             echo "Build does not update from ${GITHUB_REPOSITORY}:" >&2
             echo "$feed" >&2

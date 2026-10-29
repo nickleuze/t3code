@@ -52,7 +52,7 @@ esac`,
     shasum: "echo 'fixture  fixture.zip'",
     ditto: `if [ "$1" = -x ]; then
   [ "$T3_TEST_UNPACK" = fail ] && exit 1
-  app="\${@: -1}/T3 Code (Alpha).app"; /bin/mkdir -p "$app/Contents"
+  app="\${@: -1}/T3 Code (Beta).app"; /bin/mkdir -p "$app/Contents"
   printf 'CFBundleShortVersionString=fixture-version\\nCFBundleIdentifier=fixture.alpha\\n' > "$app/Contents/Info.plist"
 else /bin/cp -R "$1" "$2"; fi`,
     trash: `printf "trash %s\\n" "$*" >> "$T3_TEST_TRACE"
@@ -64,7 +64,7 @@ for path in "$@"; do /bin/mv "$path" "$T3_TEST_TRASH/$(/usr/bin/basename "$path"
     launchctl: `printf "launchctl %s\\n" "$*" >> "$T3_TEST_TRACE"
 if [ "$1" = submit ]; then /bin/bash "\${@: -1}"; fi`,
     ps: host
-      ? `[ -e "$T3_TEST_RUNNING" ] && printf '%s\\n' "$T3_TEST_APP/Contents/MacOS/T3 Code (Alpha)"; exit 0`
+      ? `[ -e "$T3_TEST_RUNNING" ] && printf '%s\\n' "$T3_TEST_APP/Contents/Frameworks/T3 Code Helper" "$T3_TEST_APP/Contents/MacOS/T3 Code (Beta)"; exit 0`
       : unexpected("ps"),
     osascript: host
       ? `printf "osascript %s\\n" "$*" >> "$T3_TEST_TRACE"
@@ -238,7 +238,7 @@ NodeTest.test("a staged update installs later only over the app it was staged ag
   NodeAssert.match(stageOnly.stdout, /Install with: launchctl submit/);
   NodeAssert.doesNotMatch(stageOnly.trace, /launchctl|osascript|unexpected/);
   NodeAssert.equal(
-    appVersion(NodePath.join(staged.stage, "T3 Code (Alpha).app")),
+    appVersion(NodePath.join(staged.stage, "T3 Code (Beta).app")),
     "fixture-version",
   );
   const installed = staged.runInstaller(staged.installer);

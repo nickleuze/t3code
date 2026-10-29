@@ -114,7 +114,10 @@ if [ -e "$stage" ] && ! trash "$stage"; then
   exit 1
 fi
 mkdir -p "$stage"
-if ! ditto -x -k "$WORK/$zip" "$stage" || [ ! -d "$stage/T3 Code (Alpha).app" ]; then
+# The release bundle is named after the product, which upstream renames; it is
+# installed at $APP, where the built-in updater also keeps it.
+ditto -x -k "$WORK/$zip" "$stage" && staged_apps=("$stage"/*.app) || staged_apps=()
+if [ "${#staged_apps[@]}" -ne 1 ] || [ ! -d "${staged_apps[0]}" ]; then
   trash "$stage" "$WORK/$zip" || true
   say "Could not unpack $zip; nothing was changed."
   exit 1
@@ -127,6 +130,7 @@ cat > "$installer" <<INSTALLER
 set -u
 APP="$APP"
 STAGE="$stage"
+STAGED_APP="${staged_apps[0]}"
 BACKUPS="$BACKUPS"
 DB="$DB"
 TARGET="$target"
@@ -139,14 +143,14 @@ exec >> "$WORK/update.log" 2>&1
 trap 'launchctl remove "$LABEL" 2>/dev/null' EXIT
 log() { printf '[%s] %s\n' "\$(date '+%F %T')" "\$*"; }
 plist_field() { plutil -extract "\$2" raw -o - "\$1/Contents/Info.plist" 2>/dev/null; }
-# Fixed-string match: "(Alpha)" in a pgrep pattern is a regex group.
-alpha_running() { ps -axo comm= | grep -qxF "\$APP/Contents/MacOS/T3 Code (Alpha)"; }
+# Any executable in Contents/MacOS, since upstream renames change its name.
+alpha_running() { ps -axo comm= | awk -v p="\$APP/Contents/MacOS/" 'index(\$0, p) == 1 { f = 1 } END { exit !f }'; }
 # Moves a failed new app to the Trash and puts the previous one back.
 restore() {
   log "FAILED: \$1; restoring the previous app"
   if [ -e "\$APP" ] && ! trash "\$APP"; then
     log "FAILED: could not move the new app to the Trash; previous app kept at \$BACKUP"
-  elif mv "\$BACKUP/T3 Code (Alpha).app" "\$APP"; then
+  elif mv "\$BACKUP/\$(basename "\$APP")" "\$APP"; then
     open "\$APP"
   else
     log "FAILED: could not restore the previous app; it is kept at \$BACKUP"
@@ -174,7 +178,7 @@ if [ "\$current" != "\$FROM" ]; then
   log "ABORTED: installed app is \$current, but this update was staged against \$FROM; nothing was changed."
   exit 1
 fi
-staged="\$(plist_field "\$STAGE/T3 Code (Alpha).app" CFBundleShortVersionString || echo unreadable)"
+staged="\$(plist_field "\$STAGED_APP" CFBundleShortVersionString || echo unreadable)"
 if [ "\$staged" != "\$TARGET" ]; then
   log "ABORTED: staged app is \$staged, expected \$TARGET; nothing was changed."
   exit 1
@@ -213,7 +217,7 @@ fi
 BACKUP="\$BACKUPS/fork-update-\$(date +%Y%m%d-%H%M%S)-from-\$FROM"
 mkdir -p "\$BACKUP"
 mv "\$APP" "\$BACKUP/" || { log "FAILED: could not move the current app; nothing was changed."; open "\$APP"; exit 1; }
-ditto "\$STAGE/T3 Code (Alpha).app" "\$APP" || restore "install failed"
+ditto "\$STAGED_APP" "\$APP" || restore "install failed"
 xattr -dr com.apple.quarantine "\$APP" 2>/dev/null || true
 open "\$APP"
 # A freshly installed bundle can take ~40s to start while macOS verifies it.
