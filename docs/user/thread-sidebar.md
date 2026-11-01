@@ -35,6 +35,10 @@ Enabled by default (**Settings → General → Working section**, per device). U
 
 While enabled, Active is sorted by most recent return (manual reordering is paused until you turn it off).
 
+To keep working threads in the inbox and still order it by activity, turn off the Working section
+and turn on **Settings → General → Sort by activity**. A thread moves to the top when you send it a
+message and again when its turn finishes. Dragging within the inbox is off while it is on.
+
 ### Group threads by project (beta)
 
 Enable **Settings → Labs → Boring sidebar (group by project)** on web/desktop (per device) to group active threads into collapsible project folders. Pinned threads stay above; Snoozed and Settled stay below. In this mode, the Working section and sidebar drag-reordering are disabled (dragging a thread onto the composer still works).
