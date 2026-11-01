@@ -457,6 +457,10 @@ export function useSettingsRestore(onRestored?: () => void) {
     ...(settings.sidebarWorkingShelfEnabled !== DEFAULT_UNIFIED_SETTINGS.sidebarWorkingShelfEnabled
       ? ["Working section"]
       : []),
+    ...(settings.sidebarSortActiveByActivity !==
+    DEFAULT_UNIFIED_SETTINGS.sidebarSortActiveByActivity
+      ? ["Sort by activity"]
+      : []),
     ...(settings.sidebarAutoSettleAfterDays !== DEFAULT_UNIFIED_SETTINGS.sidebarAutoSettleAfterDays
       ? ["Auto-settle inactive threads"]
       : []),
@@ -623,6 +627,7 @@ export function useSettingsRestore(onRestored?: () => void) {
       sidebarProjectGroupingMode: DEFAULT_UNIFIED_SETTINGS.sidebarProjectGroupingMode,
       sidebarProjectSortOrder: DEFAULT_UNIFIED_SETTINGS.sidebarProjectSortOrder,
       sidebarWorkingShelfEnabled: DEFAULT_UNIFIED_SETTINGS.sidebarWorkingShelfEnabled,
+      sidebarSortActiveByActivity: DEFAULT_UNIFIED_SETTINGS.sidebarSortActiveByActivity,
       sidebarAutoSettleAfterDays: DEFAULT_UNIFIED_SETTINGS.sidebarAutoSettleAfterDays,
       sidebarAutoSettleKeepPullRequests: DEFAULT_UNIFIED_SETTINGS.sidebarAutoSettleKeepPullRequests,
       sidebarAutoSettleOnMerge: DEFAULT_UNIFIED_SETTINGS.sidebarAutoSettleOnMerge,
@@ -875,6 +880,33 @@ export function GeneralSettingsPanel() {
                 updateSettings({ sidebarWorkingShelfEnabled: Boolean(checked) })
               }
               aria-label="Working section"
+            />
+          }
+        />
+        <SettingsRow
+          {...searchableSetting("sort-by-activity")}
+          description="Order the inbox by latest activity: when you last sent a message or a turn last finished. Working threads stay in the inbox, and dragging within it is off. The Working section already orders the inbox this way."
+          resetAction={
+            settings.sidebarSortActiveByActivity !==
+            DEFAULT_UNIFIED_SETTINGS.sidebarSortActiveByActivity ? (
+              <SettingResetButton
+                label="sort by activity"
+                onClick={() =>
+                  updateSettings({
+                    sidebarSortActiveByActivity:
+                      DEFAULT_UNIFIED_SETTINGS.sidebarSortActiveByActivity,
+                  })
+                }
+              />
+            ) : null
+          }
+          control={
+            <Switch
+              checked={settings.sidebarSortActiveByActivity}
+              onCheckedChange={(checked) =>
+                updateSettings({ sidebarSortActiveByActivity: Boolean(checked) })
+              }
+              aria-label="Sort by activity"
             />
           }
         />

@@ -145,6 +145,10 @@ choice.
 While this is on, the active list is ordered by when each thread last came back to you, so you
 cannot drag or move threads within it. Your saved order returns when you turn it off.
 
+To keep working threads in the inbox and still order it by activity, turn off the Working section
+and turn on **Settings → General → Sort by activity**. A thread moves to the top when you send it a
+message and again when its turn finishes. Dragging within the inbox is off while it is on.
+
 ### Group threads by project (beta)
 
 Turn on **Settings → Labs → Boring sidebar (group by project)** on web and desktop to put active
