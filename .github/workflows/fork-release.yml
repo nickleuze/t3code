@@ -1,0 +1,249 @@
+name: Fork release
+
+# Builds the macOS arm64 and Windows x64 desktop apps from every push to the
+# fork's nick/patches and publishes both in one GitHub release. Installed builds
+# update through the app's built-in updater, which reads this repository's
+# latest release. macOS builds are signed with the Developer ID and notarized;
+# Windows builds are unsigned (SmartScreen asks once).
+#
+# A manual dispatch from another branch builds both apps without publishing.
+
+on:
+  push:
+    branches: [nick/patches]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: fork-release-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  T3CODE_DESKTOP_UPDATE_REPOSITORY: ${{ github.repository }}
+  T3CODE_CLERK_PUBLISHABLE_KEY: ${{ vars.T3CODE_CLERK_PUBLISHABLE_KEY }}
+  T3CODE_CLERK_JWT_TEMPLATE: ${{ vars.T3CODE_CLERK_JWT_TEMPLATE }}
+  T3CODE_CLERK_CLI_OAUTH_CLIENT_ID: ${{ vars.T3CODE_CLERK_CLI_OAUTH_CLIENT_ID }}
+  T3CODE_RELAY_URL: ${{ vars.T3CODE_RELAY_URL }}
+
+jobs:
+  build_mac:
+    if: github.repository == 'nickleuze/t3code'
+    name: Build macOS arm64
+    runs-on: macos-15
+    timeout-minutes: 90
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ github.sha }}
+          sparse-checkout: |
+            /*
+            !/.repos/
+          sparse-checkout-cone-mode: false
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
+        with:
+          targets: aarch64-apple-darwin
+
+      - name: Setup Vite+
+        uses: voidzero-dev/setup-vp@v1
+        with:
+          node-version-file: package.json
+          cache: true
+          run-install: true
+
+      - name: Ensure Electron runtime is installed
+        run: vp run --filter @t3tools/desktop ensure:electron
+
+      # Each run gets a version above the last, so installed apps see they are behind.
+      - name: Resolve version
+        id: version
+        run: |
+          base="$(node -p "require('./apps/desktop/package.json').version")"
+          echo "version=${base}-nick.${GITHUB_RUN_NUMBER}" >> "$GITHUB_OUTPUT"
+
+      - name: Align package versions to release version
+        run: node scripts/update-release-package-versions.ts "${{ steps.version.outputs.version }}"
+
+      - name: Build, sign and notarize
+        env:
+          T3CODE_DESKTOP_VERSION: ${{ steps.version.outputs.version }}
+          CSC_LINK: ${{ secrets.CSC_LINK }}
+          CSC_KEY_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD }}
+          APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
+          APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
+          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+          APPLE_TEAM_ID: ${{ vars.APPLE_TEAM_ID }}
+          MACOS_PROVISIONING_PROFILE: ${{ secrets.MACOS_PROVISIONING_PROFILE }}
+        run: |
+          for name in T3CODE_CLERK_PUBLISHABLE_KEY T3CODE_CLERK_JWT_TEMPLATE T3CODE_CLERK_CLI_OAUTH_CLIENT_ID T3CODE_RELAY_URL \
+            CSC_LINK CSC_KEY_PASSWORD APPLE_API_KEY APPLE_API_KEY_ID APPLE_API_ISSUER APPLE_TEAM_ID MACOS_PROVISIONING_PROFILE; do
+            if [ -z "${!name}" ]; then
+              echo "Repository secret or variable $name is not set." >&2
+              exit 1
+            fi
+          done
+          key_path="$RUNNER_TEMP/AuthKey_${APPLE_API_KEY_ID}.p8"
+          printf '%s' "$APPLE_API_KEY" > "$key_path"
+          profile_path="$RUNNER_TEMP/t3code.provisionprofile"
+          printf '%s' "$MACOS_PROVISIONING_PROFILE" | base64 -D > "$profile_path"
+          APPLE_API_KEY="$key_path" \
+          T3CODE_APPLE_TEAM_ID="$APPLE_TEAM_ID" \
+          T3CODE_MACOS_PROVISIONING_PROFILE="$profile_path" \
+          PATH="$PWD/node_modules/.bin:$PATH" \
+            node scripts/build-desktop-artifact.ts --platform mac --target dmg --arch arm64 --signed
+          rm -f "$key_path" "$profile_path"
+
+      - name: Verify the build
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          app_name="$(node -p "require('./apps/desktop/package.json').productName").app"
+          check="$RUNNER_TEMP/check"
+          ditto -x -k "release/T3-Code-${VERSION}-arm64.zip" "$check"
+          app="$check/$app_name"
+          test "$(plutil -extract CFBundleIdentifier raw "$app/Contents/Info.plist")" = com.nickleuze.t3code
+          codesign --verify --deep --strict "$app"
+          spctl -a -t exec -vv "$app"
+          feed="$(cat "$app/Contents/Resources/app-update.yml")"
+          if ! grep -qx "owner: ${GITHUB_REPOSITORY%/*}" <<<"$feed" || ! grep -qx "repo: ${GITHUB_REPOSITORY#*/}" <<<"$feed"; then
+            echo "Build does not update from ${GITHUB_REPOSITORY}:" >&2
+            echo "$feed" >&2
+            exit 1
+          fi
+          grep -q "T3-Code-${VERSION}-arm64.zip" release/latest-mac.yml
+
+      - name: Upload build
+        uses: actions/upload-artifact@v7
+        with:
+          name: fork-mac-arm64
+          path: |
+            release/T3-Code-${{ steps.version.outputs.version }}-arm64.zip
+            release/T3-Code-${{ steps.version.outputs.version }}-arm64.zip.blockmap
+            release/T3-Code-${{ steps.version.outputs.version }}-arm64.dmg
+            release/latest-mac.yml
+          if-no-files-found: error
+          retention-days: 3
+
+  build_windows:
+    if: github.repository == 'nickleuze/t3code'
+    name: Build Windows x64
+    runs-on: windows-2025
+    timeout-minutes: 75
+    defaults:
+      run:
+        shell: bash
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ github.sha }}
+          sparse-checkout: |
+            /*
+            !/.repos/
+          sparse-checkout-cone-mode: false
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
+        with:
+          targets: x86_64-pc-windows-msvc
+
+      # The resource monitor is built with Spectre-mitigated MSVC libraries,
+      # which the runner image does not include (as in release-desktop.yml).
+      - name: Install Spectre-mitigated MSVC libs
+        shell: pwsh
+        run: |
+          $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
+          $installPath = & $vswhere -products * -latest -property installationPath
+          $setupExe = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\setup.exe"
+          $proc = Start-Process -FilePath $setupExe `
+            -ArgumentList "modify", "--installPath", "`"$installPath`"", "--add", `
+            "Microsoft.VisualStudio.Component.VC.Runtimes.x86.x64.Spectre", "--quiet", "--norestart" `
+            -Wait -PassThru -NoNewWindow
+          if ($null -eq $proc -or $proc.ExitCode -ne 0) {
+            $code = if ($null -ne $proc) { $proc.ExitCode } else { 1 }
+            Write-Error "Visual Studio Installer failed with exit code $code"
+            exit $code
+          }
+
+      - name: Setup Vite+
+        uses: voidzero-dev/setup-vp@v1
+        with:
+          node-version-file: package.json
+          cache: false
+          run-install: true
+
+      - name: Ensure Electron runtime is installed
+        run: vp run --filter @t3tools/desktop ensure:electron
+
+      - name: Resolve version
+        id: version
+        run: |
+          base="$(node -p "require('./apps/desktop/package.json').version")"
+          echo "version=${base}-nick.${GITHUB_RUN_NUMBER}" >> "$GITHUB_OUTPUT"
+
+      - name: Align package versions to release version
+        run: node scripts/update-release-package-versions.ts "${{ steps.version.outputs.version }}"
+
+      # Without the WSL runtime, so agents run natively on Windows.
+      - name: Build
+        env:
+          T3CODE_DESKTOP_VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          for name in T3CODE_CLERK_PUBLISHABLE_KEY T3CODE_CLERK_JWT_TEMPLATE T3CODE_CLERK_CLI_OAUTH_CLIENT_ID T3CODE_RELAY_URL; do
+            if [ -z "${!name}" ]; then
+              echo "Repository variable $name is not set." >&2
+              exit 1
+            fi
+          done
+          PATH="$PWD/node_modules/.bin:$PATH" \
+            node scripts/build-desktop-artifact.ts --platform win --target nsis --arch x64
+
+      - name: Upload build
+        uses: actions/upload-artifact@v7
+        with:
+          name: fork-win-x64
+          path: |
+            release/T3-Code-${{ steps.version.outputs.version }}-x64.exe
+            release/T3-Code-${{ steps.version.outputs.version }}-x64.exe.blockmap
+            release/latest.yml
+          if-no-files-found: error
+          retention-days: 3
+
+  # Both apps ship in one release or not at all.
+  release:
+    needs: [build_mac, build_windows]
+    if: github.repository == 'nickleuze/t3code' && github.ref == 'refs/heads/nick/patches'
+    name: Publish release
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Download builds
+        uses: actions/download-artifact@v8
+        with:
+          pattern: fork-*
+          path: release
+          merge-multiple: true
+
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ needs.build_mac.outputs.version }}
+          WINDOWS_VERSION: ${{ needs.build_windows.outputs.version }}
+        run: |
+          test "$VERSION" = "$WINDOWS_VERSION"
+          cd release
+          sha256sum T3-Code-* > SHA256SUMS
+          gh release create "fork-v${VERSION}" ./* \
+            --repo "${GITHUB_REPOSITORY}" \
+            --target "${GITHUB_SHA}" \
+            --title "Fork ${VERSION}" \
+            --notes "Built from ${GITHUB_SHA} on nick/patches. macOS: signed and notarized. Windows: unsigned, so SmartScreen asks once." \
+            --latest
