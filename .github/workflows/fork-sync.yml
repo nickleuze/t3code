@@ -1,0 +1,71 @@
+name: Fork sync
+
+# Moves nick/patches onto each new stable upstream release. The push uses a
+# deploy key, so it starts Fork release (pushes made with GITHUB_TOKEN start
+# nothing, and it cannot push upstream's workflow changes).
+#
+# A rebase that conflicts publishes nothing: the run fails once and leaves a
+# nick/sync-conflict/<tag> branch, which keeps later runs quiet until the
+# patches are rebased by hand.
+
+on:
+  schedule:
+    - cron: "23 */6 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: fork-sync
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    if: github.repository == 'nickleuze/t3code'
+    name: Rebase onto upstream
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          ref: nick/patches
+          fetch-depth: 0
+          ssh-key: ${{ secrets.FORK_SYNC_DEPLOY_KEY }}
+
+      - name: Rebase and push
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          read -r latest latest_commit < <(.github/scripts/fork-upstream-tags.sh)
+          marker="nick/sync-conflict/${latest}"
+          if git merge-base --is-ancestor "$latest_commit" HEAD 2>/dev/null; then
+            echo "nick/patches already includes upstream ${latest}."
+            for stale in $(git for-each-ref --format='%(refname:lstrip=3)' 'refs/remotes/origin/nick/sync-conflict/'); do
+              git push origin --delete "$stale"
+            done
+            exit 0
+          fi
+          if git ls-remote --exit-code --heads origin "$marker" >/dev/null; then
+            echo "The conflict with ${latest} is already reported; rebase nick/patches by hand."
+            exit 0
+          fi
+
+          while read -r tag commit; do
+            if git merge-base --is-ancestor "$commit" HEAD 2>/dev/null; then base_commit="$commit"; base="$tag"; break; fi
+          done < <(.github/scripts/fork-upstream-tags.sh)
+          test -n "${base:-}"
+
+          git fetch --no-tags https://github.com/pingdotgg/t3code.git "+refs/tags/${latest}:refs/tags/${latest}"
+          head="$(git rev-parse HEAD)"
+          echo "Rebasing $(git rev-list --count "${base_commit}..HEAD") patches from ${base} onto ${latest}."
+          if ! git rebase --onto "$latest_commit" "$base_commit"; then
+            git rebase --abort
+            git push origin "${latest_commit}:refs/heads/${marker}"
+            echo "::error::nick/patches does not rebase cleanly onto ${latest}. Nothing was published."
+            exit 1
+          fi
+          git log --oneline "${latest_commit}..HEAD"
+          git push --force-with-lease="nick/patches:${head}" origin HEAD:nick/patches
