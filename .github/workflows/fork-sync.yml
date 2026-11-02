@@ -1,16 +1,20 @@
 name: Fork sync
 
-# Moves nick/patches onto each new stable upstream release. The push uses a
-# deploy key, so it starts Fork release (pushes made with GITHUB_TOKEN start
-# nothing, and it cannot push upstream's workflow changes).
+# Once a day, moves nick/patches onto upstream's newest nightly (or stable)
+# release. The push uses a deploy key, so it starts Fork release (pushes made
+# with GITHUB_TOKEN start nothing, and it cannot push upstream's workflow
+# changes).
 #
-# A rebase that conflicts publishes nothing: the run fails once and leaves a
+# When the patches conflict, Claude Code resolves the rebase (if the
+# CLAUDE_CODE_OAUTH_TOKEN secret is set). The result is pushed only when the
+# rebase finished with every patch, no conflict markers remain and the repo
+# typechecks. Otherwise nothing is published: the run fails once and leaves a
 # nick/sync-conflict/<tag> branch, which keeps later runs quiet until the
 # patches are rebased by hand.
 
 on:
   schedule:
-    - cron: "23 */6 * * *"
+    - cron: "23 4 * * *"
   workflow_dispatch:
 
 permissions:
@@ -25,7 +29,7 @@ jobs:
     if: github.repository == 'nickleuze/t3code'
     name: Rebase onto upstream
     runs-on: ubuntu-24.04
-    timeout-minutes: 20
+    timeout-minutes: 90
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -34,7 +38,8 @@ jobs:
           fetch-depth: 0
           ssh-key: ${{ secrets.FORK_SYNC_DEPLOY_KEY }}
 
-      - name: Rebase and push
+      - name: Rebase
+        id: rebase
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
@@ -53,19 +58,99 @@ jobs:
             exit 0
           fi
 
-          while read -r tag commit; do
-            if git merge-base --is-ancestor "$commit" HEAD 2>/dev/null; then base_commit="$commit"; base="$tag"; break; fi
-          done < <(.github/scripts/fork-upstream-tags.sh)
-          test -n "${base:-}"
-
           git fetch --no-tags https://github.com/pingdotgg/t3code.git "+refs/tags/${latest}:refs/tags/${latest}"
-          head="$(git rev-parse HEAD)"
-          echo "Rebasing $(git rev-list --count "${base_commit}..HEAD") patches from ${base} onto ${latest}."
-          if ! git rebase --onto "$latest_commit" "$base_commit"; then
-            git rebase --abort
-            git push origin "${latest_commit}:refs/heads/${marker}"
-            echo "::error::nick/patches does not rebase cleanly onto ${latest}. Nothing was published."
-            exit 1
+          base_commit="$(git merge-base HEAD "$latest_commit")"
+          {
+            echo "latest=${latest}"
+            echo "latest_commit=${latest_commit}"
+            echo "marker=${marker}"
+            echo "head=$(git rev-parse HEAD)"
+            echo "patches=$(git rev-list --count "${base_commit}..HEAD")"
+          } >> "$GITHUB_OUTPUT"
+          echo "Rebasing $(git rev-list --count "${base_commit}..HEAD") patches onto ${latest}."
+          if git rebase --onto "$latest_commit" "$base_commit"; then
+            echo "result=clean" >> "$GITHUB_OUTPUT"
+          else
+            echo "result=conflict" >> "$GITHUB_OUTPUT"
           fi
-          git log --oneline "${latest_commit}..HEAD"
-          git push --force-with-lease="nick/patches:${head}" origin HEAD:nick/patches
+
+      - name: Setup Vite+
+        if: steps.rebase.outputs.result == 'conflict'
+        uses: voidzero-dev/setup-vp@v1
+        with:
+          node-version-file: package.json
+          cache: true
+          run-install: false
+
+      - name: Resolve conflicts with Claude Code
+        id: resolve
+        if: steps.rebase.outputs.result == 'conflict'
+        continue-on-error: true
+        env:
+          CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          GIT_EDITOR: "true"
+          PROMPT: |
+            You are in a checkout of nickleuze/t3code, a personal fork of T3 Code. A rebase of the fork's patches onto upstream ${{ steps.rebase.outputs.latest }} stopped on a conflict while applying one patch.
+
+            Resolve the conflicted files (git status lists them). For each conflict, keep upstream's change and the patch's intent: read the patch being applied (git show REBASE_HEAD) and the upstream commits that touched the same lines, then combine them. Also update any new upstream code the patch would have had to change. Change nothing the conflict does not require. Stage the resolved files with git add. Do not run git rebase --continue or commit; the workflow continues the rebase. End with a short summary of each conflict and how you resolved it.
+        # The workflow advances the rebase and calls Claude once per patch that stops,
+        # so Claude only needs to edit and stage files.
+        run: |
+          test -n "$CLAUDE_CODE_OAUTH_TOKEN" || { echo "CLAUDE_CODE_OAUTH_TOKEN is not set."; exit 1; }
+          curl -fsSL https://claude.ai/install.sh | bash
+          for attempt in 1 2 3 4 5 6 7 8; do
+            # --allowedTools takes a list, so the prompt must come before it.
+            "$HOME/.local/bin/claude" -p "$PROMPT" --max-turns 100 --permission-mode acceptEdits \
+              --allowedTools "Read,Edit,Write,Glob,Grep,Bash(git status:*),Bash(git diff:*),Bash(git log:*),Bash(git show:*),Bash(git add:*),Bash(git rm:*)"
+            test -z "$(git diff --name-only --diff-filter=U)"
+            if git rebase --continue; then exit 0; fi
+            test -n "$(git diff --name-only --diff-filter=U)"
+          done
+          exit 1
+
+      - name: Check the rebase
+        id: check
+        if: steps.rebase.outputs.result == 'conflict' && steps.resolve.outcome == 'success'
+        continue-on-error: true
+        env:
+          LATEST_COMMIT: ${{ steps.rebase.outputs.latest_commit }}
+          PATCHES: ${{ steps.rebase.outputs.patches }}
+        run: |
+          test ! -d "$(git rev-parse --git-path rebase-merge)"
+          test ! -d "$(git rev-parse --git-path rebase-apply)"
+          test -z "$(git status --porcelain --untracked-files=no)"
+          git merge-base --is-ancestor "$LATEST_COMMIT" HEAD
+          test "$(git rev-list --count "${LATEST_COMMIT}..HEAD")" = "$PATCHES"
+          if git diff "${LATEST_COMMIT}..HEAD" | grep -qE '^\+(<<<<<<<|>>>>>>>)( |$)'; then
+            echo "Conflict markers remain."; exit 1
+          fi
+          git log --stat "${LATEST_COMMIT}..HEAD"
+          vp install
+          vp run typecheck
+          # Unit tests in and beside the files the patches change (browser tests need a browser).
+          shopt -s nullglob
+          tests=()
+          for file in $(git diff --name-only "${LATEST_COMMIT}..HEAD" -- '*.ts' '*.tsx'); do
+            stem="${file%.*}"; stem="${stem%.test}"
+            for test_file in "$stem".test.ts "$stem".test.tsx "$stem".*.test.ts "$stem".*.test.tsx; do
+              [[ "$test_file" == *.browser.test.* ]] || tests+=("$test_file")
+            done
+          done
+          if (( ${#tests[@]} )); then vp test run $(printf '%s\n' "${tests[@]}" | sort -u); fi
+
+      - name: Push
+        if: steps.rebase.outputs.result == 'clean' || steps.check.outcome == 'success'
+        env:
+          HEAD_BEFORE: ${{ steps.rebase.outputs.head }}
+        run: git push --force-with-lease="nick/patches:${HEAD_BEFORE}" origin HEAD:nick/patches
+
+      - name: Report the conflict
+        if: steps.rebase.outputs.result == 'conflict' && steps.check.outcome != 'success'
+        env:
+          LATEST: ${{ steps.rebase.outputs.latest }}
+          LATEST_COMMIT: ${{ steps.rebase.outputs.latest_commit }}
+          MARKER: ${{ steps.rebase.outputs.marker }}
+        run: |
+          git push origin "${LATEST_COMMIT}:refs/heads/${MARKER}"
+          echo "::error::nick/patches does not rebase onto ${LATEST}, and the conflict was not resolved automatically. Nothing was published."
+          exit 1
