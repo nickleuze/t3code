@@ -40,6 +40,7 @@ jobs:
         uses: actions/checkout@v6
         with:
           ref: ${{ github.sha }}
+          fetch-depth: 0
           sparse-checkout: |
             /*
             !/.repos/
@@ -60,11 +61,15 @@ jobs:
       - name: Ensure Electron runtime is installed
         run: vp run --filter @t3tools/desktop ensure:electron
 
-      # Each run gets a version above the last, so installed apps see they are behind.
+      # Named after the upstream release the patches sit on; package.json lags
+      # upstream's tags. The run number keeps every build above the last.
       - name: Resolve version
         id: version
         run: |
-          base="$(node -p "require('./apps/desktop/package.json').version")"
+          while read -r tag commit; do
+            if git merge-base --is-ancestor "$commit" HEAD 2>/dev/null; then base="${tag#v}"; break; fi
+          done < <(.github/scripts/fork-upstream-tags.sh)
+          test -n "${base:-}"
           echo "version=${base}-nick.${GITHUB_RUN_NUMBER}" >> "$GITHUB_OUTPUT"
 
       - name: Align package versions to release version
@@ -145,6 +150,7 @@ jobs:
         uses: actions/checkout@v6
         with:
           ref: ${{ github.sha }}
+          fetch-depth: 0
           sparse-checkout: |
             /*
             !/.repos/
@@ -186,7 +192,10 @@ jobs:
       - name: Resolve version
         id: version
         run: |
-          base="$(node -p "require('./apps/desktop/package.json').version")"
+          while read -r tag commit; do
+            if git merge-base --is-ancestor "$commit" HEAD 2>/dev/null; then base="${tag#v}"; break; fi
+          done < <(.github/scripts/fork-upstream-tags.sh)
+          test -n "${base:-}"
           echo "version=${base}-nick.${GITHUB_RUN_NUMBER}" >> "$GITHUB_OUTPUT"
 
       - name: Align package versions to release version
