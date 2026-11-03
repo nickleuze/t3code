@@ -6,6 +6,10 @@ name: Fork release
 # latest release. macOS builds are signed with the Developer ID and notarized;
 # Windows builds are unsigned (SmartScreen asks once).
 #
+# The macOS build runs on Nick's Mac mini (self-hosted runner labelled
+# t3-fork-mac), because GitHub's hosted arm64 Macs often never pick the job up.
+# If the Mini is offline, the job waits for it.
+#
 # A manual dispatch from another branch builds both apps without publishing.
 
 on:
@@ -31,7 +35,7 @@ jobs:
   build_mac:
     if: github.repository == 'nickleuze/t3code'
     name: Build macOS arm64
-    runs-on: macos-15
+    runs-on: [self-hosted, macOS, ARM64, t3-fork-mac]
     timeout-minutes: 90
     outputs:
       version: ${{ steps.version.outputs.version }}
