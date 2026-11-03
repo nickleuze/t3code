@@ -5,8 +5,10 @@ name: Fork sync
 # with GITHUB_TOKEN start nothing, and it cannot push upstream's workflow
 # changes).
 #
-# When the patches conflict, Claude Code resolves the rebase (if the
-# CLAUDE_CODE_OAUTH_TOKEN secret is set). The result is pushed only when the
+# Runs on Nick's Mac mini (self-hosted runner t3-fork-mac). When the patches
+# conflict, OpenCode resolves the rebase with the OpenCode Go key from the
+# Mini's 1Password AGENTS vault (op:// reference in the FORK_SYNC_OPENCODE_KEY_REF
+# variable; model in FORK_SYNC_MODEL). The result is pushed only when the
 # rebase finished with every patch, no conflict markers remain and the repo
 # typechecks. Otherwise nothing is published: the run fails once and leaves a
 # nick/sync-conflict/<tag> branch, which keeps later runs quiet until the
@@ -28,7 +30,7 @@ jobs:
   sync:
     if: github.repository == 'nickleuze/t3code'
     name: Rebase onto upstream
-    runs-on: ubuntu-24.04
+    runs-on: [self-hosted, macOS, ARM64, t3-fork-mac]
     timeout-minutes: 90
     steps:
       - name: Checkout
@@ -43,6 +45,8 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          # The runner keeps .git between runs; drop a rebase a failed run left behind.
+          git rebase --quit 2>/dev/null || true
 
           read -r latest latest_commit < <(.github/scripts/fork-upstream-tags.sh)
           marker="nick/sync-conflict/${latest}"
@@ -82,26 +86,54 @@ jobs:
           cache: true
           run-install: false
 
-      - name: Resolve conflicts with Claude Code
+      - name: Resolve conflicts with OpenCode
         id: resolve
         if: steps.rebase.outputs.result == 'conflict'
         continue-on-error: true
         env:
-          CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          KEY_REF: ${{ vars.FORK_SYNC_OPENCODE_KEY_REF }}
+          MODEL: ${{ vars.FORK_SYNC_MODEL || 'opencode-go/kimi-k3.1-pro' }}
           GIT_EDITOR: "true"
+          # Anything left at "ask" would stall a run nobody is watching.
+          OPENCODE_CONFIG_CONTENT: |
+            {
+              "provider": { "opencode-go": { "options": { "apiKey": "{env:OPENCODE_GO_API_KEY}" } } },
+              "permission": {
+                "edit": "allow",
+                "bash": {
+                  "*": "deny",
+                  "git status": "allow", "git status *": "allow",
+                  "git diff": "allow", "git diff *": "allow",
+                  "git log": "allow", "git log *": "allow",
+                  "git show": "allow", "git show *": "allow",
+                  "git ls-files": "allow", "git ls-files *": "allow",
+                  "git rev-parse *": "allow"
+                },
+                "webfetch": "deny", "websearch": "deny", "external_directory": "deny",
+                "question": "deny", "doom_loop": "deny", "skill": "deny", "task": "deny"
+              }
+            }
           PROMPT: |
             You are in a checkout of nickleuze/t3code, a personal fork of T3 Code. A rebase of the fork's patches onto upstream ${{ steps.rebase.outputs.latest }} stopped on a conflict while applying one patch.
 
-            Resolve the conflicted files (git status lists them). For each conflict, keep upstream's change and the patch's intent: read the patch being applied (git show REBASE_HEAD) and the upstream commits that touched the same lines, then combine them. Also update any new upstream code the patch would have had to change. Change nothing the conflict does not require. Stage the resolved files with git add. Do not run git rebase --continue or commit; the workflow continues the rebase. End with a short summary of each conflict and how you resolved it.
-        # The workflow advances the rebase and calls Claude once per patch that stops,
-        # so Claude only needs to edit and stage files.
+            Resolve the conflicted files (git status lists them). For each conflict, keep upstream's change and the patch's intent: read the patch being applied (git show REBASE_HEAD) and the upstream commits that touched the same lines, then combine them. Also update any new upstream code the patch would have had to change. Change nothing the conflict does not require. Do not stage, commit or run git rebase; the workflow does that. End with a short summary of each conflict and how you resolved it.
+        # The workflow stages the files that were in conflict and advances the
+        # rebase, calling OpenCode once per patch that stops.
         run: |
-          test -n "$CLAUDE_CODE_OAUTH_TOKEN" || { echo "CLAUDE_CODE_OAUTH_TOKEN is not set."; exit 1; }
-          curl -fsSL https://claude.ai/install.sh | bash
+          test -n "$KEY_REF" || { echo "The FORK_SYNC_OPENCODE_KEY_REF variable is not set."; exit 1; }
+          # An empty data dir, so OpenCode can't fall back to a key saved in its auth.json.
+          export XDG_DATA_HOME="$RUNNER_TEMP/opencode-data"
           for attempt in 1 2 3 4 5 6 7 8; do
-            # --allowedTools takes a list, so the prompt must come before it.
-            "$HOME/.local/bin/claude" -p "$PROMPT" --max-turns 100 --permission-mode acceptEdits \
-              --allowedTools "Read,Edit,Write,Glob,Grep,Bash(git status:*),Bash(git diff:*),Bash(git log:*),Bash(git show:*),Bash(git add:*),Bash(git rm:*)"
+            conflicted="$(git diff --name-only --diff-filter=U)"
+            rm -rf "$XDG_DATA_HOME" && mkdir -p "$XDG_DATA_HOME"
+            "$HOME/.local/bin/scoped-secrets" run --timeout 1800 -e "OPENCODE_GO_API_KEY=$KEY_REF" -- \
+              /opt/homebrew/bin/opencode run -m "$MODEL" "$PROMPT" </dev/null
+            while IFS= read -r file; do
+              if [ -f "$file" ] && grep -qE '^(<<<<<<<|>>>>>>>)( |$)' "$file"; then
+                echo "Conflict markers remain in $file."; exit 1
+              fi
+              git add -A -- "$file"
+            done <<<"$conflicted"
             test -z "$(git diff --name-only --diff-filter=U)"
             if git rebase --continue; then exit 0; fi
             test -n "$(git diff --name-only --diff-filter=U)"
