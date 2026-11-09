@@ -524,11 +524,13 @@ export const make = Effect.gen(function* () {
     // An older build can lack migrations this one ran. Only a guarded track switch's own check
     // may offer one.
     yield* electronUpdater.setAllowDowngrade(false);
-    yield* electronUpdater.setFullChangelog(allowsPrerelease);
+    // Fork: fork releases sit on the latest channel, and each covers only the upstream changes
+    // since the previous one, so the popover lists every release newer than the installed one.
+    yield* electronUpdater.setFullChangelog(true);
     yield* logUpdaterInfo("using update channel", {
       channel,
       allowPrerelease: allowsPrerelease,
-      fullChangelog: allowsPrerelease,
+      fullChangelog: true,
     });
   });
 
