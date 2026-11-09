@@ -257,6 +257,51 @@ jobs:
           path: release
           merge-multiple: true
 
+      # The update popover reads this body: upstream's nightly highlights since the last fork release.
+      - name: Write release notes
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ needs.build_mac.outputs.version }}
+        run: |
+          base="${VERSION%-nick.*}"
+          previous="$(gh release list --repo "$GITHUB_REPOSITORY" --limit 1 --json tagName -q '.[0].tagName')"
+          previous="${previous#fork-}"
+          previous="${previous#v}"
+          previous_base="${previous%-nick.*}"
+          new_build="${base##*.}"
+          case "$previous_base" in
+            *-nightly.*) previous_build="${previous_base##*.}" ;;
+            *) previous_build=$((new_build - 1)) ;;
+          esac
+          changes="$(gh api "repos/pingdotgg/t3code/compare/v${previous_base}...v${base}" -q .total_commits 2>/dev/null || true)"
+          highlights="$RUNNER_TEMP/highlights.md"
+          : > "$highlights"
+          more=0
+          for tag in $(gh release list --repo pingdotgg/t3code --limit 100 --json tagName -q '.[].tagName' |
+            awk -F. -v lo="$previous_build" -v hi="$new_build" '/^v[0-9.]+-nightly\.[0-9]{8}\.[0-9]+$/ && $NF > lo && $NF <= hi { print $NF, $0 }' |
+            sort -rn | cut -d' ' -f2); do
+            summary="$(gh release view "$tag" --repo pingdotgg/t3code --json body -q .body | sed '/<details>/,$d')"
+            grep -E '^- \*\*' <<<"$summary" >> "$highlights" || true
+            n="$(sed -nE 's/^### Plus ([0-9]+) more.*/\1/p' <<<"$summary" | head -1)"
+            more=$((more + ${n:-0}))
+          done
+          {
+            if [ "$previous_base" = "$base" ]; then
+              printf '**v%s** · No upstream changes since %s\n\nRebuilt with fork changes only.\n' "$VERSION" "${previous##*-}"
+            else
+              printf '**v%s** · %s upstream changes since %s\n\n' "$VERSION" "${changes:-New}" "${previous##*-}"
+              awk '!seen[$0]++' "$highlights"
+              if [ "$more" -gt 0 ]; then printf '\n### Plus %s more bug fixes and performance improvements.\n' "$more"; fi
+            fi
+            printf '\n<details>\n<summary>Full changelog</summary>\n\n'
+            if [ "$previous_base" != "$base" ]; then
+              printf 'Upstream: https://github.com/pingdotgg/t3code/compare/v%s...v%s\n\n' "$previous_base" "$base"
+            fi
+            printf 'Built from %s on nick/patches. macOS: signed and notarized. Windows: unsigned, so SmartScreen asks once.\n\n</details>\n' "$GITHUB_SHA"
+          } > "$RUNNER_TEMP/notes.md"
+          cat "$RUNNER_TEMP/notes.md"
+
+      # A v tag is semver, which the updater needs to list every release since the installed one.
       - name: Publish release
         env:
           GH_TOKEN: ${{ github.token }}
@@ -266,9 +311,9 @@ jobs:
           test "$VERSION" = "$WINDOWS_VERSION"
           cd release
           sha256sum T3-Code-* > SHA256SUMS
-          gh release create "fork-v${VERSION}" ./* \
+          gh release create "v${VERSION}" ./* \
             --repo "${GITHUB_REPOSITORY}" \
             --target "${GITHUB_SHA}" \
             --title "Fork ${VERSION}" \
-            --notes "Built from ${GITHUB_SHA} on nick/patches. macOS: signed and notarized. Windows: unsigned, so SmartScreen asks once." \
+            --notes-file "$RUNNER_TEMP/notes.md" \
             --latest
