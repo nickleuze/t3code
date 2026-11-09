@@ -139,6 +139,11 @@ jobs:
           if-no-files-found: error
           retention-days: 3
 
+      # The Mini's disk is shared with Nick's own work; don't keep a built checkout between runs.
+      - name: Clean the checkout
+        if: always()
+        run: git clean -ffdxq
+
   build_windows:
     if: github.repository == 'nickleuze/t3code'
     name: Build Windows x64
