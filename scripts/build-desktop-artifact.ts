@@ -1052,12 +1052,18 @@ export function resolveWindowsServerAsarIgnoreGlobs(arch: typeof BuildArch.Type)
   const unusedPrebuild = `**/node_modules/node-pty/prebuilds/win32-${unusedArch}`;
   const unusedConpty = `**/node_modules/node-pty/third_party/conpty/*/win10-${unusedArch}`;
 
+  // node-pty's postinstall copies conpty into build/Release when installed on Windows;
+  // the prebuilt conpty.node loads its own copy, so this one only costs payload files.
+  const postinstallConpty = "**/node_modules/node-pty/build/Release/conpty";
+
   return [
     ...WINDOWS_SERVER_ASAR_IGNORE_GLOBS,
     unusedPrebuild,
     `${unusedPrebuild}/**`,
     unusedConpty,
     `${unusedConpty}/**`,
+    postinstallConpty,
+    `${postinstallConpty}/**`,
   ];
 }
 
