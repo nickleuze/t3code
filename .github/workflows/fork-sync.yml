@@ -186,3 +186,8 @@ jobs:
           git push origin "${LATEST_COMMIT}:refs/heads/${MARKER}"
           echo "::error::nick/patches does not rebase onto ${LATEST}, and the conflict was not resolved automatically. Nothing was published."
           exit 1
+
+      # The Mini's disk is shared with Nick's own work; don't keep a built checkout between runs.
+      - name: Clean the checkout
+        if: always()
+        run: git clean -ffdxq
