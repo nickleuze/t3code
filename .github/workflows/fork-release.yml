@@ -207,8 +207,10 @@ jobs:
 
       # Without the WSL runtime, so agents run natively on Windows.
       - name: Build
+        id: build
         env:
           T3CODE_DESKTOP_VERSION: ${{ steps.version.outputs.version }}
+          T3CODE_DESKTOP_KEEP_STAGE: "1"
         run: |
           for name in T3CODE_CLERK_PUBLISHABLE_KEY T3CODE_CLERK_JWT_TEMPLATE T3CODE_CLERK_CLI_OAUTH_CLIENT_ID T3CODE_RELAY_URL; do
             if [ -z "${!name}" ]; then
@@ -218,6 +220,11 @@ jobs:
           done
           PATH="$PWD/node_modules/.bin:$PATH" \
             node scripts/build-desktop-artifact.ts --platform win --target nsis --arch x64
+
+      # Upstream caps the Windows payload at 80 files; list them when the build fails.
+      - name: List the Windows payload
+        if: failure() && steps.build.outcome == 'failure'
+        run: find "$(cygpath -u "$RUNNER_TEMP")" "$(cygpath -u "$TEMP")" -type d -name '*-unpacked' -prune -exec find {} -type f \; 2>/dev/null | sort
 
       - name: Upload build
         uses: actions/upload-artifact@v7
