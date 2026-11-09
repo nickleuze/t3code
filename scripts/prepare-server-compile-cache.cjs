@@ -10,6 +10,12 @@ module.exports = async ({ appOutDir, electronPlatformName, arch, packager }) => 
     console.log(`[server-compile-cache] Skipping unsupported target ${electronPlatformName}`);
     return;
   }
+  // Fork: official Windows builds are cross-built on Linux and never carry this cache, and the
+  // 80-file Windows payload cap assumes it is absent. Match them when building on Windows.
+  if (electronPlatformName === "win32") {
+    console.log("[server-compile-cache] Skipping Windows, matching official builds");
+    return;
+  }
   const targetArch = ["ia32", "x64", "armv7l", "arm64", "universal"][arch];
   const runsWithRosetta =
     electronPlatformName === "darwin" &&
