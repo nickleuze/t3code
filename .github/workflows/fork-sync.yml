@@ -8,9 +8,9 @@ name: Fork sync
 # Runs on Nick's Mac mini (self-hosted runner t3-fork-mac). When the patches
 # conflict, OpenCode resolves the rebase with the OpenCode Go key from the
 # Mini's 1Password AGENTS vault (op:// reference in the FORK_SYNC_OPENCODE_KEY_REF
-# variable; model in FORK_SYNC_MODEL). The result is pushed only when the
-# rebase finished with every patch, no conflict markers remain and the repo
-# typechecks. Otherwise nothing is published: the run fails once and leaves a
+# variable). The model is DeepSeek V4 Pro unless FORK_SYNC_MODEL says otherwise.
+# The result is pushed only when the rebase finished with every patch, no
+# conflict markers remain and the repo typechecks. Otherwise nothing is published: the run fails once and leaves a
 # nick/sync-conflict/<tag> branch, which keeps later runs quiet until the
 # patches are rebased by hand.
 
@@ -92,7 +92,7 @@ jobs:
         continue-on-error: true
         env:
           KEY_REF: ${{ vars.FORK_SYNC_OPENCODE_KEY_REF }}
-          MODEL: ${{ vars.FORK_SYNC_MODEL || 'opencode-go/kimi-k3.1-pro' }}
+          MODEL: ${{ vars.FORK_SYNC_MODEL || 'opencode-go/deepseek-v4-pro' }}
           GIT_EDITOR: "true"
           # Anything left at "ask" would stall a run nobody is watching.
           OPENCODE_CONFIG_CONTENT: |
@@ -122,12 +122,13 @@ jobs:
         run: |
           test -n "$KEY_REF" || { echo "The FORK_SYNC_OPENCODE_KEY_REF variable is not set."; exit 1; }
           # An empty data dir, so OpenCode can't fall back to a key saved in its auth.json.
+          # --standalone: OpenCode 2's shared background service ignores this env and the injected key.
           export XDG_DATA_HOME="$RUNNER_TEMP/opencode-data"
           for attempt in 1 2 3 4 5 6 7 8; do
             conflicted="$(git diff --name-only --diff-filter=U)"
             rm -rf "$XDG_DATA_HOME" && mkdir -p "$XDG_DATA_HOME"
             "$HOME/.local/bin/scoped-secrets" run --timeout 1800 -e "OPENCODE_GO_API_KEY=$KEY_REF" -- \
-              /opt/homebrew/bin/opencode run -m "$MODEL" "$PROMPT" </dev/null
+              /opt/homebrew/bin/opencode run --standalone -m "$MODEL" "$PROMPT" </dev/null
             while IFS= read -r file; do
               if [ -f "$file" ] && grep -qE '^(<<<<<<<|>>>>>>>)( |$)' "$file"; then
                 echo "Conflict markers remain in $file."; exit 1
