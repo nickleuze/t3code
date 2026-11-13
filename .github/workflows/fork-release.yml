@@ -268,29 +268,31 @@ jobs:
           previous="${previous#fork-}"
           previous="${previous#v}"
           previous_base="${previous%-nick.*}"
-          new_build="${base##*.}"
-          case "$previous_base" in
-            *-nightly.*) previous_build="${previous_base##*.}" ;;
-            *) previous_build=$((new_build - 1)) ;;
-          esac
+          # Release dates, not build numbers: a stable base tag has no build number.
+          since="$(gh release view "v${previous_base}" --repo pingdotgg/t3code --json publishedAt -q .publishedAt)"
+          until="$(gh release view "v${base}" --repo pingdotgg/t3code --json publishedAt -q .publishedAt)"
           changes="$(gh api "repos/pingdotgg/t3code/compare/v${previous_base}...v${base}" -q .total_commits 2>/dev/null || true)"
           highlights="$RUNNER_TEMP/highlights.md"
           : > "$highlights"
           more=0
-          for tag in $(gh release list --repo pingdotgg/t3code --limit 100 --json tagName -q '.[].tagName' |
-            awk -F. -v lo="$previous_build" -v hi="$new_build" '/^v[0-9.]+-nightly\.[0-9]{8}\.[0-9]+$/ && $NF > lo && $NF <= hi { print $NF, $0 }' |
-            sort -rn | cut -d' ' -f2); do
+          for tag in $(gh release list --repo pingdotgg/t3code --limit 100 --json tagName,publishedAt -q '.[] | .publishedAt + " " + .tagName' |
+            awk -v lo="$since" -v hi="$until" '$2 ~ /^v[0-9.]+-nightly\.[0-9]{8}\.[0-9]+$/ && $1 > lo && $1 <= hi { print $2 }'); do
             summary="$(gh release view "$tag" --repo pingdotgg/t3code --json body -q .body | sed '/<details>/,$d')"
-            grep -E '^- \*\*' <<<"$summary" >> "$highlights" || true
+            # Number each highlight by its rank in its own release notes.
+            grep -E '^- \*\*' <<<"$summary" | awk '{ print NR "\t" $0 }' >> "$highlights" || true
             n="$(sed -nE 's/^### Plus ([0-9]+) more.*/\1/p' <<<"$summary" | head -1)"
             more=$((more + ${n:-0}))
           done
+          # Up to 12, ranked across releases: every release's first highlight, then every second one.
+          sort -s -n -k1,1 "$highlights" | cut -f2- | awk '!seen[$0]++' > "$highlights.all"
+          head -n 12 "$highlights.all" > "$highlights"
+          more=$((more + $(wc -l < "$highlights.all") - $(wc -l < "$highlights")))
           {
             if [ "$previous_base" = "$base" ]; then
               printf '**v%s** · No upstream changes since %s\n\nRebuilt with fork changes only.\n' "$VERSION" "${previous##*-}"
             else
               printf '**v%s** · %s upstream changes since %s\n\n' "$VERSION" "${changes:-New}" "${previous##*-}"
-              awk '!seen[$0]++' "$highlights"
+              cat "$highlights"
               if [ "$more" -gt 0 ]; then printf '\n### Plus %s more bug fixes and performance improvements.\n' "$more"; fi
             fi
             printf '\n<details>\n<summary>Full changelog</summary>\n\n'
