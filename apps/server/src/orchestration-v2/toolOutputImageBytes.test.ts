@@ -101,6 +101,24 @@ describe("stripUnservedToolOutputImageBytes", () => {
     });
   });
 
+  it("keeps MCP App result images for the asset route", () => {
+    const image = { type: "image", data: PADDED_BASE64, mimeType: "image/jpeg" };
+    const item = toolItem({
+      t3McpApp: {
+        attachmentId: "thread-123-html",
+        server: "photoshop",
+        tool: "photoshop_get_preview",
+        resourceUri: "ui://photoshop/preview",
+      },
+      result: { content: [image], structuredContent: { documentId: 2198 } },
+    });
+    const stripped = stripUnservedToolOutputImageBytes(item);
+    expect(stripped).toBe(item);
+    expect(toolOutputImages(outputOf(stripped))).toEqual([
+      { mimeType: "image/jpeg", data: PADDED_BASE64 },
+    ]);
+  });
+
   it("keeps the screenshots a tool-output-image asset serves", () => {
     const claudeImage = {
       type: "image",

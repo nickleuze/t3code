@@ -337,9 +337,14 @@ export function readToolOutputImage(block: unknown): ToolOutputImage | null {
 }
 
 function outputBlocks(value: unknown): ReadonlyArray<unknown> {
+  if (isMcpAppOutput(value)) return outputBlocks(value.result);
   if (Array.isArray(value)) return value;
   if (Predicate.isObject(value) && Array.isArray(value.content)) return value.content;
   return [value];
+}
+
+function isMcpAppOutput(value: unknown): value is Record<string, unknown> {
+  return Predicate.isObject(value) && readMcpAppReference(value[MCP_APP_OUTPUT_KEY]) !== undefined;
 }
 
 export const MAX_TOOL_OUTPUT_IMAGES = 8;
@@ -378,6 +383,7 @@ export function mcpToolResultOutput(result: {
 }
 
 export function omitToolOutputImageData(value: unknown): unknown {
+  if (isMcpAppOutput(value)) return { ...value, result: omitToolOutputImageData(value.result) };
   const omit = (block: unknown) => {
     const image = readToolOutputImage(block);
     return image?.data === undefined ? block : { type: "image", mimeType: image.mimeType };
