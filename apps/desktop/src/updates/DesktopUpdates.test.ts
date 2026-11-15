@@ -226,6 +226,34 @@ describe("DesktopUpdates", () => {
     ).pipe(Effect.provide(Layer.merge(TestClock.layer(), harness.layer)));
   });
 
+  it.effect("lists every fork release newer than the installed fork build", () => {
+    const harness = makeHarness({ appVersion: "1.2.3-nick.1" });
+
+    return Effect.scoped(
+      Effect.gen(function* () {
+        const updates = yield* DesktopUpdates.DesktopUpdates;
+        yield* updates.configure;
+
+        harness.emit(
+          "update-available",
+          stableUpdateInfo(
+            releaseFeed("1.2.4-nick.3", "1.2.4-nick.2", "1.2.3-nick.1"),
+            "1.2.4-nick.3",
+            "1.2.3-nick.1",
+            harness.fullChangelog(),
+          ),
+        );
+        yield* flushCallbacks;
+
+        const state = yield* updates.getState;
+        assert.deepEqual(
+          state.releaseNotes?.map((note) => note.version),
+          ["1.2.4-nick.3", "1.2.4-nick.2"],
+        );
+      }),
+    ).pipe(Effect.provide(Layer.merge(TestClock.layer(), harness.layer)));
+  });
+
   it.effect("preserves a queued installer when the feed has no update", () => {
     const harness = makeHarness();
 
