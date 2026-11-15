@@ -1,7 +1,8 @@
 name: Fork sync
 
 # Once a day, moves nick/patches onto upstream's newest nightly (or stable)
-# release. The push uses a deploy key, so it starts Fork release (pushes made
+# release. The Mini's LaunchAgent com.nickleuze.t3code-fork-sync dispatches it at
+# 08:00 Berlin time; GitHub's own schedule ran hours late or not at all. The push uses a deploy key, so it starts Fork release (pushes made
 # with GITHUB_TOKEN start nothing, and it cannot push upstream's workflow
 # changes).
 #
@@ -15,8 +16,6 @@ name: Fork sync
 # patches are rebased by hand.
 
 on:
-  schedule:
-    - cron: "23 4 * * *"
   workflow_dispatch:
 
 permissions:
