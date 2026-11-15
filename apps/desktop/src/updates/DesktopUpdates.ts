@@ -551,11 +551,12 @@ export const make = Effect.gen(function* () {
     yield* electronUpdater.setAllowDowngrade(false);
     // Fork: fork releases sit on the latest channel, and each covers only the upstream changes
     // since the previous one, so the popover lists every release newer than the installed one.
-    yield* electronUpdater.setFullChangelog(true);
+    const fullChangelog = allowsPrerelease || environment.appVersion.includes("-nick.");
+    yield* electronUpdater.setFullChangelog(fullChangelog);
     yield* logUpdaterInfo("using update channel", {
       channel,
       allowPrerelease: allowsPrerelease,
-      fullChangelog: true,
+      fullChangelog,
     });
   });
 
