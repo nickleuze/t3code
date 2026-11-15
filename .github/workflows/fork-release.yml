@@ -11,10 +11,12 @@ name: Fork release
 # If the Mini is offline, the job waits for it.
 #
 # A manual dispatch from another branch builds both apps without publishing.
+# Pushes that change only workflows or docs publish nothing; dispatch to rebuild.
 
 on:
   push:
     branches: [nick/patches]
+    paths-ignore: [".github/**", "docs/**"]
   workflow_dispatch:
 
 permissions:
