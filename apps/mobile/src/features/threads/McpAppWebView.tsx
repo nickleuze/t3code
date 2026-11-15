@@ -4,6 +4,7 @@ import * as Dialog from "../../components/ui/Dialog";
 import type { EnvironmentId, ThreadId, TurnItemId } from "@t3tools/contracts";
 import {
   makeMcpAppHost,
+  loadMcpAppImage,
   McpAppHostRefusal,
   mcpAppStyleVariables,
   mcpResourceBytes,
@@ -37,7 +38,7 @@ import { mobileHtmlRenderTheme } from "../../lib/htmlRenderTheme";
 import { tryOpenExternalUrl } from "../../lib/openExternalUrl";
 import { uuidv4 } from "../../lib/uuid";
 import { webViewDecelerationRate } from "../../lib/webViewDecelerationRate";
-import { useAssetUrlState } from "../../state/assets";
+import { useAssetUrlState, refreshAssetUrl } from "../../state/assets";
 import { appAtomRegistry } from "../../state/atom-registry";
 import { useThreadShell } from "../../state/entities";
 import { mcpAppEnvironment } from "../../state/mcpApps";
@@ -304,6 +305,17 @@ export function ThreadMcpApp(props: {
     const documentHost: McpAppHost = makeMcpAppHost({
       app,
       hostVersion: Constants.expoConfig?.version ?? "0.0.0",
+      loadImage: async (index) => {
+        const { environmentId, threadId, itemId } = latest.current.props;
+        const url = await refreshAssetUrl(environmentId, {
+          _tag: "tool-output-image",
+          threadId,
+          itemId,
+          index,
+        });
+        if (url === null) throw new Error("Preview image is unavailable. Generate a new preview.");
+        return loadMcpAppImage(url);
+      },
       post: (message) =>
         view.injectJavaScript(
           `window.__t3McpAppReceive&&window.__t3McpAppReceive(${JSON.stringify(message)});true;`,

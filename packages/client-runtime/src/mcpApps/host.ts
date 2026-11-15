@@ -1,5 +1,10 @@
 // @effect-diagnostics globalTimers:off - The bridge runs in the client, outside an Effect runtime.
 import { MCP_APP_PROTOCOL_VERSION, type McpAppReference } from "@t3tools/shared/mcpApp";
+import {
+  readToolOutputImage,
+  MAX_TOOL_OUTPUT_IMAGES,
+  MAX_TOOL_OUTPUT_IMAGE_BASE64_LENGTH,
+} from "@t3tools/shared/toolOutput";
 import * as Base64 from "effect/encoding/Base64";
 import * as Predicate from "effect/Predicate";
 import * as Result from "effect/Result";
@@ -80,6 +85,8 @@ export class McpAppHostRefusal extends Schema.TaggedError<McpAppHostRefusal>()(
 const isMcpAppHostRefusal = Schema.is(McpAppHostRefusal);
 
 export interface McpAppHostOptions {
+  /** Loads image bytes omitted from the detail read through the authorized asset route. */
+  readonly loadImage?: (index: number) => Promise<string>;
   readonly app: McpAppReference;
   readonly hostVersion: string;
   readonly post: (message: unknown) => void;
@@ -101,6 +108,36 @@ export interface McpAppHostOptions {
   readonly downloadFile: (files: ReadonlyArray<McpAppDownload>) => Promise<void>;
   readonly onRequestTeardown: () => void;
   readonly onSizeChanged: (size: { readonly width?: number; readonly height?: number }) => void;
+}
+
+/** Fetch on the host: app frames cannot access T3's authenticated asset origin. */
+export async function loadMcpAppImage(url: string): Promise<string> {
+  // @effect-diagnostics-next-line globalFetch:off -- The browser/WebView host fetches a signed asset URL outside an Effect runtime.
+  const response = await fetch(url);
+  if (!response.ok) throw new Error("Preview image is unavailable. Generate a new preview.");
+  const bytes = new Uint8Array(await response.arrayBuffer());
+  if (bytes.length > Math.floor((MAX_TOOL_OUTPUT_IMAGE_BASE64_LENGTH * 3) / 4)) {
+    throw new Error("Preview image exceeds the image size limit.");
+  }
+  return Base64.encode(bytes);
+}
+
+async function restoreMcpAppImages(
+  result: McpAppCallToolResult,
+  load: (index: number) => Promise<string>,
+) {
+  let index = 0;
+  const content = await Promise.all(
+    result.content.map(async (block) => {
+      const image = readToolOutputImage(block);
+      if (image === null) return block;
+      const imageIndex = index++;
+      if (image.data !== undefined) return block;
+      if (imageIndex >= MAX_TOOL_OUTPUT_IMAGES) throw new Error("Preview has too many images.");
+      return { type: "image", mimeType: image.mimeType, data: await load(imageIndex) };
+    }),
+  );
+  return { ...result, content };
 }
 
 export interface McpAppHost {
@@ -192,6 +229,29 @@ export function makeMcpAppHost(options: McpAppHostOptions): McpAppHost {
     if (!disposed) options.post(message);
   };
   const notify = (method: string, params: unknown) => post({ jsonrpc: "2.0", method, params });
+  // Restore before normalizing: normalizing drops image blocks that lack data.
+  const notifyToolResult = (result: McpAppCallToolResult) => {
+    const content: ReadonlyArray<unknown> = Array.isArray(result.content) ? result.content : [];
+    if (
+      options.loadImage === undefined ||
+      !content.some((block) => {
+        const image = readToolOutputImage(block);
+        return image !== null && image.data === undefined;
+      })
+    ) {
+      notify("ui/notifications/tool-result", normalizeMcpAppToolResult(result));
+      return;
+    }
+    void restoreMcpAppImages({ ...result, content }, options.loadImage).then(
+      (restored) => notify("ui/notifications/tool-result", normalizeMcpAppToolResult(restored)),
+      (error: unknown) =>
+        notify("ui/notifications/tool-result", {
+          ...normalizeMcpAppToolResult(result),
+          isError: true,
+          content: [{ type: "text", text: errorMessage(error) }],
+        }),
+    );
+  };
   const respond = (id: JsonRpcId, result: unknown) => post({ jsonrpc: "2.0", id, result });
   const fail = (id: JsonRpcId, code: number, message: string) =>
     post({ jsonrpc: "2.0", id, error: { code, message } });
@@ -203,7 +263,7 @@ export function makeMcpAppHost(options: McpAppHostOptions): McpAppHost {
       arguments: Predicate.isObject(toolCall.arguments) ? toolCall.arguments : {},
     });
     if (toolCall.result !== undefined) {
-      notify("ui/notifications/tool-result", normalizeMcpAppToolResult(toolCall.result));
+      notifyToolResult(toolCall.result);
     }
   };
 
@@ -448,7 +508,7 @@ export function makeMcpAppHost(options: McpAppHostOptions): McpAppHost {
       if (toolCall.result !== undefined || call.result === undefined) return;
       // The app already has this call's input; it only needs the result.
       toolCall = { arguments: toolCall.arguments, result: call.result };
-      notify("ui/notifications/tool-result", normalizeMcpAppToolResult(call.result));
+      notifyToolResult(call.result);
     },
     updateHostContext: () => {
       // The spec forbids messages before the app finishes initializing; it

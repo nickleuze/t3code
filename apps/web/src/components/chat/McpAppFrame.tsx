@@ -1,6 +1,7 @@
 import type { EnvironmentId, ThreadId, TurnItemId } from "@t3tools/contracts";
 import {
   makeMcpAppHost,
+  loadMcpAppImage,
   McpAppHostRefusal,
   mcpAppStyleVariables,
   mcpResourceBytes,
@@ -25,6 +26,10 @@ import { useEffect, useRef, useState, type FocusEvent, type ToggleEvent } from "
 import { flushSync } from "react-dom";
 
 import { useLongLivedAssetUrl } from "~/assets/longLivedAssetUrls";
+import { resolveAssetUrl } from "~/assets/assetUrls";
+import { assetEnvironment } from "~/state/assets";
+import { usePreparedConnection } from "~/state/session";
+import { useAtomQueryRunner } from "~/state/use-atom-query-runner";
 import { APP_BASE_NAME, APP_VERSION } from "~/branding";
 import { isConfirmDialogActive, requestConfirmDialog } from "~/confirmDialog";
 import { useHtmlRenderTheme } from "~/hooks/useHtmlRenderTheme";
@@ -147,6 +152,29 @@ export function McpAppFrame(props: {
     revision: props.revision,
   });
   const storedItem = detail.data?.item;
+  const connection = usePreparedConnection(props.environmentId);
+  const createImageUrl = useAtomQueryRunner(assetEnvironment.createUrl, {
+    refresh: true,
+    reportFailure: false,
+  });
+  const loadImage = async (index: number) => {
+    if (connection._tag === "None") throw new Error("Reconnect to load the preview image.");
+    const result = await createImageUrl({
+      environmentId: props.environmentId,
+      input: {
+        resource: {
+          _tag: "tool-output-image",
+          threadId: props.threadId,
+          itemId: props.itemId,
+          index,
+        },
+      },
+    });
+    if (result._tag !== "Success") throw commandFailure(result);
+    const url = resolveAssetUrl(connection.value.httpBaseUrl, result.value.relativeUrl);
+    if (url === null) throw new Error("Preview image is unavailable. Generate a new preview.");
+    return loadMcpAppImage(url);
+  };
   // Keep tool-call identity stable for the host's delivery effect.
   const toolCall =
     storedItem?.type === "dynamic_tool"
@@ -182,6 +210,7 @@ export function McpAppFrame(props: {
     updateModelContext,
     displayMode,
     toolDefinition,
+    loadImage,
   }));
   const hostRef = useRef<McpAppHost | null>(null);
 
@@ -283,6 +312,7 @@ export function McpAppFrame(props: {
     const host = makeMcpAppHost({
       app,
       hostVersion: APP_VERSION,
+      loadImage: (index) => readLive().loadImage(index),
       post: documentLink.post,
       hostContext,
       callTool: async ({ name, arguments: args }) => {

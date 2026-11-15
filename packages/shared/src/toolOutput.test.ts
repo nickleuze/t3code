@@ -6,10 +6,35 @@ import {
   MAX_TOOL_OUTPUT_IMAGES,
   mcpToolResultOutput,
   SEND_TO_USER_MAX_LENGTH,
+  omitToolOutputImageData,
   sentMessageFromToolItem,
   toolOutputImages,
   toolOutputIndicatesFailure,
 } from "./toolOutput.ts";
+
+it("serves MCP App images separately while preserving result metadata in detail reads", () => {
+  const reference = {
+    attachmentId: "thread-1-html",
+    server: "photoshop",
+    tool: "photoshop_get_preview",
+    resourceUri: "ui://photoshop/preview",
+  };
+  const output = {
+    t3McpApp: reference,
+    result: {
+      content: [{ type: "image", mimeType: "image/jpeg", data: "aW1hZ2U=" }],
+      structuredContent: { documentId: 2198 },
+    },
+  };
+  expect(toolOutputImages(output)).toEqual([{ mimeType: "image/jpeg", data: "aW1hZ2U=" }]);
+  expect(omitToolOutputImageData(output)).toEqual({
+    t3McpApp: reference,
+    result: {
+      content: [{ type: "image", mimeType: "image/jpeg" }],
+      structuredContent: { documentId: 2198 },
+    },
+  });
+});
 
 describe("compactDynamicToolOutput", () => {
   it("extracts IDs through the MCP result envelopes used by T3 summaries", () => {
