@@ -70,6 +70,75 @@ function setup(overrides: Partial<Parameters<typeof makeMcpAppHost>[0]> = {}) {
 }
 
 describe("makeMcpAppHost", () => {
+  it("restores persisted image markers before delivering the result", async () => {
+    const indices: number[] = [];
+    let receive!: (value: unknown) => void;
+    const delivered = new Promise<unknown>((resolve) => {
+      receive = resolve;
+    });
+    const { host } = setup({
+      loadImage: async (index) => {
+        indices.push(index);
+        return "aW1hZ2U=";
+      },
+      post: (message) => {
+        if ((message as { method?: string }).method === "ui/notifications/tool-result")
+          receive(message);
+      },
+    });
+    host.setToolCall({
+      arguments: {},
+      result: {
+        content: [
+          { type: "text", text: "metadata" },
+          { type: "image", mimeType: "image/jpeg" },
+        ],
+        structuredContent: { documentId: 2198 },
+      },
+    });
+    initialize(host);
+    expect(await delivered).toMatchObject({
+      params: {
+        content: [
+          { type: "text", text: "metadata" },
+          { type: "image", mimeType: "image/jpeg", data: "aW1hZ2U=" },
+        ],
+        structuredContent: { documentId: 2198 },
+      },
+    });
+    expect(indices).toEqual([0]);
+  });
+
+  it("reports missing historical bytes without replaying the tool", async () => {
+    let receive!: (value: unknown) => void;
+    const delivered = new Promise<unknown>((resolve) => {
+      receive = resolve;
+    });
+    const { host } = setup({
+      loadImage: async () => {
+        throw new Error("Preview image is unavailable. Generate a new preview.");
+      },
+      callTool: async () => {
+        throw new Error("Must not rerun the original tool");
+      },
+      post: (message) => {
+        if ((message as { method?: string }).method === "ui/notifications/tool-result")
+          receive(message);
+      },
+    });
+    initialize(host);
+    host.setToolCall({
+      arguments: {},
+      result: { content: [{ type: "image", mimeType: "image/jpeg" }] },
+    });
+    expect(await delivered).toMatchObject({
+      params: {
+        isError: true,
+        content: [{ type: "text", text: "Preview image is unavailable. Generate a new preview." }],
+      },
+    });
+  });
+
   it("initializes, then replays the tool input and result after initialized", () => {
     const { host, sent } = setup();
     host.setToolCall({
