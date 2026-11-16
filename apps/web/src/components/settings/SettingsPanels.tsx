@@ -976,7 +976,9 @@ export function GeneralSettingsPanel() {
         />
         <SettingsRow
           {...setting("sort-by-activity")}
-          description="Order the inbox by latest activity: when you last sent a message or a turn last finished. Working threads stay in the inbox, and dragging within it is off. The Working section already orders the inbox this way."
+          description={gt(
+            "Order the inbox by latest activity: your last message or a finished turn. Working threads stay in the inbox, and dragging within it is off. The Working section already orders the inbox this way.",
+          )}
           resetAction={
             settings.sidebarSortActiveByActivity !==
             DEFAULT_UNIFIED_SETTINGS.sidebarSortActiveByActivity ? (
@@ -997,7 +999,7 @@ export function GeneralSettingsPanel() {
               onCheckedChange={(checked) =>
                 updateSettings({ sidebarSortActiveByActivity: Boolean(checked) })
               }
-              aria-label="Sort by activity"
+              aria-label={gt("Sort by activity")}
             />
           }
         />
