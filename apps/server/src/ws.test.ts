@@ -1081,6 +1081,7 @@ it.effect.each([
         Layer.mock(ManagedProjectFolders.ManagedProjectFolders)({
           scratchRoot: Effect.succeedNone,
           namedProjectsRoot: process.cwd(),
+          resolveNamedProjectsRoot: () => Effect.succeed(process.cwd()),
         }),
         Layer.mock(ScratchThreadPromotion.ScratchThreadPromotion)({}),
         Layer.mock(ServerEnvironment.ServerEnvironment)({
@@ -1462,6 +1463,7 @@ it.effect("on-demand clients get provider config without workspace snapshots", (
       Layer.mock(ManagedProjectFolders.ManagedProjectFolders)({
         scratchRoot: Effect.succeedNone,
         namedProjectsRoot: process.cwd(),
+        resolveNamedProjectsRoot: () => Effect.succeed(process.cwd()),
       }),
       Layer.mock(ScratchThreadPromotion.ScratchThreadPromotion)({}),
       Layer.mock(ServerEnvironment.ServerEnvironment)({
