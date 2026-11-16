@@ -68,12 +68,13 @@ function lockSwipeAxis(
     return { kind: "ignored" };
   }
   // Preview contents can scroll in another document or on the server, outside this DOM.
+  // `data-history-swipe="off"` marks a horizontal scroller whose edges must not navigate.
   if (
     path.some(
       (node) =>
         node instanceof Element &&
         node.matches(
-          '[role="dialog"], [role="alertdialog"], [data-preview-panel-mode], [data-preview-viewport], [data-server-browser-surface]',
+          '[role="dialog"], [role="alertdialog"], [data-preview-panel-mode], [data-preview-viewport], [data-server-browser-surface], [data-history-swipe="off"]',
         ),
     )
   ) {
