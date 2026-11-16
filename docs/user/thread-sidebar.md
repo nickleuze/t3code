@@ -43,6 +43,14 @@ message and again when its turn finishes. Dragging within the inbox is off while
 
 Enable **Settings → Labs → Boring sidebar (group by project)** on web/desktop (per device) to group active threads into collapsible project folders. Pinned threads stay above; Snoozed and Settled stay below. In this mode, the Working section and sidebar drag-reordering are disabled (dragging a thread onto the composer still works).
 
+## See threads by status
+
+The task board shows every thread in a panel for its status: Needs you, Working, Failed, Waiting, Done, Snoozed, and Settled. Open it with the board button at the bottom of the sidebar or **Open task board** in the command palette. Click a card to open its thread; right-click it for the sidebar's thread menu.
+
+- **Arrange**: Drag a panel by its header onto the side of another to move it, or onto its top or bottom half to stack both in one column. Drag the line between stacked panels or a column's right edge to resize; double-click it or press `Enter` on it to reset. Collapse a panel from its header.
+- **Keyboard**: Focus anything in a panel and press `Alt` with an arrow key: up and down reorder a stack, left and right move the panel to its own column or past the next one, and `Shift` stacks it under the next column.
+- The arrangement is saved in this browser.
+
 ## Settle, snooze, and archive
 
 | Action      | When to use          | Effect                                                                                                                                         |
