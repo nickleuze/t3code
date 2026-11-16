@@ -23,6 +23,10 @@ Use the **"Applying settings for …"** selector at the top of Settings (web/des
 - **Icons**: In **Settings → Projects**, set an icon, emoji, monogram, or image (applies across checkouts). Without one, T3 Code generates a two-character monogram (or single CJK character) from the project name.
 - **Multiple repositories**: See [Projects with several repositories](./multi-repo-projects.md).
 
+## Moved or renamed project folders
+
+If you move or rename a project's folder on disk, point the project at its new location instead of adding it again, so its threads stay with it: **Change folder** next to the checkout in **Settings → Projects**, the project's right-click menu in the sidebar, or **Change project folder** in the command palette. The folder browser starts next to the old folder, and a path such as `../new-name` is read relative to it.
+
 ## Worktree settings
 
 Configure worktrees in **Settings → Worktrees** (environment default or project override):
