@@ -67,3 +67,7 @@ Choose **On webhook** as a task's schedule to trigger runs from external service
 - **Deduplication & coalescing**: Set a **Duplicate request key** (e.g. `{{headers.delivery-id}}`; ignores repeats for 7 days) or a **Coalesce key** with a 10–3600s window (default 120s; runs once with the latest payload when the window closes). Coalesced updates are rate-limited to 60/min (`HTTP 429`).
 - **Offline delivery**: By default, offline environments return an error. Enable **Settings → Sharing & access → Hold webhooks while offline** to buffer T3 Connect webhooks for up to 24 hours, and optionally set **Skip requests older than** on the task.
 - **Debugging**: Open **Deliveries** from a task's menu (web/desktop) to inspect recent payloads and rendered prompts.
+
+## Project folders
+
+Set **Settings → Threads → New projects → New project location** to choose where New project creates repositories (empty uses T3 home's projects folder). **Add project starts in** sets the folder browser's starting location. Both belong to each environment, including when you connect remotely.
