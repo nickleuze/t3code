@@ -1301,6 +1301,8 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
     ) => {
       const api = readLocalApi();
       if (!api) return;
+      // A grouped project has a folder per checkout, so those change from project settings.
+      const canChangeFolder = group.memberProjects.length <= 1 && !group.isScratch;
       void (async () => {
         const clicked = await settlePromise(() =>
           api.contextMenu.show(
@@ -1314,6 +1316,7 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
                       : { id: "pin", label: gt("Pin project"), icon: "pin" },
                   ]
                 : []),
+              ...(canChangeFolder ? [{ id: "change-folder", label: gt("Change folder…") }] : []),
               { id: "project-settings", label: gt("Project settings"), icon: "settings" },
             ],
             position,
@@ -1331,6 +1334,12 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
           case "pin":
           case "unpin":
             setProjectGroupPinned(group, clicked.value === "pin");
+            return;
+          case "change-folder":
+            openCommandPalette({
+              open: "change-project-folder",
+              projectRef: scopeProjectRef(group.environmentId, group.id),
+            });
             return;
           case "project-settings":
             openProjectSettings(group);
