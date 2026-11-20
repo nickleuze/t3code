@@ -10,10 +10,11 @@ name: Fork sync
 # conflict, OpenCode resolves the rebase with the OpenCode Go key from the
 # Mini's 1Password AGENTS vault (op:// reference in the FORK_SYNC_OPENCODE_KEY_REF
 # variable). The model is DeepSeek V4 Pro unless FORK_SYNC_MODEL says otherwise.
-# The result is pushed only when the rebase finished with every patch, no
-# conflict markers remain and the repo typechecks. Otherwise nothing is published: the run fails once and leaves a
-# nick/sync-conflict/<tag> branch, which keeps later runs quiet until the
-# patches are rebased by hand.
+# Every rebase, clean or resolved, is pushed only when it finished with every
+# patch, no conflict markers remain, the repo typechecks and the tests beside the
+# patched files pass (a test that fails on upstream too doesn't count). Otherwise
+# nothing is published: the run fails once and leaves a nick/sync-conflict/<tag>
+# branch, which keeps later runs quiet until the patches are rebased by hand.
 
 on:
   workflow_dispatch:
@@ -78,7 +79,7 @@ jobs:
           fi
 
       - name: Setup Vite+
-        if: steps.rebase.outputs.result == 'conflict'
+        if: steps.rebase.outputs.result != ''
         uses: voidzero-dev/setup-vp@v1
         with:
           node-version-file: package.json
@@ -142,7 +143,7 @@ jobs:
 
       - name: Check the rebase
         id: check
-        if: steps.rebase.outputs.result == 'conflict' && steps.resolve.outcome == 'success'
+        if: steps.rebase.outputs.result == 'clean' || (steps.rebase.outputs.result == 'conflict' && steps.resolve.outcome == 'success')
         continue-on-error: true
         env:
           LATEST_COMMIT: ${{ steps.rebase.outputs.latest_commit }}
@@ -159,32 +160,23 @@ jobs:
           git log --stat "${LATEST_COMMIT}..HEAD"
           vp install
           vp run typecheck
-          # Unit tests in and beside the files the patches change (browser tests need a browser).
-          shopt -s nullglob
-          tests=()
-          for file in $(git diff --name-only "${LATEST_COMMIT}..HEAD" -- '*.ts' '*.tsx'); do
-            stem="${file%.*}"; stem="${stem%.test}"
-            for test_file in "$stem".test.ts "$stem".test.tsx "$stem".*.test.ts "$stem".*.test.tsx; do
-              [[ "$test_file" == *.browser.test.* ]] || tests+=("$test_file")
-            done
-          done
-          if (( ${#tests[@]} )); then vp test run $(printf '%s\n' "${tests[@]}" | sort -u); fi
+          .github/scripts/fork-check-tests.sh "$LATEST_COMMIT"
 
       - name: Push
-        if: steps.rebase.outputs.result == 'clean' || steps.check.outcome == 'success'
+        if: steps.check.outcome == 'success'
         env:
           HEAD_BEFORE: ${{ steps.rebase.outputs.head }}
         run: git push --force-with-lease="nick/patches:${HEAD_BEFORE}" origin HEAD:nick/patches
 
       - name: Report the conflict
-        if: steps.rebase.outputs.result == 'conflict' && steps.check.outcome != 'success'
+        if: steps.rebase.outputs.result != '' && steps.check.outcome != 'success'
         env:
           LATEST: ${{ steps.rebase.outputs.latest }}
           LATEST_COMMIT: ${{ steps.rebase.outputs.latest_commit }}
           MARKER: ${{ steps.rebase.outputs.marker }}
         run: |
           git push origin "${LATEST_COMMIT}:refs/heads/${MARKER}"
-          echo "::error::nick/patches does not rebase onto ${LATEST}, and the conflict was not resolved automatically. Nothing was published."
+          echo "::error::nick/patches does not rebase onto ${LATEST} cleanly, or the rebase failed its check. Nothing was published."
           exit 1
 
       # The Mini's disk is shared with Nick's own work; don't keep a built checkout between runs.
