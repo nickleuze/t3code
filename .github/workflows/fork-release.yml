@@ -76,7 +76,10 @@ jobs:
             if git merge-base --is-ancestor "$commit" HEAD 2>/dev/null; then base="${tag#v}"; break; fi
           done < <(.github/scripts/fork-upstream-tags.sh)
           test -n "${base:-}"
-          echo "version=${base}-nick.${GITHUB_RUN_NUMBER}" >> "$GITHUB_OUTPUT"
+          # "nick" sorts below "nightly", so a build on a stable release would never
+          # update one on that version's nightly; "stable-nick" sorts above it.
+          case "$base" in *-*) suffix=nick ;; *) suffix=stable-nick ;; esac
+          echo "version=${base}-${suffix}.${GITHUB_RUN_NUMBER}" >> "$GITHUB_OUTPUT"
 
       - name: Align package versions to release version
         run: node scripts/update-release-package-versions.ts "${{ steps.version.outputs.version }}"
@@ -222,7 +225,10 @@ jobs:
             if git merge-base --is-ancestor "$commit" HEAD 2>/dev/null; then base="${tag#v}"; break; fi
           done < <(.github/scripts/fork-upstream-tags.sh)
           test -n "${base:-}"
-          echo "version=${base}-nick.${GITHUB_RUN_NUMBER}" >> "$GITHUB_OUTPUT"
+          # "nick" sorts below "nightly", so a build on a stable release would never
+          # update one on that version's nightly; "stable-nick" sorts above it.
+          case "$base" in *-*) suffix=nick ;; *) suffix=stable-nick ;; esac
+          echo "version=${base}-${suffix}.${GITHUB_RUN_NUMBER}" >> "$GITHUB_OUTPUT"
 
       - name: Align package versions to release version
         run: node scripts/update-release-package-versions.ts "${{ steps.version.outputs.version }}"
@@ -281,10 +287,12 @@ jobs:
           VERSION: ${{ needs.build_mac.outputs.version }}
         run: |
           base="${VERSION%-nick.*}"
+          base="${base%-stable}"
           previous="$(gh release list --repo "$GITHUB_REPOSITORY" --limit 1 --json tagName -q '.[0].tagName')"
           previous="${previous#fork-}"
           previous="${previous#v}"
           previous_base="${previous%-nick.*}"
+          previous_base="${previous_base%-stable}"
           # Release dates, not build numbers: a stable base tag has no build number.
           since="$(gh release view "v${previous_base}" --repo pingdotgg/t3code --json publishedAt -q .publishedAt)"
           until="$(gh release view "v${base}" --repo pingdotgg/t3code --json publishedAt -q .publishedAt)"
