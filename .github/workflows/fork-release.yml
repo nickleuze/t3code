@@ -81,6 +81,19 @@ jobs:
       - name: Align package versions to release version
         run: node scripts/update-release-package-versions.ts "${{ steps.version.outputs.version }}"
 
+      # Packaging stages the app, zip and dmg in TMPDIR, several GB the Mini's
+      # internal disk often lacks; its external disk has room.
+      - name: Stage the build on the external disk
+        run: |
+          external=/Volumes/m4-mini-external
+          stage="$external/actions-tmp/t3code-release-${GITHUB_RUN_ID}"
+          # An unanswered macOS removable-volume prompt blocks mkdir; give up after 30 s.
+          if [ -d "$external" ] && perl -e 'alarm 30; exec @ARGV' mkdir -p "$stage"; then
+            echo "TMPDIR=$stage" >> "$GITHUB_ENV"
+          else
+            echo "::warning::$external is not mounted or not accessible; staging on the internal disk."
+          fi
+
       - name: Build, sign and notarize
         env:
           T3CODE_DESKTOP_VERSION: ${{ steps.version.outputs.version }}
@@ -144,7 +157,9 @@ jobs:
       # The Mini's disk is shared with Nick's own work; don't keep a built checkout between runs.
       - name: Clean the checkout
         if: always()
-        run: git clean -ffdxq
+        run: |
+          git clean -ffdxq
+          rm -rf "/Volumes/m4-mini-external/actions-tmp/t3code-release-${GITHUB_RUN_ID}"
 
   build_windows:
     if: github.repository == 'nickleuze/t3code'
