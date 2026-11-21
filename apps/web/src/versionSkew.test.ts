@@ -99,6 +99,21 @@ describe("versionSkew", () => {
     },
   );
 
+  // Fork builds are one line ordered by full version, whichever upstream release they sit on.
+  it("warns when a fork server is an older fork build of the same core version", () => {
+    branding.APP_VERSION = "0.1.11-stable-nick.69";
+
+    expect(resolveVersionMismatch("0.1.11-nightly.20261119.4918-nick.66")).toEqual({
+      clientVersion: "0.1.11-stable-nick.69",
+      serverVersion: "0.1.11-nightly.20261119.4918-nick.66",
+      hint: MISMATCH_HINT,
+    });
+    expect(resolveVersionMismatch("0.1.11-stable-nick.69")).toBeNull();
+
+    branding.APP_VERSION = "0.1.11-nightly.20261119.4918-nick.66";
+    expect(resolveVersionMismatch("0.1.11-stable-nick.69")).toBeNull();
+  });
+
   // regression: #7579 versions were compared as strings, not semver
   it("treats a nightly server built past the client as ahead, not skew", () => {
     expect(resolveVersionMismatch("0.0.35-nightly.20260818.1124")).toBeNull();
