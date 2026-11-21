@@ -59,9 +59,11 @@ export function resolveVersionMismatch(
 
   const clientCore = versionCore(normalizedClientVersion);
   const serverCore = versionCore(normalizedServerVersion);
+  // Fork: fork builds are one line ordered by full version, on a nightly or a stable base alike.
   const compareNightlyBuilds =
-    parseSemver(normalizedClientVersion)?.prerelease[0] === "nightly" &&
-    parseSemver(normalizedServerVersion)?.prerelease[0] === "nightly";
+    (parseSemver(normalizedClientVersion)?.prerelease[0] === "nightly" &&
+      parseSemver(normalizedServerVersion)?.prerelease[0] === "nightly") ||
+    (normalizedClientVersion.includes("-nick.") && normalizedServerVersion.includes("-nick."));
   const serverIsBehind =
     parseSemver(clientCore) && parseSemver(serverCore)
       ? compareSemverVersions(
