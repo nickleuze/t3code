@@ -785,6 +785,13 @@ export const ServerConfig = Schema.Struct({
   secretRequestReferences: Schema.optionalKey(Schema.Boolean),
   scratchWorkspaceRoot: Schema.optionalKey(TrimmedNonEmptyString),
   newProjectsRoot: Schema.optionalKey(TrimmedNonEmptyString),
+  /** Fork: Nick's Areas on this host, when its `projects` command is installed. */
+  projectAreas: Schema.optionalKey(
+    Schema.Struct({
+      root: TrimmedNonEmptyString,
+      names: Schema.Array(TrimmedNonEmptyString),
+    }),
+  ),
   /**
    * The latest stall long enough to notice, sent only for a few minutes after
    * it. A client that reconnects reads it to say why the host stopped
