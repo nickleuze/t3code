@@ -98,6 +98,7 @@ import * as GitVcsDriver from "../vcs/GitVcsDriver.ts";
 import { isNonRepositoryGitStderr } from "../vcs/GitVcsDriverCore.ts";
 import * as SourceControlProvider from "@t3tools/source-control-core/server/SourceControlProvider";
 import * as SourceControlRateLimit from "@t3tools/source-control-core/server/SourceControlRateLimit";
+import { ProjectGitHubAccount } from "@t3tools/source-control-github/server/driver";
 import * as SourceControlProviderRegistry from "../sourceControl/SourceControlProviderRegistry.ts";
 import type { ChangeRequest } from "@t3tools/contracts";
 
@@ -169,7 +170,7 @@ export class GitManager extends Context.Service<
      * callers that opt out confirm before acting on it.
      */
     readonly branchPullRequest: (
-      input: { readonly cwd: string; readonly branch: string },
+      input: { readonly cwd: string; readonly branch: string; readonly projectId?: ProjectId },
       options?: {
         readonly refresh?: boolean;
         readonly freshGitState?: boolean;
@@ -826,7 +827,7 @@ export const make = Effect.gen(function* () {
   }) {
     const settings = yield* serverSettingsService.getSettings;
     if (!hasProjectSettingsOverrides(settings))
-      return { settings, projectId: null as ProjectId | null };
+      return { settings, projectId: null, githubAccount: null };
     const threadProjectId =
       input.threadId === undefined
         ? null
@@ -841,8 +842,22 @@ export const make = Effect.gen(function* () {
         Effect.map((project) => Option.getOrNull(project)?.projectId ?? null),
         Effect.orElseSucceed(() => null),
       ));
-    return { settings: resolveProjectSettings(settings, projectId).settings, projectId };
+    const { settings: resolved, overrides } = resolveProjectSettings(settings, projectId);
+    return { settings: resolved, projectId, githubAccount: overrides.githubAccount ?? null };
   });
+  const githubAccountFor = (input: Parameters<typeof projectSettingsFor>[0]) =>
+    projectSettingsFor(input).pipe(
+      Effect.map(({ githubAccount }) => githubAccount),
+      Effect.mapError(
+        (cause) =>
+          new GitManagerError({
+            operation: "readGitHubAccount",
+            cwd: input.cwd,
+            detail: "The project GitHub account setting could not be read.",
+            cause,
+          }),
+      ),
+    );
   const readThreadContext = Effect.fnUntraced(
     function* (threadId: ThreadId | undefined) {
       if (threadId === undefined) return NO_THREAD_CONTEXT;
@@ -1451,6 +1466,7 @@ export const make = Effect.gen(function* () {
       defaultBranch: string | null;
       localBranchExists?: boolean;
       remoteName?: string | null;
+      githubAccount?: string | null;
     },
   ) =>
     [
@@ -1461,6 +1477,7 @@ export const make = Effect.gen(function* () {
       details.localBranchExists === false ? "0" : "1",
       details.remoteName ?? "",
       String(prLookupEpoch(cwd)),
+      details.githubAccount ?? "",
     ].join("\u0000");
   const prLookupFailureStreakByKey = new Map<string, number>();
   const nextPrLookupFailureTtl = (key: string) => {
@@ -1509,6 +1526,8 @@ export const make = Effect.gen(function* () {
         defaultBranch = "",
         branchExists = "1",
         remoteName = "",
+        ,
+        githubAccount = "",
       ] = key.split("\u0000");
       const details = {
         branch,
@@ -1538,7 +1557,7 @@ export const make = Effect.gen(function* () {
           const latest = yield* findLatestPrForHeadContext(cwd, headContext, details.defaultBranch);
           if (latest !== null) yield* noteLookupState(latest);
           return { latest, headContext };
-        }),
+        }).pipe(Effect.provideService(ProjectGitHubAccount, githubAccount || null)),
       );
     },
     {
@@ -1608,11 +1627,12 @@ export const make = Effect.gen(function* () {
       upstreamRef: string | null;
       defaultBranch: string | null;
       isDefaultBranch: boolean;
+      githubAccount: string | null;
     },
     refreshMissingPullRequest = false,
   ) {
     // Upstream changes must not orphan the same branch's fallback value.
-    const branchKey = `${cwd}\u0000${details.branch}`;
+    const branchKey = `${cwd}\u0000${details.branch}\u0000${details.githubAccount ?? ""}`;
     const cacheKey = prLookupCacheKey(cwd, details);
     if (refreshMissingPullRequest) {
       const cached = yield* Cache.getOption(prLookupCache, cacheKey).pipe(
@@ -1685,6 +1705,7 @@ export const make = Effect.gen(function* () {
   });
   const readRemoteStatus = Effect.fn("readRemoteStatus")(function* (
     cwd: string,
+    githubAccount: string | null,
     options?: GitRemoteStatusOptions,
   ) {
     const details =
@@ -1705,6 +1726,7 @@ export const make = Effect.gen(function* () {
               upstreamRef: details.upstreamRef,
               defaultBranch: details.defaultBranch,
               isDefaultBranch: details.isDefaultBranch,
+              githubAccount,
             },
             options?.refreshMissingPullRequest,
           )
@@ -1740,13 +1762,25 @@ export const make = Effect.gen(function* () {
       pr,
     } satisfies VcsStatusRemoteResult;
   });
-  const remoteStatusResultCache = yield* Cache.makeWith((cwd: string) => readRemoteStatus(cwd), {
-    capacity: STATUS_RESULT_CACHE_CAPACITY,
-    timeToLive: (exit) => (Exit.isSuccess(exit) ? STATUS_RESULT_CACHE_TTL : Duration.zero),
-  });
+  const remoteStatusKey = (cwd: string, account: string | null) => `${cwd}\u0000${account ?? ""}`;
+  const remoteStatusResultCache = yield* Cache.makeWith(
+    (key: string) => {
+      const [cwd = "", account = ""] = key.split("\u0000");
+      return readRemoteStatus(cwd, account || null);
+    },
+    {
+      capacity: STATUS_RESULT_CACHE_CAPACITY,
+      timeToLive: (exit) => (Exit.isSuccess(exit) ? STATUS_RESULT_CACHE_TTL : Duration.zero),
+    },
+  );
   const invalidateRemoteStatusResultCache = (cwd: string) =>
-    normalizeStatusCacheKey(cwd).pipe(
-      Effect.flatMap((cacheKey) => Cache.invalidate(remoteStatusResultCache, cacheKey)),
+    Effect.all([
+      normalizeStatusCacheKey(cwd),
+      githubAccountFor({ cwd }).pipe(Effect.orElseSucceed(() => null)),
+    ]).pipe(
+      Effect.flatMap(([cacheCwd, account]) =>
+        Cache.invalidate(remoteStatusResultCache, remoteStatusKey(cacheCwd, account)),
+      ),
     );
 
   const readLookupRemotes = (cwd: string, operation: string) =>
@@ -3180,10 +3214,11 @@ export const make = Effect.gen(function* () {
   const remoteStatus: GitManager["Service"]["remoteStatus"] = Effect.fn("remoteStatus")(
     function* (input, options) {
       const cacheKey = yield* normalizeStatusCacheKey(input.cwd);
+      const account = yield* githubAccountFor(input);
       if (options?.refreshUpstream === false || options?.refreshMissingPullRequest) {
-        return yield* readRemoteStatus(cacheKey, options);
+        return yield* readRemoteStatus(cacheKey, account, options);
       }
-      return yield* Cache.get(remoteStatusResultCache, cacheKey);
+      return yield* Cache.get(remoteStatusResultCache, remoteStatusKey(cacheKey, account));
     },
   );
   const status: GitManager["Service"]["status"] = Effect.fn("status")(function* (input) {
@@ -3350,6 +3385,7 @@ export const make = Effect.gen(function* () {
     options: {
       readonly refresh: boolean;
       readonly freshGitState: boolean;
+      readonly githubAccount: string | null;
       readonly includeHeadRepository?: boolean | undefined;
     },
   ) {
@@ -3434,6 +3470,7 @@ export const make = Effect.gen(function* () {
       upstreamRef,
       defaultBranch,
       localBranchExists,
+      githubAccount: options.githubAccount,
       ...(localBranchExists ? {} : { remoteName }),
     });
     if (options.refresh) {
@@ -3518,14 +3555,16 @@ export const make = Effect.gen(function* () {
 
   const branchPullRequest: GitManager["Service"]["branchPullRequest"] = Effect.fn(
     "branchPullRequest",
-  )(function* ({ cwd, branch }, options) {
+  )(function* ({ cwd, branch, projectId }, options) {
     const cacheCwd = yield* normalizeStatusCacheKey(cwd);
+    const githubAccount = yield* githubAccountFor({ cwd, projectId });
     const refresh = options?.refresh === true;
     const freshGitState = refresh || options?.freshGitState === true;
     const pullRequest = yield* lookupBranchPullRequest(cacheCwd, branch, {
       refresh,
       freshGitState,
       includeHeadRepository: options?.includeHeadRepository,
+      githubAccount,
     });
     if (
       pullRequest === null ||
@@ -3537,7 +3576,7 @@ export const make = Effect.gen(function* () {
     }
     // A confirmed closed or merged result stays final until the branch or remotes change,
     // with a periodic fresh lookup so a new PR from a reused branch still shows up.
-    const settledKey = `${cacheCwd}\u0000${branch}`;
+    const settledKey = `${cacheCwd}\u0000${branch}\u0000${githubAccount ?? ""}`;
     const now = yield* Clock.currentTimeMillis;
     const settled = settledPrLookupByBranchKey.get(settledKey);
     // Read before any fresh lookup, so a change made during it forces another one.
@@ -3554,6 +3593,7 @@ export const make = Effect.gen(function* () {
       refresh: false,
       freshGitState: true,
       includeHeadRepository: options?.includeHeadRepository,
+      githubAccount,
     });
     settledPrLookupByBranchKey.delete(settledKey);
     if (confirmed !== null && confirmed.state !== "open") {
@@ -3604,12 +3644,16 @@ export const make = Effect.gen(function* () {
   const resolvePullRequest: GitManager["Service"]["resolvePullRequest"] = Effect.fn(
     "resolvePullRequest",
   )(function* (input) {
+    const account = yield* githubAccountFor(input);
     const pullRequest = yield* (yield* sourceControlProvider(input.cwd))
       .getChangeRequest({
         cwd: input.cwd,
         reference: normalizePullRequestReference(input.reference),
       })
-      .pipe(Effect.map((resolved) => toResolvedPullRequest(resolved)));
+      .pipe(
+        Effect.provideService(ProjectGitHubAccount, account),
+        Effect.map((resolved) => toResolvedPullRequest(resolved)),
+      );
 
     return { pullRequest };
   }, asUserAction);
@@ -3647,6 +3691,7 @@ export const make = Effect.gen(function* () {
   const preparePullRequestThread: GitManager["Service"]["preparePullRequestThread"] = Effect.fn(
     "preparePullRequestThread",
   )(function* (input) {
+    const account = yield* githubAccountFor(input);
     const maybeRunSetupScript = (worktreePath: string) => {
       if (!input.threadId) {
         return Effect.void;
@@ -4036,6 +4081,7 @@ export const make = Effect.gen(function* () {
         isOnPullRequestHead: true,
       };
     }).pipe(
+      Effect.provideService(ProjectGitHubAccount, account),
       Effect.tap((result) =>
         gitCore
           .writeConfigValue({
@@ -4150,26 +4196,7 @@ export const make = Effect.gen(function* () {
         let commitMessageForStep = input.commitMessage;
         let preResolvedCommitSuggestion: CommitAndBranchSuggestion | undefined = undefined;
 
-        const textGenerationSettings = yield* projectSettingsFor(input).pipe(
-          Effect.flatMap(({ settings, projectId }) =>
-            settings.sourceControlWriterModelSelection === null
-              ? Effect.succeed({
-                  modelSelection: settings.textGenerationModelSelection,
-                  projectId,
-                  style: settings.sourceControlWritingStyle,
-                })
-              : providerRegistry.getProviders.pipe(
-                  Effect.map((providers) => ({
-                    modelSelection: ServerSettings.resolveSourceControlWriterModelSelection(
-                      settings,
-                      providers,
-                      projectId,
-                    ),
-                    projectId,
-                    style: settings.sourceControlWritingStyle,
-                  })),
-                ),
-          ),
+        const { settings, projectId, githubAccount } = yield* projectSettingsFor(input).pipe(
           Effect.mapError(
             (cause) =>
               new GitManagerError({
@@ -4180,6 +4207,18 @@ export const make = Effect.gen(function* () {
               }),
           ),
         );
+        const textGenerationSettings = {
+          projectId,
+          style: settings.sourceControlWritingStyle,
+          modelSelection:
+            settings.sourceControlWriterModelSelection === null
+              ? settings.textGenerationModelSelection
+              : ServerSettings.resolveSourceControlWriterModelSelection(
+                  settings,
+                  yield* providerRegistry.getProviders,
+                  projectId,
+                ),
+        };
 
         if (input.featureBranch) {
           yield* Ref.set(currentPhase, Option.some("branch"));
@@ -4265,7 +4304,7 @@ export const make = Effect.gen(function* () {
                     "pushRemote" in push && push.pushRemote && push.upstreamBranch
                       ? { remoteName: push.pushRemote, upstreamRef: push.upstreamBranch }
                       : undefined,
-                  ),
+                  ).pipe(Effect.provideService(ProjectGitHubAccount, githubAccount)),
                 ),
               )
           : { status: "skipped_not_requested" as const };
@@ -4276,7 +4315,7 @@ export const make = Effect.gen(function* () {
           commit,
           push,
           pr,
-        });
+        }).pipe(Effect.provideService(ProjectGitHubAccount, githubAccount));
 
         const result = {
           action: input.action,
