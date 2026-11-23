@@ -61,6 +61,9 @@ import * as EnvironmentHandlers from "./toolkits/environment/handlers.ts";
 import { ThemeToolkit } from "./toolkits/theme/tools.ts";
 import * as ThemeHandlers from "./toolkits/theme/handlers.ts";
 import { ProjectToolkit } from "./toolkits/project/tools.ts";
+import { AreaProjectsToolkit } from "./toolkits/areaProjects/tools.ts";
+import * as AreaProjectsHandlers from "./toolkits/areaProjects/handlers.ts";
+import * as AreaProjects from "../project/AreaProjects.ts";
 import * as ProjectHandlers from "./toolkits/project/handlers.ts";
 import { AttachmentToolkit } from "./toolkits/attachment/tools.ts";
 import * as AttachmentHandlers from "./toolkits/attachment/handlers.ts";
@@ -1323,6 +1326,12 @@ const layerThemeToolkit = toolkitRegistration(ThemeToolkit, ThemeHandlers.layer)
 
 export const layerProjectRegistration = toolkitRegistration(ProjectToolkit, ProjectHandlers.layer);
 
+// Fork: Nick's Area projects.
+const layerAreaProjectsToolkit = toolkitRegistration(
+  AreaProjectsToolkit,
+  AreaProjectsHandlers.layer,
+).pipe(Layer.provide(AreaProjects.layer()));
+
 export const layerAttachmentToolkit = toolkitRegistration(
   AttachmentToolkit,
   AttachmentHandlers.layer,
@@ -1386,6 +1395,7 @@ export const layerTools = Layer.mergeAll(
   layerThreadToolkit,
   layerAttachmentToolkit,
   layerProjectRegistration,
+  layerAreaProjectsToolkit,
   layerEnvironmentToolkit,
   layerThemeToolkit,
   layerPreviewControlsRegistration,

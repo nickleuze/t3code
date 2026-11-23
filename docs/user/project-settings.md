@@ -314,3 +314,9 @@ Set Settings > Threads > New projects > New project location to choose where New
 creates repositories. Leave it empty to use T3 home's projects folder. Add project starts in
 controls the folder browser's initial location. These settings belong to each environment,
 including when you connect remotely.
+
+When a host has the `projects` command installed (`~/.local/bin/projects`) and Areas in
+`~/Projects/<area>/AREA.md`, New project also shows an **Area** list. Choosing an Area creates the
+project in `~/Projects/<area>/<name>` with README, AGENTS, STATUS, TASKS and a Git repository.
+Agents reach the same projects and their tasks through the `t3_area_*` tools; they can create,
+update and archive projects but never create Areas.
