@@ -543,7 +543,9 @@ describe("ThreadPullRequestServiceV2 reads", () => {
           const activation = yield* Deferred.make<void>();
           const domainEvents = yield* Queue.unbounded<OrchestrationV2DomainEvent>();
           const lookedUp = yield* Queue.unbounded<void>();
-          const lookups: Array<{ readonly cwd: string; readonly branch: string }> = [];
+          const lookups: Array<
+            Parameters<GitManager.GitManager["Service"]["branchPullRequest"]>[0]
+          > = [];
           const dispatched: Array<OrchestrationV2ServerCommand> = [];
           const dependencies = Layer.mergeAll(
             Layer.mock(Orchestrator.OrchestratorV2)({
@@ -638,7 +640,9 @@ describe("ThreadPullRequestServiceV2 reads", () => {
 
             // Only the repository on a branch of its own is asked, and nothing touches the
             // thread's own branch.
-            expect(lookups).toEqual([{ cwd: `${checkouts}/api`, branch: "feature/api" }]);
+            expect(lookups).toEqual([
+              { cwd: `${checkouts}/api`, branch: "feature/api", projectId: project.id },
+            ]);
             expect(dispatched).toMatchObject([
               {
                 type: "thread.pull-request.link",

@@ -60,6 +60,7 @@ import type {
   SourceControlProvider,
   SourceControlRefSelector,
 } from "@t3tools/source-control-core/server/SourceControlProvider";
+import { ProjectGitHubAccount } from "@t3tools/source-control-github/server/driver";
 import * as SourceControlProviderRegistry from "../sourceControl/SourceControlProviderRegistry.ts";
 import * as ServerConfig from "../config.ts";
 import * as ProjectionStore from "../orchestration-v2/ProjectionStore.ts";
@@ -4701,7 +4702,7 @@ it.layer(layerGitManagerTest)("GitManager", (it) => {
     }),
   );
 
-  it.effect("create_pr sends bounded checks to the model and omits rolled-back runs", () =>
+  it.effect("creates a PR with the project account and thread checks", () =>
     Effect.gen(function* () {
       const repoDir = yield* makeTempDir("t3code-git-manager-");
       yield* initRepo(repoDir);
@@ -4712,6 +4713,7 @@ it.layer(layerGitManagerTest)("GitManager", (it) => {
       const remoteDir = yield* createBareRemote();
       yield* runGit(repoDir, ["remote", "add", "origin", remoteDir]);
       const threadId = ThreadId.make("thread:pr-thread-context");
+      const projectId = ProjectId.make("project:pr-thread-context");
       const providerInstanceId = ProviderInstanceId.make("codex");
       const createdAt = DateTime.makeUnsafe("2026-09-27T00:00:00.000Z");
       const run = (ordinal: number, status: "completed" | "rolled_back") => ({
@@ -4754,7 +4756,22 @@ it.layer(layerGitManagerTest)("GitManager", (it) => {
         return decodeJsonReply(request, "test", '{"title":"Thread context","body":"Body"}');
       });
 
+      const { service: sourceControl } = createFakeSourceControlProvider();
+      let createdAs: string | null = null;
       const { manager } = yield* makeManager({
+        serverSettings: {
+          projectSettingsOverrides: { [projectId]: { githubAccount: "work-login" } },
+        },
+        sourceControlProvider: {
+          ...sourceControl,
+          createChangeRequest: (input) =>
+            ProjectGitHubAccount.pipe(
+              Effect.flatMap((account) => {
+                createdAs = account;
+                return sourceControl.createChangeRequest(input);
+              }),
+            ),
+        },
         textGeneration: {
           generatePrContent: (input) => {
             generatedThreadContext = input.threadContext;
@@ -4775,7 +4792,7 @@ it.layer(layerGitManagerTest)("GitManager", (it) => {
               createdBy: "user",
               creationSource: "web",
               id: threadId,
-              projectId: ProjectId.make("project:pr-thread-context"),
+              projectId,
               title: "PR thread context",
               providerInstanceId,
               modelSelection: { instanceId: providerInstanceId, model: "gpt-5" },
@@ -4863,6 +4880,7 @@ it.layer(layerGitManagerTest)("GitManager", (it) => {
       });
 
       expect(generatedPrompt).toContain("Command: vp test run\nExit code: 0");
+      expect(createdAs).toBe("work-login");
       expect(generatedPrompt).toContain("Tests 12 passed");
       expect(generatedPrompt).toContain("Make the PR writer see the thread");
       expect(generatedPrompt).toContain("Command: vp lint\nExit code: 1");

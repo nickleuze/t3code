@@ -1270,6 +1270,13 @@ export const SETTINGS_SEARCH_ITEMS = [
     scope: "environment-defaults",
   },
   {
+    id: "project-github-account",
+    title: msg("GitHub account"),
+    to: "/settings/source-control",
+    scope: "project",
+    searchTerms: [msg("project github login personal work pull requests account")],
+  },
+  {
     id: "worktree-branch-naming",
     title: msg("Worktree branch naming"),
     to: "/settings/worktrees",

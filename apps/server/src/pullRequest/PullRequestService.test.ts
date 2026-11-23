@@ -10,6 +10,7 @@ import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
+import * as Queue from "effect/Queue";
 import * as Stream from "effect/Stream";
 import * as TestClock from "effect/testing/TestClock";
 import type {
@@ -31,6 +32,7 @@ import * as SourceControlProviderRegistry from "../sourceControl/SourceControlPr
 import type { SourceControlProvider } from "@t3tools/source-control-core/server/SourceControlProvider";
 import { isSshRemoteUrl } from "@t3tools/shared/sourceControl";
 import * as SourceControlRateLimit from "@t3tools/source-control-core/server/SourceControlRateLimit";
+import { ProjectGitHubAccount } from "@t3tools/source-control-github/server/driver";
 import { fakePullRequestProvider } from "@t3tools/source-control-testing/fakeSourceControlDriver";
 import {
   PullRequestProviderError,
@@ -321,6 +323,8 @@ const sshAliasHost = {
 
 function makeService(input: {
   readonly settings?: ServerSettings;
+  readonly getSettings?: () => ServerSettings;
+  readonly settingsChanges?: Stream.Stream<ServerSettings>;
   readonly projects: ReadonlyArray<OrchestrationProjectShell>;
   readonly providers: ReadonlyArray<PullRequestProviderApi>;
   readonly resolveHandle?: SourceControlProviderRegistry.SourceControlProviderRegistry["Service"]["resolveHandle"];
@@ -332,7 +336,10 @@ function makeService(input: {
     Layer.build(
       Layer.mergeAll(
         Layer.mock(ServerSettingsService.ServerSettingsService)({
-          getSettings: Effect.succeed(input.settings ?? DEFAULT_SERVER_SETTINGS),
+          getSettings: Effect.sync(
+            () => input.getSettings?.() ?? input.settings ?? DEFAULT_SERVER_SETTINGS,
+          ),
+          subscribeChanges: Effect.succeed(input.settingsChanges ?? Stream.empty),
         }),
         Layer.succeed(
           PullRequestProviderRegistry.PullRequestProviderRegistry,
@@ -505,6 +512,91 @@ it.effect("tries another checkout when provider refinement remains unknown", () 
 function batchedChangeRequest(number: number, repository: string, updatedAt: string) {
   return { ...changeRequest(number, updatedAt), repository };
 }
+
+it.effect("lists and acts on projects on github.com using each project's selected account", () =>
+  Effect.gen(function* () {
+    const personal = project({
+      id: "personal",
+      title: "Personal",
+      workspaceRoot: "/personal",
+      repository: "example/personal",
+    });
+    const work = project({
+      id: "work",
+      title: "Work",
+      workspaceRoot: "/work",
+      repository: "example/work",
+    });
+    let settings = {
+      ...DEFAULT_SERVER_SETTINGS,
+      projectSettingsOverrides: {
+        [personal.id]: { githubAccount: "alice" },
+        [work.id]: { githubAccount: "alice-work" },
+      },
+    };
+    const readViewer = Effect.map(ProjectGitHubAccount, (account) => account ?? "default");
+    const mutations: Array<string> = [];
+    const settingsChanges = yield* Queue.unbounded<ServerSettings>();
+    const service = yield* makeService({
+      projects: [personal, work],
+      getSettings: () => settings,
+      settingsChanges: Stream.fromQueue(settingsChanges),
+      providers: [
+        fakePullRequestProvider("github", {
+          getViewer: () => readViewer,
+          getRoutingIdentity: () =>
+            readViewer.pipe(Effect.map((viewer) => ({ viewer, accountId: viewer }))),
+          listChangeRequestsAcross: ({ repositories, viewer }) =>
+            readViewer.pipe(
+              Effect.map((account) => {
+                assert.strictEqual(account, viewer);
+                assert.strictEqual(repositories.length, 1);
+                return {
+                  items: repositories.map((repository) =>
+                    batchedChangeRequest(1, repository, "2026-11-23T12:00:00.000Z"),
+                  ),
+                  truncated: false,
+                };
+              }),
+            ),
+          comment: () =>
+            readViewer.pipe(
+              Effect.tap((viewer) =>
+                Effect.sync(() => {
+                  mutations.push(viewer);
+                }),
+              ),
+              Effect.asVoid,
+            ),
+        }),
+      ],
+    });
+    const list = () => service.list({ state: "open" });
+    const ref = { projectId: work.id, repository: "example/work", number: 1 };
+    const initial = yield* list();
+    assert.deepStrictEqual(
+      Object.fromEntries(initial.entries.map(({ projectId, viewer }) => [projectId, viewer])),
+      { personal: "alice", work: "alice-work" },
+    );
+    assert.strictEqual((yield* service.routing(ref)).viewer, "alice-work");
+    yield* service.comment({ ...ref, body: "Work comment" });
+    assert.deepStrictEqual(mutations, ["alice-work"]);
+
+    settings = {
+      ...settings,
+      projectSettingsOverrides: { [personal.id]: { githubAccount: "alice" } },
+    };
+    yield* Queue.offer(settingsChanges, settings);
+    assert.isTrue(Option.isSome(yield* Stream.runHead(service.subscribeRefreshes)));
+    const reset = yield* list();
+    assert.strictEqual(reset.viewers["github.com"], "default");
+    assert.strictEqual(
+      reset.entries.find((entry) => entry.projectId === work.id)?.viewer,
+      undefined,
+    );
+    assert.strictEqual((yield* service.routing(ref)).viewer, "default");
+  }),
+);
 
 it.effect("reads nothing from a host with no implementation, but reports it", () =>
   Effect.gen(function* () {
