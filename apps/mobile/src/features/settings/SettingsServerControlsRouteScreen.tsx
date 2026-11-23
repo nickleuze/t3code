@@ -6,6 +6,7 @@ import { readEnvironmentScope, useEnvironmentsWithScope } from "../../state/sess
 import { ScreenScrollView as ScrollView } from "../../components/ui/ScreenScrollView";
 import { AppText as Text, AppTextInput } from "../../components/ui/AppText";
 import {
+  projectGitHubAccountOptions,
   type ResponseStreamingMode,
   type ServerSettings,
   type ServerSettingsPatch,
@@ -45,6 +46,8 @@ import {
 import { PullRequestGlyph } from "../pull-requests/pullRequestGlyphs";
 import { AutoSettleSettingsRows } from "./ThreadSettingsSections";
 import { supportsSharedSettingsSync } from "@t3tools/client-runtime/state/shared-settings";
+import { sourceControlEnvironment } from "../../state/sourceControl";
+import { useEnvironmentQuery } from "../../state/query";
 
 type SettingsPage = "threads" | "source-control" | "worktrees" | "maintenance";
 
@@ -64,7 +67,7 @@ const PAGE_PROJECT_KEYS: Record<SettingsPage, readonly ProjectScopedServerSettin
     "sidebarAutoSettleOnMerge",
     "sidebarAutoSettleAfterDays",
   ],
-  "source-control": ["defaultAutoPull", "removeAgentCreditsOnMerge"],
+  "source-control": ["defaultAutoPull", "removeAgentCreditsOnMerge", "githubAccount"],
   worktrees: [
     "newWorktreesStartFromOrigin",
     "worktreeSubmodules",
@@ -213,6 +216,23 @@ function ServerSettingsDetail(props: { readonly page: SettingsPage }) {
   const displayTargets = pendingWrites > 0 && pendingTargets !== null ? pendingTargets : targets;
   const hasConnectedSelection = targets.length > 0;
   const reference = displayTargets[0] ?? null;
+  const githubEnvironmentId =
+    props.page === "source-control" &&
+    projectSelected &&
+    reference !== null &&
+    targets.every(
+      (target) => target.environment.environmentId === reference.environment.environmentId,
+    )
+      ? reference.environment.environmentId
+      : null;
+  const githubDiscovery = useEnvironmentQuery(
+    githubEnvironmentId === null
+      ? null
+      : sourceControlEnvironment.discovery({ environmentId: githubEnvironmentId, input: {} }),
+  );
+  const githubAccounts = projectGitHubAccountOptions(
+    githubDiscovery.data?.sourceControlProviders ?? [],
+  );
   const uniform = <K extends keyof ServerSettings>(key: K) =>
     uniformMobileSetting(displayTargets, key);
   // `uniform` folds a real null into "mixed"; nullable keys need the distinction.
@@ -500,6 +520,31 @@ function ServerSettingsDetail(props: { readonly page: SettingsPage }) {
                     onValueChange={(value) => write({ removeAgentCreditsOnMerge: value })}
                   />
                 </SettingsSection>
+                {projectSelected ? (
+                  <SettingsSection title={gt("GitHub account")}>
+                    <SettingsChoiceRow
+                      label={gt("Use environment account")}
+                      description={
+                        githubEnvironmentId === null
+                          ? gt("Select one environment to choose an account signed in there.")
+                          : gt("Use the environment account for github.com pull requests.")
+                      }
+                      selected={!isMixed("githubAccount") && uniform("githubAccount") === null}
+                      disabled={disabledFor("githubAccount") || githubEnvironmentId === null}
+                      onPress={() => write({ githubAccount: null })}
+                    />
+                    {githubAccounts.map((account) => (
+                      <SettingsChoiceRow
+                        key={account}
+                        label={account}
+                        selected={uniform("githubAccount") === account}
+                        separated
+                        disabled={disabledFor("githubAccount")}
+                        onPress={() => write({ githubAccount: account })}
+                      />
+                    ))}
+                  </SettingsSection>
+                ) : null}
                 <SettingsSection title={gt("Default branch")}>
                   <SettingsSwitchRow
                     icon="arrow.down.circle"

@@ -183,7 +183,7 @@ export const make = Effect.gen(function* () {
           // thread moved still names the shared checkout, whose branch is someone else's.
           if (thread.worktreePath !== null && local.refName !== thread.branch) return;
           const detected = yield* git.branchPullRequest(
-            { cwd, branch: local.refName },
+            { cwd, branch: local.refName, projectId: project.id },
             { refresh, confirmTerminal: false },
           );
           if (detected === null || detected.state !== "open") return;
@@ -335,7 +335,7 @@ export const make = Effect.gen(function* () {
             first.branch === null
               ? null
               : yield* git.branchPullRequest(
-                  { cwd, branch: first.branch },
+                  { cwd, branch: first.branch, projectId: project.id },
                   { refresh: request.refresh, confirmTerminal: false },
                 );
           if (first.branch !== null) noPullRequestRechecks.record(key, nowMs, detected !== null);
@@ -427,7 +427,7 @@ export const make = Effect.gen(function* () {
 
           if (detected !== null && first.branch !== null) {
             const current = yield* git.branchPullRequest(
-              { cwd, branch: first.branch },
+              { cwd, branch: first.branch, projectId: project.id },
               { freshGitState: true },
             );
             const currentIdentity = yield* repositoryIdentities.resolve(project.workspaceRoot, {

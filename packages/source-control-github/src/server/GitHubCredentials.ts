@@ -33,6 +33,16 @@ export const GH_PROCESS_CONCURRENCY = { key: "gh", limit: 4 } as const;
 
 const TOKEN_TTL = Duration.minutes(5);
 const MISSING_TTL = Duration.seconds(10);
+const CredentialCacheKey = Schema.fromJsonString(
+  Schema.Tuple([Schema.String, Schema.NullOr(Schema.String), Schema.Boolean]),
+);
+const encodeCredentialCacheKey = Schema.encodeSync(CredentialCacheKey);
+const decodeCredentialCacheKey = Schema.decodeEffect(CredentialCacheKey);
+
+export const ProjectGitHubAccount = Context.Reference<string | null>(
+  "@t3tools/source-control-github/server/ProjectGitHubAccount",
+  { defaultValue: () => null },
+);
 
 export const GitHubCredentialSource = Schema.Literals(["settings", "app", "env", "gh"]);
 export type GitHubCredentialSource = typeof GitHubCredentialSource.Type;
@@ -60,7 +70,7 @@ export class GitHubNotSignedInError extends Schema.TaggedError<GitHubNotSignedIn
   override get message(): string {
     return this.account === undefined
       ? `No GitHub credential for ${this.host}: run \`gh auth login --hostname ${this.host}\`.`
-      : `No GitHub credential for ${this.account} on ${this.host}: run \`gh auth login --hostname ${this.host}\` for that account or pick another in Settings → Source control & issues.`;
+      : `No GitHub credential for ${this.account} on ${this.host}: run \`gh auth login --hostname ${this.host}\` for that account or update the GitHub account setting.`;
   }
 }
 
@@ -161,7 +171,7 @@ export const make = Effect.gen(function* () {
       Effect.orDie,
     );
 
-  const fromGh = (host: string, account: string | undefined) =>
+  const fromGh = (host: string, account: string | undefined, projectAccount: boolean) =>
     process
       .run({
         operation: "GitHubCredentials.get",
@@ -181,6 +191,7 @@ export const make = Effect.gen(function* () {
           GH_PROMPT_DISABLED: "1",
           GH_ENTERPRISE_TOKEN: "",
           GITHUB_ENTERPRISE_TOKEN: "",
+          ...(projectAccount ? { GH_TOKEN: "", GITHUB_TOKEN: "" } : {}),
         },
         timeoutMs: 10_000,
         concurrency: GH_PROCESS_CONCURRENCY,
@@ -230,18 +241,20 @@ export const make = Effect.gen(function* () {
       Effect.map((token) => token.trim() || null),
     );
 
-  const cacheKey = (host: string, account: string | undefined) =>
-    account === undefined ? host : `${host}\u0000${account}`;
+  const cacheKey = (host: string, account: string | undefined, projectAccount: boolean) =>
+    encodeCredentialCacheKey([host, account ?? null, projectAccount]);
 
   const lookup = Effect.fn("GitHubCredentials.lookup")(function* (key: string) {
-    const [host = key, choice] = key.split("\u0000");
-    const fromEnv = environmentToken(host, environment);
+    const [host, account, projectAccount] = yield* decodeCredentialCacheKey(key).pipe(Effect.orDie);
+    const fromEnv = projectAccount ? null : environmentToken(host, environment);
     const token =
       fromEnv ??
-      (yield* fromGh(host, choice).pipe(
+      (yield* fromGh(host, account ?? undefined, projectAccount).pipe(
         Effect.catchTags({
           GitHubNotSignedInError: (error) =>
-            choice === undefined ? Effect.fail(error) : fromGh(host, undefined),
+            account === null || projectAccount
+              ? Effect.fail(error)
+              : fromGh(host, undefined, false),
         }),
       ));
     return {
@@ -286,16 +299,28 @@ export const make = Effect.gen(function* () {
   return GitHubCredentials.of({
     get: Effect.fn("GitHubCredentials.get")(function* (rawHost) {
       const host = normalizeHost(rawHost);
+      const account = yield* ProjectGitHubAccount;
+      if (host === "github.com" && account !== null) {
+        if ((yield* hostChoice(host))?.enabled === false) {
+          return yield* new GitHubHostDisabledError({ host });
+        }
+        return yield* Cache.get(cache, cacheKey(host, account, true));
+      }
       const fromSettings = yield* saved(host);
       if (Option.isSome(fromSettings)) return fromSettings.value;
-      return yield* Cache.get(cache, cacheKey(host, (yield* hostChoice(host))?.account));
+      return yield* Cache.get(cache, cacheKey(host, (yield* hostChoice(host))?.account, false));
     }),
     saved,
     fingerprint: fingerprintOf,
-    invalidate: Effect.fn("GitHubCredentials.invalidate")(function (rawHost) {
+    invalidate: Effect.fn("GitHubCredentials.invalidate")(function* (rawHost) {
       const host = normalizeHost(rawHost);
-      return hostChoice(host).pipe(
-        Effect.flatMap((choice) => Cache.invalidate(cache, cacheKey(host, choice?.account))),
+      const account = yield* ProjectGitHubAccount;
+      const choice = yield* hostChoice(host);
+      yield* Cache.invalidate(
+        cache,
+        host === "github.com" && account !== null
+          ? cacheKey(host, account, true)
+          : cacheKey(host, choice?.account, false),
       );
     }),
   });

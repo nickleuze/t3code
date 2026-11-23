@@ -21,6 +21,8 @@ Install Git and authenticate on the machine running your T3 Code server (for rem
 
 > Note: With several `gt` servers and no `fj` login, `owner/repo` and newly published repositories go to `gt`'s default server (`gt config set default_host https://your-server`). With several `gt` accounts on one server, pick one with `gt auth switch <user> --host https://your-server`. If an SSH remote uses a different host name than the server's web address, run `gt config set ssh_host <ssh-host> --host https://your-server`.
 
+> Note: To use another GitHub login for one project on `github.com`, select the project in **Settings → Source control & issues** and choose its **GitHub account** (**Use environment account** restores the default). T3 Code's pull request actions then use that signed-in `gh` account instead of the environment's account or token; Git push and pull still use the repository's Git credentials.
+
 ## Start, clone, or publish a project
 
 - **New project**: Run **New project** from the command palette (`Cmd/Ctrl+K`) or **Add Project** to initialize a new Git repo in `~/.t3/projects/<slug>` with a README, icon, and first commit (optionally creating a private GitHub repo).
