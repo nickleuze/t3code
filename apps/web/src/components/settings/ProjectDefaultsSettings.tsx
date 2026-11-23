@@ -1,6 +1,7 @@
 import { managedRuntimeModeDenial } from "@t3tools/client-runtime/contract-labels";
 import {
   DEFAULT_SERVER_SETTINGS,
+  projectGitHubAccountOptions,
   type ModelSelection,
   type WorktreeSubmodules,
 } from "@t3tools/contracts";
@@ -17,7 +18,9 @@ import {
 import { providerInstanceEntriesFor } from "../../providerInstances";
 import { useEnvironmentProviders, useEnvironments } from "../../state/environments";
 import { firstManagedDenial } from "../../state/managedPolicy";
+import { useEnvironmentQuery } from "../../state/query";
 import { EMPTY_SERVER_PROVIDERS } from "../../state/server";
+import { sourceControlEnvironment } from "../../state/sourceControl";
 import { resolveEnvModeLabel, WORKTREE_SUBMODULES_LABELS } from "../BranchToolbar.logic";
 import { ProviderModelPicker } from "../chat/ProviderModelPicker";
 import { runtimeModeConfig, runtimeModeOptions } from "../chat/runtimeModeConfig";
@@ -40,6 +43,7 @@ import { useScopedModelDisabledReason } from "./useScopedModelAvailability";
 import {
   useScopedSettings,
   useScopedSettingsMixed,
+  useScopedSettingsWriteAllowed,
   useScopedSettingSource,
   useUpdateScopedSettings,
 } from "./useScopedSettings";
@@ -47,6 +51,77 @@ import {
 const WORKTREE_SUBMODULES_OPTIONS = ["recursive", "top-level", "none"] as const;
 function isWorktreeSubmodules(value: string | null): value is WorktreeSubmodules {
   return value !== null && (WORKTREE_SUBMODULES_OPTIONS as readonly string[]).includes(value);
+}
+
+const ENVIRONMENT_GITHUB_ACCOUNT = "environment default";
+
+function ProjectGitHubAccountSetting() {
+  const gt = useGT();
+  const searchableSetting = useSearchableSetting();
+  const { target, targets } = useSettingsScope();
+  const accountsMixed = useScopedSettingsMixed(["githubAccount"]);
+  const canWrite = useScopedSettingsWriteAllowed();
+  const updateSettings = useUpdateScopedSettings();
+  const selected = useScopedSettings((settings) => settings.githubAccount);
+  const environmentId =
+    target !== null &&
+    targets.every((candidate) => candidate.environmentId === target.environmentId)
+      ? target.environmentId
+      : null;
+  const discovery = useEnvironmentQuery(
+    environmentId === null
+      ? null
+      : sourceControlEnvironment.discovery({ environmentId, input: {} }),
+  );
+  const choices = projectGitHubAccountOptions(discovery.data?.sourceControlProviders ?? []);
+  const unavailable = selected != null && !choices.includes(selected);
+  return (
+    <SettingsRow
+      {...searchableSetting("project-github-account")}
+      description={
+        environmentId === null
+          ? gt("Select one environment to choose an account signed in there.")
+          : choices.length === 0 && !discovery.isPending
+            ? gt("Sign in with gh auth login on this environment and rescan to add an account.")
+            : gt("Use a GitHub CLI login for this project's github.com pull requests.")
+      }
+      serverScoped
+      settingKeys={["githubAccount"]}
+      mixed={accountsMixed}
+      control={
+        <Select
+          value={accountsMixed ? null : (selected ?? ENVIRONMENT_GITHUB_ACCOUNT)}
+          disabled={!canWrite || environmentId === null}
+          onValueChange={(value) => {
+            if (value !== null) {
+              updateSettings({
+                githubAccount: value === ENVIRONMENT_GITHUB_ACCOUNT ? null : value,
+              });
+            }
+          }}
+        >
+          <SelectTrigger aria-label={gt("Project GitHub account")} size="sm">
+            <SelectValue placeholder={gt("Mixed")} />
+          </SelectTrigger>
+          <SelectPopup>
+            <SelectItem value={ENVIRONMENT_GITHUB_ACCOUNT}>
+              {gt("Use environment account")}
+            </SelectItem>
+            {unavailable ? (
+              <SelectItem value={selected} disabled>
+                {selected} {gt("(not signed in)")}
+              </SelectItem>
+            ) : null}
+            {choices.map((account) => (
+              <SelectItem key={account} value={account}>
+                {account}
+              </SelectItem>
+            ))}
+          </SelectPopup>
+        </Select>
+      }
+    />
+  );
 }
 
 export function ProjectDefaultsSettings({ category }: { category: ProjectSettingsCategory }) {
@@ -502,6 +577,7 @@ export function ProjectDefaultsSettings({ category }: { category: ProjectSetting
               />
             }
           />
+          {isProjectScope ? <ProjectGitHubAccountSetting /> : null}
           <SettingsRow
             serverScoped
             settingKeys={["pullRequestMergeMethod"]}

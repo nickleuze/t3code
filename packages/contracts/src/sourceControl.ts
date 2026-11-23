@@ -160,6 +160,23 @@ export const SourceControlProviderDiscoveryItem = Schema.Struct({
 });
 export type SourceControlProviderDiscoveryItem = typeof SourceControlProviderDiscoveryItem.Type;
 
+export function projectGitHubAccountOptions(
+  providers: ReadonlyArray<SourceControlProviderDiscoveryItem>,
+): ReadonlyArray<string> {
+  const github = providers.find((provider) => provider.kind === "github");
+  const accounts = github?.status === "available" ? (github.auth.accounts ?? []) : [];
+  return [
+    ...new Set(
+      accounts
+        .filter(
+          (entry) =>
+            entry.host === "github.com" && entry.authenticated && !entry.environmentVariable,
+        )
+        .map((entry) => entry.account),
+    ),
+  ];
+}
+
 export const SourceControlDiscoveryResult = Schema.Struct({
   versionControlSystems: Schema.Array(VcsDiscoveryItem),
   sourceControlProviders: Schema.Array(SourceControlProviderDiscoveryItem),

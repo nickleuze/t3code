@@ -625,7 +625,7 @@ export const make = Effect.gen(function* () {
         if (summary.state !== "open" && thread.branch !== null && cwd !== undefined) {
           if (!(yield* wouldSettle(group, terminal))) return undefined;
           const current = yield* git.branchPullRequest(
-            { cwd, branch: thread.branch },
+            { cwd, branch: thread.branch, projectId: thread.projectId },
             { refresh: true },
           );
           const project = projects.get(thread.projectId);
@@ -653,7 +653,7 @@ export const make = Effect.gen(function* () {
       // Remembered git state is enough to rule a thread out; only an answer
       // that would settle it is confirmed against fresh git state.
       const remembered = yield* git.branchPullRequest(
-        { cwd, branch: thread.branch },
+        { cwd, branch: thread.branch, projectId: thread.projectId },
         { refresh, confirmTerminal: false },
       );
       noPullRequestRechecks.record(key, nowMs, remembered !== null);
@@ -668,7 +668,7 @@ export const make = Effect.gen(function* () {
         return undefined;
       }
       const fresh = yield* git.branchPullRequest(
-        { cwd, branch: thread.branch },
+        { cwd, branch: thread.branch, projectId: thread.projectId },
         { freshGitState: true },
       );
       return ownedByAnotherThread(fresh) ? undefined : fresh;

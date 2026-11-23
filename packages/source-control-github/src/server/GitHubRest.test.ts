@@ -42,7 +42,10 @@ const appSignedOut = Layer.mock(GitHubAppSignIn.GitHubAppSignIn)({
 
 const NOW = Date.parse("2026-10-05T12:00:00.000Z");
 
-function harness(respond: (request: HttpClientRequest.HttpClientRequest) => Response) {
+function harness(
+  respond: (request: HttpClientRequest.HttpClientRequest) => Response,
+  savedToken?: string,
+) {
   const requests: Array<HttpClientRequest.HttpClientRequest> = [];
   let tokens = ["first", "second"];
   let invalidations = 0;
@@ -60,7 +63,15 @@ function harness(respond: (request: HttpClientRequest.HttpClientRequest) => Resp
             fingerprint: `${host}:${tokens[0]}`,
           };
         }),
-      saved: () => Effect.succeedNone,
+      saved: (host) =>
+        savedToken === undefined
+          ? Effect.succeedNone
+          : Effect.succeedSome({
+              host,
+              token: Redacted.make(savedToken),
+              source: "settings" as const,
+              fingerprint: `${host}:${savedToken}`,
+            }),
       fingerprint: (host, token) => Effect.succeed(`${host}:${token}`),
       invalidate: () =>
         Effect.sync(() => {
@@ -114,6 +125,20 @@ describe("environmentToken", () => {
 });
 
 describe("GitHubRest", () => {
+  it.effect("uses the project credential for GitHub API requests over a saved token", () => {
+    const { layer, requests } = harness(() => json({ login: "user" }), "environment");
+    return Effect.gen(function* () {
+      const api = yield* GitHubRest.GitHubRest;
+      const request = api.rest({ host: "github.com", operation: "viewer", path: "user" });
+      yield* request;
+      yield* request.pipe(Effect.provideService(GitHubCredentials.ProjectGitHubAccount, "work"));
+      expect(requests.map((call) => call.headers.authorization)).toEqual([
+        "Bearer environment",
+        "Bearer first",
+      ]);
+    }).pipe(Effect.provide(layer));
+  });
+
   it.live("routes REST and GraphQL through gh's plain HTTP Unix socket", () =>
     Effect.gen(function* () {
       const directory = yield* Effect.acquireRelease(

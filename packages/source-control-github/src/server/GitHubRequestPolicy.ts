@@ -312,6 +312,9 @@ export const make = Effect.gen(function* () {
         fromApp: false,
       } satisfies ChosenCredential;
     }
+    if (host === "github.com" && (yield* GitHubCredentials.ProjectGitHubAccount) !== null) {
+      return yield* personalCredential(host);
+    }
     const saved = yield* credentials.saved(host);
     if (Option.isSome(saved)) {
       return {
