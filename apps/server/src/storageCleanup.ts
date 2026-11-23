@@ -898,7 +898,7 @@ const make = Effect.gen(function* () {
           if (eligible) removalReason = "no commits beyond the default branch";
           if (!eligible && settings.worktreeOnMerge && thread.branch !== null) {
             const pullRequest = yield* gitManager.branchPullRequest(
-              { cwd: worktreePath, branch: thread.branch },
+              { cwd: worktreePath, branch: thread.branch, projectId: thread.projectId },
               { refresh: true },
             );
             eligible = storageCleanupPullRequestMerged(pullRequest, {

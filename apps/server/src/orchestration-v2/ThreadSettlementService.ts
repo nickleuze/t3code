@@ -474,7 +474,7 @@ export const make = Effect.gen(function* () {
         if (summary.state !== "open" && thread.branch !== null && cwd !== undefined) {
           if (!(yield* wouldSettle(group, terminal))) return undefined;
           const current = yield* git.branchPullRequest(
-            { cwd, branch: thread.branch },
+            { cwd, branch: thread.branch, projectId: thread.projectId },
             { refresh: true },
           );
           const project = projects.get(thread.projectId);
@@ -494,7 +494,10 @@ export const make = Effect.gen(function* () {
         return yield* Effect.die(new Error("thread project not found"));
       }
       const refresh = group.filter((member) => shellClosedThreads.delete(member.id)).length > 0;
-      return yield* git.branchPullRequest({ cwd, branch: thread.branch }, { refresh });
+      return yield* git.branchPullRequest(
+        { cwd, branch: thread.branch, projectId: thread.projectId },
+        { refresh },
+      );
     });
 
     yield* Effect.forEach(

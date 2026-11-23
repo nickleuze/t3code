@@ -921,6 +921,13 @@ export const SETTINGS_SEARCH_ITEMS = [
     searchTerms: ["auto pull default branch current checkout fast forward upstream"],
   },
   {
+    id: "project-github-account",
+    title: "GitHub account",
+    to: "/settings/source-control",
+    scope: "project",
+    searchTerms: ["project github login personal work pull requests account"],
+  },
+  {
     id: "remove-agent-credits-on-merge",
     title: "Remove agent credits when merging",
     to: "/settings/source-control",

@@ -125,6 +125,27 @@ describe("GitHubCredentials", () => {
     }).pipe(Effect.provide(layer));
   });
 
+  it.effect("keeps explicit project logins separate and fails closed when one is missing", () => {
+    vi.stubEnv("GH_TOKEN", "environment-token");
+    const { layer, calls } = harness({}, ["gone"], { "github.com": "saved-token" });
+    return Effect.gen(function* () {
+      const credentials = yield* GitHubCredentials.GitHubCredentials;
+      const read = (account: string) =>
+        credentials
+          .get("github.com")
+          .pipe(Effect.provideService(GitHubCredentials.ProjectGitHubAccount, account));
+      const [personal, work] = yield* Effect.all([read("personal"), read("work")], {
+        concurrency: "unbounded",
+      });
+      expect(Redacted.value(personal.token)).toBe("token-for-personal");
+      expect(Redacted.value(work.token)).toBe("token-for-work");
+      expect(personal.fingerprint).not.toBe(work.fingerprint);
+      expect((yield* Effect.flip(read("gone")))._tag).toBe("GitHubNotSignedInError");
+      expect(Redacted.value((yield* credentials.get("github.com")).token)).toBe("saved-token");
+      expect(calls).toHaveLength(3);
+    }).pipe(Effect.provide(layer));
+  });
+
   it.effect("uses a token saved in Settings before GH_TOKEN and gh", () => {
     vi.stubEnv("GH_TOKEN", "env-token");
     const { layer, calls } = harness({}, [], { "github.com": "saved-token" });

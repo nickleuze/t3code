@@ -191,7 +191,7 @@ export const make = Effect.gen(function* () {
             first.branch === null
               ? null
               : yield* git.branchPullRequest(
-                  { cwd, branch: first.branch },
+                  { cwd, branch: first.branch, projectId: project.id },
                   { refresh: request.refresh },
                 );
           if (detected !== null && !pullRequestMatchesProject(detected, resolvedProject)) {
@@ -269,7 +269,7 @@ export const make = Effect.gen(function* () {
 
           if (detected !== null && first.branch !== null) {
             const current = yield* git.branchPullRequest(
-              { cwd, branch: first.branch },
+              { cwd, branch: first.branch, projectId: project.id },
               { freshGitState: true },
             );
             const currentIdentity = yield* repositoryIdentities.resolve(project.workspaceRoot, {

@@ -13,6 +13,8 @@ import * as GitHubPullRequestProvider from "./GitHubPullRequestProvider.ts";
 import * as GitHubRest from "./GitHubRest.ts";
 import * as GitHubSourceControlProvider from "./GitHubSourceControlProvider.ts";
 
+export { ProjectGitHubAccount } from "./GitHubCredentials.ts";
+
 // `GitHubRest.layerWithDependencies` carries the quota reserve every GitHub reader shares, so it
 // must be built once; the driver is.
 const services = GitHubPullRequestApi.layer.pipe(
