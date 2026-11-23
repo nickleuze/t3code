@@ -76,7 +76,9 @@ const AreaProjectCreateTool = Tool.make("t3_area_project_create", {
     environmentId: OrchestratorMcpEnvironmentTarget,
     area: TrimmedNonEmptyString,
     name: TrimmedNonEmptyString,
-    purpose: TrimmedNonEmptyString.annotate({ description: "One or two sentences." }),
+    purpose: Schema.optional(
+      TrimmedNonEmptyString.annotate({ description: "One or two sentences." }),
+    ),
     goal: Schema.optional(TrimmedNonEmptyString),
     slug: Schema.optional(
       TrimmedNonEmptyString.annotate({ description: "Folder name; from `name` if omitted." }),

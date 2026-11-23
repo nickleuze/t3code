@@ -118,6 +118,7 @@ interface EnvironmentOption {
   readonly machine: EnvironmentMachineKind;
   readonly baseDirectory: string | null;
   readonly newProjectsRoot: string | null;
+  readonly projectAreas: { readonly root: string; readonly names: ReadonlyArray<string> } | null;
   readonly connectionState: EnvironmentConnectionPhase;
   readonly connectionError: string | null;
   readonly i18nConnectionError?: MarkedText;
@@ -463,6 +464,7 @@ function useEnvironmentOptions(
         machine: resolveEnvironmentMachineKind(config ?? null),
         baseDirectory: config?.settings.addProjectBaseDirectory ?? null,
         newProjectsRoot: config?.newProjectsRoot ?? null,
+        projectAreas: config?.projectAreas ?? null,
         connectionState: runtime?.connectionState ?? "available",
         connectionError: runtime?.connectionError ?? null,
         ...(runtime?.i18nConnectionError === undefined
@@ -1188,6 +1190,7 @@ export function AddProjectNewScreen(props: { readonly environmentId?: string | s
     environment?.offeredSourceControlProviders,
   );
   const [name, setName] = useState("");
+  const [area, setArea] = useState<string | null>(null);
   const [publishes, setPublishes] = useState(false);
   const [publishKind, setPublishKind] = useState<SourceControlProviderKind | null>(null);
   const publishTarget = getNewProjectPublishTarget(publishTargets, publishKind);
@@ -1195,10 +1198,14 @@ export function AddProjectNewScreen(props: { readonly environmentId?: string | s
   const [error, setError] = useState<string | null>(null);
   const trimmedName = name.trim();
   const gt = useGT();
+  const projectAreas = environment?.projectAreas ?? null;
+  const selectedArea = area !== null && projectAreas?.names.includes(area) === true ? area : null;
+  const projectsRoot =
+    projectAreas !== null && selectedArea !== null
+      ? `${projectAreas.root}/${selectedArea}`
+      : (environment?.newProjectsRoot ?? null);
   const pathPreview =
-    environment?.newProjectsRoot != null
-      ? getNewProjectPathPreview(environment.newProjectsRoot, trimmedName)
-      : null;
+    projectsRoot !== null ? getNewProjectPathPreview(projectsRoot, trimmedName) : null;
 
   const showMachines =
     environmentOptions.length > 1 || (environment === null && environmentOptions.length > 0);
@@ -1237,6 +1244,46 @@ export function AddProjectNewScreen(props: { readonly environmentId?: string | s
     </ListSection>
   ) : null;
 
+  const areaRows =
+    projectAreas !== null ? (
+      <View className="gap-2">
+        <Text className="px-1 text-sm leading-snug text-foreground-muted">{gt("Area")}</Text>
+        <ListSection>
+          {[null, ...projectAreas.names].map((option, index) => {
+            const selected = option === selectedArea;
+            return (
+              <ListRow
+                key={option ?? ""}
+                title={option ?? gt("No Area")}
+                icon={
+                  <SymbolView
+                    name="folder"
+                    size={Platform.OS === "android" ? 24 : 17}
+                    tintColorClassName="accent-icon"
+                    type="monochrome"
+                  />
+                }
+                selected={selected}
+                disabled={isSubmitting}
+                isFirst={index === 0}
+                right={
+                  selected ? (
+                    <SymbolView
+                      name="checkmark"
+                      size={Platform.OS === "android" ? 20 : 14}
+                      tintColorClassName="accent-icon"
+                      type="monochrome"
+                    />
+                  ) : null
+                }
+                onPress={() => setArea(option)}
+              />
+            );
+          })}
+        </ListSection>
+      </View>
+    ) : null;
+
   // State lags a render behind, so a double tap could start a second create.
   const submittingRef = useRef(false);
   const submit = async () => {
@@ -1247,7 +1294,7 @@ export function AddProjectNewScreen(props: { readonly environmentId?: string | s
     setIsSubmitting(true);
     const result = await createNew({
       environmentId: environment.environmentId,
-      input: { name: trimmedName },
+      input: { name: trimmedName, ...(selectedArea !== null ? { area: selectedArea } : {}) },
     });
     if (AsyncResult.isFailure(result)) {
       submittingRef.current = false;
@@ -1342,13 +1389,14 @@ export function AddProjectNewScreen(props: { readonly environmentId?: string | s
                   : gt("Creates {path}", { path: pathPreview })
                 : showMachines
                   ? gt("Goes in {path} on {environment}", {
-                      path: environment.newProjectsRoot,
+                      path: projectsRoot,
                       environment: environment.label,
                     })
-                  : gt("Goes in {path}", { path: environment.newProjectsRoot })}
+                  : gt("Goes in {path}", { path: projectsRoot })}
             </Text>
           ) : null}
           {machineRows}
+          {areaRows}
           {publishTarget !== null ? (
             <ListSection>
               <ListRow

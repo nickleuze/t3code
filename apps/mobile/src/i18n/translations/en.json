@@ -2610,6 +2610,8 @@
   "76c904b3c050a8d4": "Browse folders",
   "cdf970e90a304cef": "This connection cannot browse host folders.",
   "a3caa6d8a4eda7b4": "This folder does not exist yet. Cloning creates it.",
+  "0c36167349cae3f2": "Area",
+  "d9553e0746f9c16a": "No Area",
   "ff73538617128859": "Project name",
   "cef115822cc61afa": "Creates {path} on {environment}",
   "63a1741dd56c681b": "Creates {path}",
