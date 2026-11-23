@@ -21,6 +21,7 @@ import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Path from "effect/Path";
+import * as Predicate from "effect/Predicate";
 import * as Queue from "effect/Queue";
 import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
@@ -243,6 +244,8 @@ import * as ProjectEnrichmentService from "./project/ProjectEnrichmentService.ts
 import * as ProjectService from "./project/ProjectService.ts";
 import { threadWorkspaceRoot } from "./project/threadWorkspaceRoot.ts";
 import * as ManagedProjectFolders from "./project/ManagedProjectFolders.ts";
+import * as AreaProjects from "./project/AreaProjects.ts";
+import * as ProcessRunner from "./processRunner.ts";
 import * as ScratchThreadPromotion from "./project/ScratchThreadPromotion.ts";
 import { mutateProjectWithClone } from "./project/ProjectMutation.ts";
 import * as ProjectCloneTracker from "./project/ProjectCloneTracker.ts";
@@ -1480,6 +1483,9 @@ export const layerWsRpc = (
       const projectStore = yield* ProjectStore.ProjectStoreV2;
       const projectService = yield* ProjectService.ProjectService;
       const managedFolders = yield* ManagedProjectFolders.ManagedProjectFolders;
+      const areaProjects = yield* AreaProjects.make(AreaProjects.defaultCommand).pipe(
+        Effect.provide(ProcessRunner.layer),
+      );
       const scratchThreadPromotion = yield* ScratchThreadPromotion.ScratchThreadPromotion;
       const eventLoopMonitor = yield* EventLoopMonitor.EventLoopMonitor;
       const threadSearch = yield* ThreadSearch.ThreadSearch;
@@ -1981,6 +1987,19 @@ export const layerWsRpc = (
           newProjectsRoot: yield* managedFolders.resolveNamedProjectsRoot(
             settings.newProjectDirectory,
           ),
+          ...(yield* areaProjects.run("projects_areas", {}).pipe(
+            Effect.map(({ root, areas }) => {
+              const names = Array.isArray(areas)
+                ? areas.flatMap((area) =>
+                    Predicate.isObject(area) && typeof area.name === "string" ? [area.name] : [],
+                  )
+                : [];
+              return typeof root === "string" && names.length > 0
+                ? { projectAreas: { root, names } }
+                : {};
+            }),
+            Effect.orElseSucceed(() => ({})),
+          )),
           ...(lastEventLoopStall === undefined ? {} : { lastEventLoopStall }),
           serverTime: DateTime.formatIso(yield* DateTime.now),
         };
@@ -3071,14 +3090,16 @@ export const layerWsRpc = (
               (cause) => new OrchestrationDispatchCommandError({ message: cause.message, cause }),
             ),
           ),
-        [WS_METHODS.projectsCreateNew]: (input) =>
-          managedFolders
-            .createNamedProject(input)
-            .pipe(
-              Effect.mapError(
-                (cause) => new OrchestrationDispatchCommandError({ message: cause.message, cause }),
-              ),
+        [WS_METHODS.projectsCreateNew]: ({ area, ...input }) =>
+          (area === undefined
+            ? managedFolders.createNamedProject(input)
+            : areaProjects.createNew({ area, name: input.name })
+          ).pipe(
+            Effect.mapError(
+              (cause: { readonly message: string }) =>
+                new OrchestrationDispatchCommandError({ message: cause.message, cause }),
             ),
+          ),
         [WS_METHODS.projectsCreateFromThread]: (input) =>
           scratchThreadPromotion
             .promote(input)

@@ -605,6 +605,7 @@ function OpenCommandPaletteDialog(props: {
     readonly sourcesEnvironmentId: EnvironmentId | null;
   } | null>(null);
   const [newProjectPublishes, setNewProjectPublishes] = useState(false);
+  const [newProjectArea, setNewProjectArea] = useState<string | null>(null);
   const [newProjectPublishKind, setNewProjectPublishKind] =
     useState<SourceControlProviderKind | null>(null);
   const [isCreatingNewProject, setIsCreatingNewProject] = useState(false);
@@ -2296,6 +2297,7 @@ function OpenCommandPaletteDialog(props: {
         environmentId: newProjectFlow.environmentId,
         name: newProjectName,
         publishTo: newProjectPublishes ? newProjectPublishTarget : null,
+        area: selectedNewProjectArea,
       }),
     );
     newProjectSubmittingRef.current = false;
@@ -2588,8 +2590,50 @@ function OpenCommandPaletteDialog(props: {
     : browseGroups;
 
   const newProjectsRoot = newProjectFlow ? newProjectsRootFor(newProjectFlow.environmentId) : null;
+  const newProjectAreas = newProjectFlow
+    ? (environments.find(
+        (environment) => environment.environmentId === newProjectFlow.environmentId,
+      )?.serverConfig?.projectAreas ?? null)
+    : null;
+  const selectedNewProjectArea =
+    newProjectArea !== null && newProjectAreas?.names.includes(newProjectArea) === true
+      ? newProjectArea
+      : null;
   const newProjectPathPreview =
-    newProjectsRoot === null ? null : getNewProjectPathPreview(newProjectsRoot, newProjectName);
+    newProjectAreas !== null && selectedNewProjectArea !== null
+      ? getNewProjectPathPreview(
+          `${newProjectAreas.root}/${selectedNewProjectArea}`,
+          newProjectName,
+        )
+      : newProjectsRoot === null
+        ? null
+        : getNewProjectPathPreview(newProjectsRoot, newProjectName);
+  const newProjectAreaGroup: CommandPaletteView["groups"][number] | null =
+    newProjectAreas === null
+      ? null
+      : {
+          value: "new-project-areas",
+          label: gt("Area"),
+          items: [null, ...newProjectAreas.names].map((area) => ({
+            kind: "action" as const,
+            value: `new-project:area:${area ?? ""}`,
+            searchTerms: [],
+            title: area ?? gt("No Area"),
+            icon: <FolderIcon className={ITEM_ICON_CLASS} />,
+            ...(area === selectedNewProjectArea
+              ? {
+                  titleTrailingContent: (
+                    <CheckIcon className="ms-auto size-4 shrink-0 text-muted-foreground/70" />
+                  ),
+                }
+              : {}),
+            ...(isCreatingNewProject ? { disabled: true } : {}),
+            keepOpen: true,
+            run: async () => {
+              setNewProjectArea(area);
+            },
+          })),
+        };
   const newProjectPublishToggleValue = "new-project:publish";
   const showExistingProjectSources = (environmentId: EnvironmentId) => {
     const sourcesEnvironmentId = newProjectFlow?.sourcesEnvironmentId ?? null;
@@ -2724,6 +2768,7 @@ function OpenCommandPaletteDialog(props: {
   if (newProjectFlow !== null) {
     displayedGroups = [
       ...(newProjectMachineGroup ? [newProjectMachineGroup] : []),
+      ...(newProjectAreaGroup ? [newProjectAreaGroup] : []),
       ...newProjectOptionGroups,
       ...(newProjectExistingGroup ? [newProjectExistingGroup] : []),
     ];
