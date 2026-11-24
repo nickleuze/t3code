@@ -289,15 +289,20 @@ export function getNewProjectPathPreview(newProjectsRoot: string, name: string):
 export interface NewProjectPublishTarget {
   readonly definition: SourceControlDefinition;
   readonly owner: string | null;
+  readonly host?: "github.com";
 }
 
 export function getNewProjectPublishTargets(
   discovery: SourceControlDiscoveryResult | null,
   offered: OfferedSourceControlProviders | undefined,
+  githubAccount: string | null = null,
 ): ReadonlyArray<NewProjectPublishTarget> {
   const readiness = buildAddProjectRemoteSourceReadiness(discovery);
   return sourceControlClients.definitions.flatMap((definition) => {
     if (!isSourceControlProviderOffered(offered, definition.kind)) return [];
+    if (definition.kind === "github" && githubAccount !== null) {
+      return [{ definition, owner: githubAccount, host: "github.com" as const }];
+    }
     if (!readiness(definition.kind).ready) return [];
     const provider = discovery?.sourceControlProviders.find(
       (candidate) => candidate.kind === definition.kind,
@@ -322,6 +327,14 @@ export function getNewProjectRepository(
 ): string {
   const folderName = workspaceRoot.split(/[\\/]/).filter(Boolean).at(-1) ?? "";
   return target.owner ? `${target.owner}/${folderName}` : folderName;
+}
+
+export function getNewProjectPublishRepository(
+  target: NewProjectPublishTarget,
+  workspaceRoot: string,
+): string {
+  const repository = getNewProjectRepository(target, workspaceRoot);
+  return target.host ? `${target.host}/${repository}` : repository;
 }
 
 export function getCloneDestinationBrowsePath(input: {

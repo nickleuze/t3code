@@ -48,6 +48,16 @@ Settings that are environment-wide stay read-only while a project is selected. W
 targets disagree, a control shows **Mixed** until you choose one value. Appearance, keyboard,
 and other phone-only settings ignore the filter.
 
+## Choose a GitHub account
+
+Choose **GitHub account** in **New Project** to use one of the GitHub CLI accounts signed in on
+the project's environment. If you also create a private GitHub repository in that flow, T3 Code
+creates it under the selected account. Git push and pull use the checkout's Git credentials.
+
+To change the account later, open **Settings → Projects**, select the project and its environment,
+then choose **GitHub account**. Select **Use environment account** to follow the environment's
+sign-in again. This setting applies to GitHub.com pull requests for the project.
+
 ## Projects with several repositories
 
 A project covers every repository inside its folder, and any folder you add under **Settings →

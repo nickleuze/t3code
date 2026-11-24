@@ -1,6 +1,6 @@
 import { scopeProjectRef } from "@t3tools/client-runtime/environment";
 import {
-  getNewProjectRepository,
+  getNewProjectPublishRepository,
   type NewProjectPublishTarget,
 } from "@t3tools/client-runtime/operations/projects";
 import {
@@ -43,7 +43,7 @@ export function useNewProject() {
       input: {
         cwd: input.workspaceRoot,
         provider: input.target.definition.kind,
-        repository: getNewProjectRepository(input.target, input.workspaceRoot),
+        repository: getNewProjectPublishRepository(input.target, input.workspaceRoot),
         visibility: "private",
       },
     });
@@ -79,10 +79,15 @@ export function useNewProject() {
     readonly publishTo: NewProjectPublishTarget | null;
     /** Fork: create it in one of the host's Areas. */
     readonly area?: string | null;
+    readonly githubAccount: string | null;
   }): Promise<boolean> => {
     const result = await createNew({
       environmentId: input.environmentId,
-      input: { name: input.name, ...(input.area ? { area: input.area } : {}) },
+      input: {
+        name: input.name,
+        ...(input.area ? { area: input.area } : {}),
+        ...(input.githubAccount === null ? {} : { githubAccount: input.githubAccount }),
+      },
     });
     if (result._tag === "Failure") {
       if (!isAtomCommandInterrupted(result)) {

@@ -13,6 +13,7 @@ import {
 import * as HostProcess from "@t3tools/shared/HostProcess";
 import * as KeyedLock from "@t3tools/shared/KeyedLock";
 import * as Clock from "effect/Clock";
+import { clearProjectSettingsOverrides as clearProjectOverrideKeys } from "@t3tools/shared/projectSettings";
 import { isWslSharePath } from "@t3tools/shared/path";
 import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
@@ -57,6 +58,7 @@ import * as WorkspacePaths from "../workspace/WorkspacePaths.ts";
 export interface ProjectCreateInput extends ProjectCreatePayload {
   readonly commandId: CommandId;
   readonly projectId: ProjectId;
+  readonly githubAccount?: string;
 }
 
 export interface ProjectUpdateInput extends ProjectUpdatePayload {
@@ -548,7 +550,7 @@ export const make = Effect.gen(function* () {
         workspaceRoot,
         input.trackedFolders ?? [],
       );
-      yield* commit({
+      const createProject = commit({
         type: "project.create",
         commandId: input.commandId,
         projectId: input.projectId,
@@ -557,6 +559,44 @@ export const make = Effect.gen(function* () {
         ...(input.scripts === undefined ? {} : { scripts: input.scripts }),
         trackedFolders,
       });
+      const { projectId, githubAccount } = input;
+      if (githubAccount === undefined) {
+        yield* createProject;
+      } else {
+        // The override must be visible when the project registration becomes visible.
+        yield* Effect.gen(function* () {
+          yield* serverSettings
+            .updateSettings({ projectSettingsOverrides: { [projectId]: { githubAccount } } })
+            .pipe(
+              Effect.mapError(
+                (cause) => new ProjectInvalidError({ projectId, detail: cause.message }),
+              ),
+            );
+          yield* createProject.pipe(
+            Effect.tapError(() =>
+              readRow(projectId, { includeDeleted: true }).pipe(
+                Effect.flatMap((owner) =>
+                  Option.isSome(owner)
+                    ? Effect.void
+                    : serverSettings.getSettings.pipe(
+                        Effect.flatMap((current) =>
+                          serverSettings.updateSettings({
+                            projectSettingsOverrides: {
+                              [projectId]: clearProjectOverrideKeys(current, projectId, [
+                                "githubAccount",
+                              ]),
+                            },
+                          }),
+                        ),
+                        Effect.asVoid,
+                      ),
+                ),
+                Effect.ignoreCause({ log: true }),
+              ),
+            ),
+          );
+        }).pipe(Effect.uninterruptible);
+      }
       yield* projectEnrichment.invalidate([workspaceRoot]);
       return yield* readCommitted(input.projectId);
     },

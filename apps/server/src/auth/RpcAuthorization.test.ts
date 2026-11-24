@@ -166,6 +166,43 @@ describe("RPC scope middleware", () => {
   );
 });
 
+it.effect("requires settings write permission when creating a project with a GitHub account", () =>
+  Effect.gen(function* () {
+    const group = WsRpcGroup.omit(
+      ...[...WsRpcGroup.requests.keys()].filter(
+        (
+          tag,
+        ): tag is Exclude<keyof typeof RPC_REQUIRED_SCOPES, typeof WS_METHODS.projectsCreateNew> =>
+          tag !== WS_METHODS.projectsCreateNew,
+      ),
+    );
+    const created: string[] = [];
+    const client = yield* RpcTest.makeClient(group).pipe(
+      Effect.provide(
+        Layer.merge(
+          group.toLayerHandler(WS_METHODS.projectsCreateNew, ({ name }) =>
+            Effect.sync(() => {
+              created.push(name);
+              return { projectId: ProjectId.make(name), workspaceRoot: "/project" };
+            }),
+          ),
+          RpcAuthorization.layer([AuthOrchestrationOperateScope]),
+        ),
+      ),
+    );
+    yield* client[WS_METHODS.projectsCreateNew]({ name: "default" });
+    const error = yield* client[WS_METHODS.projectsCreateNew]({
+      name: "overridden",
+      githubAccount: "work",
+    }).pipe(Effect.flip);
+    expect(error).toMatchObject({
+      _tag: "EnvironmentAuthorizationError",
+      requiredPermission: AuthSettingsWriteScope,
+    });
+    expect(created).toEqual(["default"]);
+  }),
+);
+
 it.effect("allows issue reads but requires a source-control grant before commenting", () =>
   Effect.gen(function* () {
     const tested = [WS_METHODS.issuesList, WS_METHODS.issuesComment] as const;

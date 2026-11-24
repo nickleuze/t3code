@@ -28,6 +28,7 @@ import { useSettingsEnvironmentMenu } from "./components/SettingsEnvironmentFilt
 import { BranchNamingSettings } from "./components/BranchNamingSettings";
 import { DatabaseStorageNotice } from "./components/DatabaseStorageNotice";
 import { ListChoiceRow as SettingsChoiceRow } from "../../components/ui/ListChoiceRow";
+import { ProjectGitHubAccountChoices } from "../projects/ProjectGitHubAccountChoices";
 import { SettingsSection } from "./components/SettingsSection";
 import { SettingsSwitchRow } from "./components/SettingsSwitchRow";
 import { IssueTrackerSection } from "./components/IssueTrackerSection";
@@ -522,27 +523,18 @@ function ServerSettingsDetail(props: { readonly page: SettingsPage }) {
                 </SettingsSection>
                 {projectSelected ? (
                   <SettingsSection title={gt("GitHub account")}>
-                    <SettingsChoiceRow
-                      label={gt("Use environment account")}
+                    <ProjectGitHubAccountChoices
+                      accounts={githubAccounts}
+                      value={uniform("githubAccount")}
+                      mixed={isMixed("githubAccount") || githubEnvironmentId === null}
                       description={
                         githubEnvironmentId === null
                           ? gt("Select one environment to choose an account signed in there.")
                           : gt("Use the environment account for github.com pull requests.")
                       }
-                      selected={!isMixed("githubAccount") && uniform("githubAccount") === null}
                       disabled={disabledFor("githubAccount") || githubEnvironmentId === null}
-                      onPress={() => write({ githubAccount: null })}
+                      onChange={(githubAccount) => write({ githubAccount })}
                     />
-                    {githubAccounts.map((account) => (
-                      <SettingsChoiceRow
-                        key={account}
-                        label={account}
-                        selected={uniform("githubAccount") === account}
-                        separated
-                        disabled={disabledFor("githubAccount")}
-                        onPress={() => write({ githubAccount: account })}
-                      />
-                    ))}
                   </SettingsSection>
                 ) : null}
                 <SettingsSection title={gt("Default branch")}>

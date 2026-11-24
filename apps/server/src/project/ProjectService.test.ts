@@ -657,6 +657,35 @@ it.layer(layerTest)("ProjectService", (it) => {
     }),
   );
 
+  it.effect("clears the chosen GitHub account when project registration is rejected", () =>
+    Effect.gen(function* () {
+      const projects = yield* ProjectService.ProjectService;
+      const settings = yield* ServerSettings.ServerSettingsService;
+      const projectId = ProjectId.make("project:duplicate-account");
+      const workspaceRoot = "/work/duplicate-account";
+      const owner = yield* projects.create({
+        projectId: ProjectId.make("project:account-owner"),
+        commandId: CommandId.make("command:account-owner"),
+        title: "Owner",
+        workspaceRoot,
+        githubAccount: "personal",
+      });
+      const error = yield* projects
+        .create({
+          projectId,
+          commandId: CommandId.make("command:duplicate-account"),
+          title: "Duplicate",
+          workspaceRoot,
+          githubAccount: "work",
+        })
+        .pipe(Effect.flip);
+      assert.equal(error._tag, "ProjectConflictError");
+      const overrides = (yield* settings.getSettings).projectSettingsOverrides;
+      assert.equal(overrides[owner.id]?.githubAccount, "personal");
+      assert.isUndefined(overrides[projectId]);
+    }),
+  );
+
   it.effect("replays a workspace conflict after the workspace frees up", () =>
     Effect.gen(function* () {
       const service = yield* ProjectService.ProjectService;

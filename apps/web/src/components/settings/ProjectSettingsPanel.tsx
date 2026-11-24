@@ -54,7 +54,7 @@ import {
   ProjectFaviconPickerDialog,
 } from "./ProjectFaviconPickerDialog";
 import { ProjectActionsSettings } from "./ProjectActionsSettings";
-import { ProjectDefaultsSettings } from "./ProjectDefaultsSettings";
+import { ProjectDefaultsSettings, ProjectGitHubAccountSetting } from "./ProjectDefaultsSettings";
 import { ProjectRepositoriesSettings } from "./ProjectRepositoriesSettings";
 import {
   defaultProjectIcon,
@@ -624,6 +624,9 @@ function ProjectDetail({
               />
             }
           />
+          {group.memberProjects.every((member) => member.isScratch) ? null : (
+            <ProjectGitHubAccountSetting />
+          )}
           <SettingsRow
             title={gt("Project icon")}
             description={
