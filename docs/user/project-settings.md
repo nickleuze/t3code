@@ -12,6 +12,16 @@ Use the **"Applying settings for …"** selector at the top of Settings (web/des
 - Click the **layers icon** beside a server setting to inspect its inheritance chain, jump to overriding projects, or **Reset all** back to the environment default.
 - **Per-project providers**: With a project selected in **Settings → Providers**, toggling a provider enables or disables it for that project only (in either direction). Running turns finish; no new turns start on a disabled provider.
 
+## Choose a GitHub account
+
+Choose **GitHub account** in **New Project** to use one of the GitHub CLI accounts signed in on
+the project's environment. If you also create a private GitHub repository in that flow, T3 Code
+creates it under the selected account. Git push and pull use the checkout's Git credentials.
+
+To change the account later, open **Settings → Projects**, select the project and its environment,
+then choose **GitHub account**. Select **Use environment account** to follow the environment's
+sign-in again. This setting applies to GitHub.com pull requests for the project.
+
 ## Pin and archive projects
 
 - **Pin**: Pinned projects sort first in project pickers, the command palette, the sidebar filter, and mobile (`mod+shift+p` on a highlighted row, or **Settings → Projects**).

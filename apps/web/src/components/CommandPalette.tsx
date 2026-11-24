@@ -49,6 +49,7 @@ import {
 } from "@t3tools/client-runtime/state/runtime";
 import {
   AuthOrchestrationOperateScope,
+  AuthSettingsWriteScope,
   AuthSourceControlWriteScope,
   AuthFilesystemReadScope,
   type DesktopWslState,
@@ -56,6 +57,8 @@ import {
   type FilesystemBrowseResult,
   SourceControlProviderKind,
   PRIMARY_LOCAL_ENVIRONMENT_ID,
+  isManagedSettingPath,
+  projectGitHubAccountOptions,
   resolveEnvironmentMachineKind,
   type ScopedProjectRef,
 } from "@t3tools/contracts";
@@ -87,6 +90,7 @@ import {
   SquarePenIcon,
   TextSearchIcon,
   UserPlusIcon,
+  UserRoundIcon,
   WorkflowIcon,
 } from "lucide-react";
 import { openThreadFind } from "./chat/threadFindStore";
@@ -610,6 +614,7 @@ function OpenCommandPaletteDialog(props: {
   } | null>(null);
   const [newProjectPublishes, setNewProjectPublishes] = useState(false);
   const [newProjectArea, setNewProjectArea] = useState<string | null>(null);
+  const [newProjectGitHubAccount, setNewProjectGitHubAccount] = useState<string | null>(null);
   const [newProjectPublishKind, setNewProjectPublishKind] =
     useState<SourceControlProviderKind | null>(null);
   const [isCreatingNewProject, setIsCreatingNewProject] = useState(false);
@@ -722,6 +727,10 @@ function OpenCommandPaletteDialog(props: {
     }) ?? null;
   const browseEnvironmentId = addProjectEnvironmentId ?? defaultAddProjectEnvironmentId;
   const canCreateProject = useEnvironmentScope(browseEnvironmentId, AuthOrchestrationOperateScope);
+  const canWriteNewProjectSettings = useEnvironmentScope(
+    browseEnvironmentId,
+    AuthSettingsWriteScope,
+  );
   const browseEnvironment =
     environments.find((environment) => environment.environmentId === browseEnvironmentId) ?? null;
   const browseEnvironmentIsDesktopLocal =
@@ -1142,6 +1151,7 @@ function OpenCommandPaletteDialog(props: {
     setNewProjectFlow({ environmentId, sourcesEnvironmentId });
     setNewProjectPublishes(false);
     setNewProjectPublishKind(null);
+    setNewProjectGitHubAccount(null);
     pushPaletteView({
       addonIcon: <FolderGit2Icon className={ADDON_ICON_CLASS} />,
       groups: [],
@@ -2268,12 +2278,23 @@ function OpenCommandPaletteDialog(props: {
     });
   };
 
+  const newProjectServerConfig = browseEnvironment?.serverConfig;
+  const canPickNewProjectGitHubAccount =
+    newProjectFlow !== null &&
+    canWriteNewProjectSettings &&
+    newProjectServerConfig?.environment.capabilities.projectGitHubAccountOnCreate === true &&
+    !isManagedSettingPath(newProjectServerConfig.managedPolicy, "githubAccount") &&
+    !isManagedSettingPath(newProjectServerConfig.managedPolicy, "projectSettingsOverrides");
+  const newProjectGitHubAccounts = canPickNewProjectGitHubAccount
+    ? projectGitHubAccountOptions(sourceControlDiscovery.data?.sourceControlProviders ?? [])
+    : [];
   const newProjectPublishTargets =
     newProjectFlow === null
       ? []
       : getNewProjectPublishTargets(
           sourceControlDiscovery.data ?? null,
           offeredProvidersFor(newProjectFlow.environmentId),
+          newProjectGitHubAccount,
         );
   const newProjectPublishTarget = getNewProjectPublishTarget(
     newProjectPublishTargets,
@@ -2284,6 +2305,8 @@ function OpenCommandPaletteDialog(props: {
     newProjectFlow !== null &&
     newProjectName.length > 0 &&
     !isCreatingNewProject &&
+    (newProjectGitHubAccount === null ||
+      newProjectGitHubAccounts.includes(newProjectGitHubAccount)) &&
     canCreateProjectInEnvironment(browseEnvironment?.connection.phase);
 
   async function submitNewProject(): Promise<void> {
@@ -2298,6 +2321,7 @@ function OpenCommandPaletteDialog(props: {
         name: newProjectName,
         publishTo: newProjectPublishes ? newProjectPublishTarget : null,
         area: selectedNewProjectArea,
+        githubAccount: newProjectGitHubAccount,
       }),
     );
     newProjectSubmittingRef.current = false;
@@ -2634,6 +2658,39 @@ function OpenCommandPaletteDialog(props: {
             },
           })),
         };
+  const newProjectGitHubAccountGroup: CommandPaletteView["groups"][number] | null =
+    newProjectGitHubAccounts.length === 0 && newProjectGitHubAccount === null
+      ? null
+      : {
+          value: "new-project-github-accounts",
+          label: gt("GitHub account"),
+          items: [...new Set([null, ...newProjectGitHubAccounts, newProjectGitHubAccount])].map(
+            (account) => {
+              const unavailable = account !== null && !newProjectGitHubAccounts.includes(account);
+              return {
+                kind: "action",
+                value: `new-project:github-account:${account ?? ""}`,
+                searchTerms: [],
+                title: unavailable
+                  ? gt("{account} (unavailable)", { account })
+                  : (account ?? gt("Use environment account")),
+                icon: <UserRoundIcon className={ITEM_ICON_CLASS} />,
+                ...(account === newProjectGitHubAccount
+                  ? {
+                      titleTrailingContent: (
+                        <CheckIcon className="ms-auto size-4 shrink-0 text-muted-foreground/70" />
+                      ),
+                    }
+                  : {}),
+                disabled: isCreatingNewProject || unavailable,
+                keepOpen: true,
+                run: async () => {
+                  setNewProjectGitHubAccount(account);
+                },
+              };
+            },
+          ),
+        };
   const newProjectPublishToggleValue = "new-project:publish";
   const showExistingProjectSources = (environmentId: EnvironmentId) => {
     const sourcesEnvironmentId = newProjectFlow?.sourcesEnvironmentId ?? null;
@@ -2648,6 +2705,7 @@ function OpenCommandPaletteDialog(props: {
     startAddProjectSourceSelection(environmentId);
   };
   const switchNewProjectEnvironment = (environmentId: EnvironmentId) => {
+    if (environmentId !== newProjectFlow?.environmentId) setNewProjectGitHubAccount(null);
     setNewProjectFlow((flow) => (flow === null ? flow : { ...flow, environmentId }));
     setAddProjectEnvironmentId(environmentId);
   };
@@ -2769,6 +2827,7 @@ function OpenCommandPaletteDialog(props: {
     displayedGroups = [
       ...(newProjectMachineGroup ? [newProjectMachineGroup] : []),
       ...(newProjectAreaGroup ? [newProjectAreaGroup] : []),
+      ...(newProjectGitHubAccountGroup ? [newProjectGitHubAccountGroup] : []),
       ...newProjectOptionGroups,
       ...(newProjectExistingGroup ? [newProjectExistingGroup] : []),
     ];

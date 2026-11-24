@@ -1,4 +1,4 @@
-import { SourceControlProviderKind } from "@t3tools/contracts";
+import { EventId, ProjectId, SourceControlProviderKind } from "@t3tools/contracts";
 import * as NodePath from "@effect/platform-node/NodePath";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
@@ -21,6 +21,10 @@ import {
 } from "@t3tools/contracts";
 
 import * as ServerConfig from "../config.ts";
+import * as ServerSettings from "../serverSettings.ts";
+import * as ProjectStore from "../orchestration-v2/ProjectStore.ts";
+import * as SqlitePersistence from "../persistence/Sqlite.ts";
+import { ProjectGitHubAccount } from "@t3tools/source-control-github/server/driver";
 import type { GitCloneProgressLine } from "../project/gitCloneProgress.ts";
 import * as GitVcsDriver from "../vcs/GitVcsDriver.ts";
 import type * as SourceControlProvider from "@t3tools/source-control-core/server/SourceControlProvider";
@@ -71,6 +75,8 @@ function layer(input: {
   readonly fileSystem?: FileSystem.FileSystem;
 }) {
   const layerService = SourceControlRepositoryService.layer.pipe(
+    Layer.provideMerge(ServerSettings.layerTest()),
+    Layer.provideMerge(ProjectStore.layer.pipe(Layer.provide(SqlitePersistence.layerMemory))),
     Layer.provide(
       Layer.mock(SourceControlProviderRegistry.SourceControlProviderRegistry)({
         resolveLink: () => undefined,
@@ -102,7 +108,7 @@ function layer(input: {
 
   return input.fileSystem
     ? layerService.pipe(
-        Layer.provide(Layer.succeed(FileSystem.FileSystem, input.fileSystem)),
+        Layer.provideMerge(Layer.succeed(FileSystem.FileSystem, input.fileSystem)),
         Layer.provideMerge(NodePath.layer),
       )
     : layerService.pipe(Layer.provideMerge(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)));
@@ -782,6 +788,65 @@ it.effect("preserves destination probe failures instead of treating them as miss
     ),
   );
 });
+
+it.effect("publishes a GitHub repository with its project's account", () =>
+  Effect.gen(function* () {
+    const projects = yield* ProjectStore.ProjectStoreV2;
+    const settings = yield* ServerSettings.ServerSettingsService;
+    const service = yield* SourceControlRepositoryService.SourceControlRepositoryService;
+    const fs = yield* FileSystem.FileSystem;
+    const workspaceRoot = yield* fs.realPath(
+      yield* fs.makeTempDirectoryScoped({ prefix: "t3-publish-project-account-" }),
+    );
+    const projectId = ProjectId.make("project:publish");
+    const now = "2026-11-24T00:00:00.000Z";
+    yield* projects.apply({
+      sequence: 1,
+      eventId: EventId.make("event:publish"),
+      aggregateKind: "project",
+      aggregateId: projectId,
+      occurredAt: now,
+      commandId: null,
+      causationEventId: null,
+      correlationId: null,
+      metadata: {},
+      type: "project.created",
+      payload: {
+        projectId,
+        title: "New project",
+        workspaceRoot,
+        defaultModelSelection: null,
+        scripts: [],
+        createdAt: now,
+        updatedAt: now,
+      },
+    });
+    yield* settings.updateSettings({
+      projectSettingsOverrides: { [projectId]: { githubAccount: "work" } },
+    });
+    const result = yield* service.publishRepository({
+      cwd: workspaceRoot,
+      provider: SourceControlProviderKind.make("github"),
+      repository: "github.com/work/new-project",
+      visibility: "private",
+    });
+    assert.equal(result.repository.nameWithOwner, "work/new-project");
+  }).pipe(
+    Effect.provide(
+      layer({
+        provider: makeProvider({
+          createRepository: ({ repository }) =>
+            ProjectGitHubAccount.pipe(
+              Effect.map((account) => {
+                assert.equal(repository, "github.com/work/new-project");
+                return { ...CLONE_URLS, nameWithOwner: account + "/new-project" };
+              }),
+            ),
+        }),
+      }),
+    ),
+  ),
+);
 
 it.effect("publishes to the remote name returned by ensureRemote", () => {
   const pushCalls: Array<{ cwd: string; remoteName: string | null | undefined }> = [];

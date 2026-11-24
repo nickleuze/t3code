@@ -1,5 +1,10 @@
 import * as NodeOS from "node:os";
-import { CommandId, ProjectId, type ProjectCreateNewResult } from "@t3tools/contracts";
+import {
+  CommandId,
+  ProjectId,
+  type ProjectCreateNewInput,
+  type ProjectCreateNewResult,
+} from "@t3tools/contracts";
 import * as Context from "effect/Context";
 import * as SecureRandom from "effect/crypto/SecureRandom";
 import * as Effect from "effect/Effect";
@@ -35,10 +40,9 @@ export class AreaProjects extends Context.Service<
     /** Runs one `projects` tool and keeps T3's project registrations in step with it. */
     readonly run: (tool: AreaProjectTool, args: Args) => Effect.Effect<Json, AreaProjectsError>;
     /** New project in the UI with an Area chosen. */
-    readonly createNew: (input: {
-      readonly area: string;
-      readonly name: string;
-    }) => Effect.Effect<ProjectCreateNewResult, AreaProjectsError>;
+    readonly createNew: (
+      input: ProjectCreateNewInput & { readonly area: string },
+    ) => Effect.Effect<ProjectCreateNewResult, AreaProjectsError>;
   }
 >()("t3/project/AreaProjects") {}
 
@@ -95,7 +99,11 @@ export const make = Effect.fn("AreaProjects.make")(function* (command: string) {
       })),
     );
 
-  const run = Effect.fn("AreaProjects.run")(function* (tool: AreaProjectTool, args: Args) {
+  const run = Effect.fn("AreaProjects.run")(function* (
+    tool: AreaProjectTool,
+    args: Args,
+    githubAccount?: string,
+  ) {
     const result = yield* call(tool, args);
     if (tool === "projects_list" && Array.isArray(result.projects)) {
       const projectsWithIds = yield* Effect.forEach(result.projects as Json[], withProjectId);
@@ -104,7 +112,14 @@ export const make = Effect.fn("AreaProjects.make")(function* (command: string) {
     if (tool === "projects_get") return yield* withProjectId(result);
     if (tool === "projects_create" && result.applied === true && typeof result.path === "string") {
       const existing = yield* registered(result.path);
-      if (Option.isSome(existing)) return { ...result, t3ProjectId: existing.value.id };
+      if (Option.isSome(existing)) {
+        if (githubAccount !== undefined) {
+          return yield* fail(
+            `A T3 project already uses ${result.path}. Change its account in Project Settings.`,
+          );
+        }
+        return { ...result, t3ProjectId: existing.value.id };
+      }
       const { id, commandId: created } = yield* commandId("area-project");
       const project = yield* projects
         .create({
@@ -112,6 +127,7 @@ export const make = Effect.fn("AreaProjects.make")(function* (command: string) {
           projectId: ProjectId.make(id),
           title: typeof result.title === "string" ? result.title : String(args.name),
           workspaceRoot: result.path,
+          ...(githubAccount === undefined ? {} : { githubAccount }),
         })
         .pipe(
           Effect.mapError(() =>
@@ -144,11 +160,11 @@ export const make = Effect.fn("AreaProjects.make")(function* (command: string) {
     return result;
   });
 
-  const createNew = Effect.fn("AreaProjects.createNew")(function* (input: {
-    readonly area: string;
-    readonly name: string;
-  }) {
-    const created = yield* run("projects_create", { ...input, apply: true });
+  const createNew = Effect.fn("AreaProjects.createNew")(function* ({
+    githubAccount,
+    ...input
+  }: ProjectCreateNewInput & { readonly area: string }) {
+    const created = yield* run("projects_create", { ...input, apply: true }, githubAccount);
     if (typeof created.t3ProjectId !== "string" || typeof created.path !== "string")
       return yield* fail("The projects tool did not create the project.");
     return {

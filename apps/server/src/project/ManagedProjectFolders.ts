@@ -4,6 +4,7 @@ import {
   type GitManagerServiceError,
   ProjectId,
   type ThreadId,
+  type ProjectCreateNewInput,
   VcsProcessSpawnError,
 } from "@t3tools/contracts";
 import * as HostProcess from "@t3tools/shared/HostProcess";
@@ -125,7 +126,7 @@ export class ManagedProjectFolders extends Context.Service<
     readonly namedProjectsRoot: string;
     readonly resolveNamedProjectsRoot: (directory: string) => Effect.Effect<string>;
     /** Removes failed/cancelled creations' folders only while no project owns them. */
-    readonly createNamedProject: (input: { readonly name: string }) => Effect.Effect<
+    readonly createNamedProject: (input: Omit<ProjectCreateNewInput, "area">) => Effect.Effect<
       {
         readonly projectId: ProjectId;
         readonly workspaceRoot: string;
@@ -498,6 +499,7 @@ const make = Effect.gen(function* () {
         projectId: ProjectId.make(id),
         title: input.name,
         workspaceRoot,
+        ...(input.githubAccount === undefined ? {} : { githubAccount: input.githubAccount }),
       })
       .pipe(
         // Re-check ownership before deleting rejected creations; interruption after commit or conflicts can leave an owner.

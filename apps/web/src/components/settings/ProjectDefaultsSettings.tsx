@@ -55,7 +55,7 @@ function isWorktreeSubmodules(value: string | null): value is WorktreeSubmodules
 
 const ENVIRONMENT_GITHUB_ACCOUNT = "environment default";
 
-function ProjectGitHubAccountSetting() {
+export function ProjectGitHubAccountSetting() {
   const gt = useGT();
   const searchableSetting = useSearchableSetting();
   const { target, targets } = useSettingsScope();

@@ -11,6 +11,10 @@ import {
   getCloneDirectoryPath,
   getAddProjectInitialQuery,
   getDefaultCloneUrl,
+  getNewProjectPublishRepository,
+  getNewProjectPublishTarget,
+  getNewProjectPublishTargets,
+  getNewProjectRepository,
   githubIncompleteOwnerRepositoryMessage,
   normalizePastedCloneUrl,
   sortAddProjectProviderSources,
@@ -34,6 +38,17 @@ describe("add project shared logic", () => {
     expect(sortAddProjectProviderSources(ready, { gitlab: true, github: false })).toEqual([
       "gitlab",
     ]);
+  });
+
+  it("previews the selected owner and sends the github.com host when publishing a new project", () => {
+    const github = SourceControlProviderKind.make("github");
+    const target = getNewProjectPublishTarget(
+      getNewProjectPublishTargets(null, undefined, "work"),
+      github,
+    );
+    if (target === null) throw new Error("Missing GitHub publish target.");
+    expect(getNewProjectRepository(target, "/projects/demo")).toBe("work/demo");
+    expect(getNewProjectPublishRepository(target, "/projects/demo")).toBe("github.com/work/demo");
   });
 
   it("asks for a repository name when GitHub input is only an owner path", () => {
