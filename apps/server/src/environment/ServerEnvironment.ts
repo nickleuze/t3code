@@ -279,6 +279,7 @@ export const make = Effect.gen(function* () {
       projectCloneTracking: true,
       projectOrganization: true,
       projectGitHubAccountOnCreate: true,
+      githubPublishOwners: true,
       ignoredFileListing: true,
       ignoredFileSearch: true,
       triage: true,

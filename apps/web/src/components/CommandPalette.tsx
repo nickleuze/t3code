@@ -615,6 +615,9 @@ function OpenCommandPaletteDialog(props: {
   const [newProjectPublishes, setNewProjectPublishes] = useState(false);
   const [newProjectArea, setNewProjectArea] = useState<string | null>(null);
   const [newProjectGitHubAccount, setNewProjectGitHubAccount] = useState<string | null>(null);
+  const [newProjectGitHubOrganization, setNewProjectGitHubOrganization] = useState<string | null>(
+    null,
+  );
   const [newProjectPublishKind, setNewProjectPublishKind] =
     useState<SourceControlProviderKind | null>(null);
   const [isCreatingNewProject, setIsCreatingNewProject] = useState(false);
@@ -1152,6 +1155,7 @@ function OpenCommandPaletteDialog(props: {
     setNewProjectPublishes(false);
     setNewProjectPublishKind(null);
     setNewProjectGitHubAccount(null);
+    setNewProjectGitHubOrganization(null);
     pushPaletteView({
       addonIcon: <FolderGit2Icon className={ADDON_ICON_CLASS} />,
       groups: [],
@@ -2299,6 +2303,18 @@ function OpenCommandPaletteDialog(props: {
   const newProjectPublishTarget = getNewProjectPublishTarget(
     newProjectPublishTargets,
     newProjectPublishKind,
+    newProjectGitHubOrganization,
+  );
+  const newProjectPublishOwners = useEnvironmentQuery(
+    newProjectFlow !== null &&
+      newProjectPublishes &&
+      newProjectPublishTarget?.host === "github.com" &&
+      newProjectServerConfig?.environment.capabilities.githubPublishOwners === true
+      ? sourceControlEnvironment.githubPublishOwners({
+          environmentId: newProjectFlow.environmentId,
+          input: newProjectGitHubAccount === null ? {} : { githubAccount: newProjectGitHubAccount },
+        })
+      : null,
   );
   const newProjectName = query.trim();
   const canSubmitNewProject =
@@ -2685,6 +2701,7 @@ function OpenCommandPaletteDialog(props: {
                 disabled: isCreatingNewProject || unavailable,
                 keepOpen: true,
                 run: async () => {
+                  if (account !== newProjectGitHubAccount) setNewProjectGitHubOrganization(null);
                   setNewProjectGitHubAccount(account);
                 },
               };
@@ -2705,7 +2722,10 @@ function OpenCommandPaletteDialog(props: {
     startAddProjectSourceSelection(environmentId);
   };
   const switchNewProjectEnvironment = (environmentId: EnvironmentId) => {
-    if (environmentId !== newProjectFlow?.environmentId) setNewProjectGitHubAccount(null);
+    if (environmentId !== newProjectFlow?.environmentId) {
+      setNewProjectGitHubAccount(null);
+      setNewProjectGitHubOrganization(null);
+    }
     setNewProjectFlow((flow) => (flow === null ? flow : { ...flow, environmentId }));
     setAddProjectEnvironmentId(environmentId);
   };
@@ -2822,6 +2842,36 @@ function OpenCommandPaletteDialog(props: {
           },
         ];
 
+  const publishOwners = newProjectPublishOwners.data;
+  const newProjectOwnerGroup: CommandPaletteView["groups"][number] | null =
+    publishOwners === null || publishOwners.organizations.length === 0
+      ? null
+      : {
+          value: "new-project-repository-owner",
+          label: gt("GitHub repository owner"),
+          items: [null, ...publishOwners.organizations].map((organization) => ({
+            kind: "action",
+            value: `new-project:github-owner:${organization ?? ""}`,
+            title:
+              organization ??
+              gt("{account} (personal account)", { account: publishOwners.account }),
+            searchTerms: [],
+            icon: <UserRoundIcon className={ITEM_ICON_CLASS} />,
+            ...(organization === newProjectGitHubOrganization
+              ? {
+                  titleTrailingContent: (
+                    <CheckIcon className="ms-auto size-4 shrink-0 text-muted-foreground/70" />
+                  ),
+                }
+              : {}),
+            disabled: isCreatingNewProject,
+            keepOpen: true,
+            run: async () => {
+              setNewProjectGitHubOrganization(organization);
+            },
+          })),
+        };
+
   let displayedGroups: CommandPaletteView["groups"] = filteredGroups;
   if (newProjectFlow !== null) {
     displayedGroups = [
@@ -2829,6 +2879,7 @@ function OpenCommandPaletteDialog(props: {
       ...(newProjectAreaGroup ? [newProjectAreaGroup] : []),
       ...(newProjectGitHubAccountGroup ? [newProjectGitHubAccountGroup] : []),
       ...newProjectOptionGroups,
+      ...(newProjectOwnerGroup ? [newProjectOwnerGroup] : []),
       ...(newProjectExistingGroup ? [newProjectExistingGroup] : []),
     ];
   } else if (addProjectCloneFlow?.step === "repository") {

@@ -21,6 +21,10 @@ export function createSourceControlEnvironmentAtoms<R, E>(
       label: "environment-data:server:source-control-discovery",
       tag: WS_METHODS.serverDiscoverSourceControl,
     }),
+    githubPublishOwners: createEnvironmentRpcQueryAtomFamily(runtime, {
+      label: "environment-data:source-control:github-publish-owners",
+      tag: WS_METHODS.sourceControlGitHubPublishOwners,
+    }),
     appAccess: createEnvironmentRpcQueryAtomFamily(runtime, {
       label: "environment-data:source-control:app-access",
       tag: WS_METHODS.sourceControlAppAccess,

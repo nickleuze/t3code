@@ -632,6 +632,34 @@ describe("GitHubSourceControlProvider writes", () => {
     }).pipe(Effect.provide(Layer.merge(layer, NodeServices.layer)));
   });
 
+  it.effect("lists the viewer and all pages of organization logins for publishing", () =>
+    Effect.gen(function* () {
+      const requests: string[] = [];
+      const gh = yield* makeProvider({
+        rest: (input) =>
+          Effect.sync(() => {
+            assert.equal(input.host, "github.com");
+            requests.push(input.path);
+            if (input.path === "user") return restResponse({ login: "work" });
+            if (input.path.endsWith("&page=1")) {
+              return {
+                ...restResponse([{ login: "Robotics" }]),
+                headers: { link: '<https://api.github.com/user/orgs?page=2>; rel="next"' },
+              };
+            }
+            return restResponse([{ login: "Design" }, { login: "Robotics" }]);
+          }),
+      });
+      const result = yield* gh.listPublishOwners!({ cwd: "/repo" });
+      assert.deepStrictEqual(result, { account: "work", organizations: ["Design", "Robotics"] });
+      assert.deepStrictEqual(requests, [
+        "user",
+        "user/orgs?per_page=100&page=1",
+        "user/orgs?per_page=100&page=2",
+      ]);
+    }),
+  );
+
   it.effect("creates a repository under an organization the viewer is not", () => {
     const requests: Array<string> = [];
     const { layer } = harness({

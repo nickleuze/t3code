@@ -12,6 +12,7 @@ import {
   requiredScopesForProjectMutation,
   ProjectMutation,
   ProjectCreateNewInput,
+  GitHubPublishOwnersInput,
   SecretRequestAnswerInput,
   AuthSettingsWriteScope,
   AuthProvidersManageScope,
@@ -177,6 +178,7 @@ export const RPC_REQUIRED_SCOPES = {
   [WS_METHODS.pullRequestsReviewerCandidates]: AuthOrchestrationReadScope,
   [WS_METHODS.pullRequestsLabelCandidates]: AuthOrchestrationReadScope,
   [WS_METHODS.sourceControlLookupRepository]: AuthOrchestrationReadScope,
+  [WS_METHODS.sourceControlGitHubPublishOwners]: AuthOrchestrationReadScope,
   [WS_METHODS.sourceControlAppAccess]: AuthOrchestrationReadScope,
   [WS_METHODS.sourceControlStarred]: AuthOrchestrationReadScope,
   [WS_METHODS.subscribeProjectClones]: AuthOrchestrationReadScope,
@@ -289,6 +291,7 @@ const requiredScopesForSettingsUpdate = (payload: unknown) => {
 
 const decodeProjectMutation = Schema.decodeUnknownSync(ProjectMutation);
 const isProjectCreateNewInput = Schema.is(ProjectCreateNewInput);
+const isGitHubPublishOwnersInput = Schema.is(GitHubPublishOwnersInput);
 const decodeAssetCreateUrlInput = Schema.decodeUnknownSync(AssetCreateUrlInput);
 const decodeSecretRequestAnswer = Schema.decodeUnknownSync(SecretRequestAnswerInput);
 
@@ -360,6 +363,13 @@ const requiredScopesForRpcCall = (
     payload.githubAccount !== undefined
   ) {
     return [AuthOrchestrationOperateScope, AuthSettingsWriteScope];
+  }
+  if (
+    method === WS_METHODS.sourceControlGitHubPublishOwners &&
+    isGitHubPublishOwnersInput(payload) &&
+    payload.githubAccount !== undefined
+  ) {
+    return [AuthOrchestrationReadScope, AuthSettingsWriteScope];
   }
   if (method === WS_METHODS.projectsMutate) {
     return requiredScopesForProjectMutation(decodeProjectMutation(payload));

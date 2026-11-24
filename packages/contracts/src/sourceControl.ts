@@ -82,6 +82,18 @@ export const SourceControlCloneRepositoryResult = Schema.Struct({
 });
 export type SourceControlCloneRepositoryResult = typeof SourceControlCloneRepositoryResult.Type;
 
+export const GitHubPublishOwnersInput = Schema.Struct({
+  cwd: Schema.optionalKey(TrimmedNonEmptyString),
+  githubAccount: Schema.optionalKey(TrimmedNonEmptyString),
+});
+export type GitHubPublishOwnersInput = typeof GitHubPublishOwnersInput.Type;
+
+export const GitHubPublishOwners = Schema.Struct({
+  account: TrimmedNonEmptyString,
+  organizations: Schema.Array(TrimmedNonEmptyString),
+});
+export type GitHubPublishOwners = typeof GitHubPublishOwners.Type;
+
 export const SourceControlPublishRepositoryInput = Schema.Struct({
   cwd: TrimmedNonEmptyString,
   provider: SourceControlProviderKind,

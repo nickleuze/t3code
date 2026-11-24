@@ -321,15 +321,30 @@ export function getNewProjectPublishTargets(
     const placement = definition.newRepositoryOwner(
       provider ? Option.getOrNull(provider.auth.account) : null,
     );
-    return placement === null ? [] : [{ definition, owner: placement.owner }];
+    if (placement === null) return [];
+    const githubDotCom =
+      definition.kind === "github" &&
+      provider &&
+      Option.getOrNull(provider.auth.host) === "github.com";
+    return [
+      {
+        definition,
+        owner: placement.owner,
+        ...(githubDotCom ? { host: "github.com" as const } : {}),
+      },
+    ];
   });
 }
 
 export function getNewProjectPublishTarget(
   targets: ReadonlyArray<NewProjectPublishTarget>,
   kind: SourceControlProviderKind | null,
+  githubOrganization: string | null = null,
 ): NewProjectPublishTarget | null {
-  return targets.find((target) => target.definition.kind === kind) ?? targets[0] ?? null;
+  const target = targets.find((target) => target.definition.kind === kind) ?? targets[0] ?? null;
+  return target?.host === "github.com" && githubOrganization !== null
+    ? { ...target, owner: githubOrganization }
+    : target;
 }
 
 export function getNewProjectRepository(

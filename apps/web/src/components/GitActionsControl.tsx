@@ -448,6 +448,7 @@ function GitActionSuccessButtonContent({ success }: { success: InlineGitActionSu
 }
 
 interface PublishRepositoryDialogProps {
+  readonly supportsGitHubPublishOwners?: boolean | undefined;
   readonly open: boolean;
   readonly onOpenChange: (open: boolean) => void;
   readonly environmentId: ScopedThreadRef["environmentId"] | null;
@@ -534,9 +535,6 @@ export function PublishRepositoryDialog(props: PublishRepositoryDialogProps) {
       ? offeredSelection
       : (firstReadyPublishProvider ?? offeredSelection ?? sourceControlClients.get(undefined).kind);
   const selectedPublishProviderReadiness = publishProviderReadiness(publishProvider);
-  const publishAccount = publishAccountByProvider.get(publishProvider) ?? null;
-  const publishRepositoryPrefill = publishAccount ? `${publishAccount}/` : "";
-  const publishRepository = publishRepositoryOverride ?? publishRepositoryPrefill;
   const currentPublishProvider = publishProviderOption(publishProvider);
   const publishHost = currentPublishProvider.definition.publishHost(
     Option.getOrNull(
@@ -545,6 +543,23 @@ export function PublishRepositoryDialog(props: PublishRepositoryDialogProps) {
       )?.auth.host ?? Option.none(),
     ),
   );
+  const githubOwners = useEnvironmentQuery(
+    props.open &&
+      props.environmentId !== null &&
+      props.supportsGitHubPublishOwners === true &&
+      publishProvider === "github" &&
+      publishHost === "github.com" &&
+      selectedPublishProviderReadiness.ready
+      ? sourceControlEnvironment.githubPublishOwners({
+          environmentId: props.environmentId,
+          input: { cwd: props.gitCwd },
+        })
+      : null,
+  ).data;
+  const publishAccount =
+    githubOwners?.account ?? publishAccountByProvider.get(publishProvider) ?? null;
+  const publishRepositoryPrefill = publishAccount ? `${publishAccount}/` : "";
+  const publishRepository = publishRepositoryOverride ?? publishRepositoryPrefill;
   const publishPathPlaceholder = currentPublishProvider.pathPlaceholder;
   const publishProviderLabel = currentPublishProvider.label;
   const publishWizardSteps = [gt("Provider"), gt("Repository"), gt("Summary")] as const;
@@ -575,7 +590,10 @@ export function PublishRepositoryDialog(props: PublishRepositoryDialogProps) {
     void (async () => {
       const result = await publishRepositoryAction.run({
         provider: publishProvider,
-        repository: publishRepository.trim(),
+        repository:
+          githubOwners !== null && publishRepositoryParts.length === 2
+            ? `github.com/${publishRepository.trim()}`
+            : publishRepository.trim(),
         visibility: publishVisibility,
         remoteName: publishRemoteName.trim() || "origin",
         protocol: publishProtocol,
@@ -712,6 +730,40 @@ export function PublishRepositoryDialog(props: PublishRepositoryDialogProps) {
           </div>
 
           <div className={cn("space-y-5", publishWizardStep !== 1 && "hidden")}>
+            {githubOwners && githubOwners.organizations.length > 0 ? (
+              <div className="space-y-2">
+                <label
+                  htmlFor="publish-repository-owner"
+                  className="text-xs font-medium text-foreground"
+                >
+                  <T>GitHub repository owner</T>
+                </label>
+                <select
+                  id="publish-repository-owner"
+                  className="block w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
+                  value={publishRepositoryOwner}
+                  disabled={publishRepositoryAction.isPending}
+                  onChange={(event) => {
+                    setPublishRepositoryOverride(`${event.target.value}/${publishRepositoryName}`);
+                  }}
+                >
+                  {publishRepositoryOwner !== githubOwners.account &&
+                  !githubOwners.organizations.includes(publishRepositoryOwner) ? (
+                    <option value={publishRepositoryOwner} disabled>
+                      {publishRepositoryOwner || gt("Choose owner")}
+                    </option>
+                  ) : null}
+                  <option value={githubOwners.account}>
+                    {gt("{account} (personal account)", { account: githubOwners.account })}
+                  </option>
+                  {githubOwners.organizations.map((organization) => (
+                    <option key={organization} value={organization}>
+                      {organization}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            ) : null}
             <div className="space-y-2">
               <label
                 htmlFor="publish-repository-path"
@@ -1972,6 +2024,7 @@ function CheckoutGitActionsControl({
           threadRef={activeThreadRef}
           gitCwd={gitCwd}
           offeredProviders={serverConfig?.settings.offeredSourceControlProviders}
+          supportsGitHubPublishOwners={serverConfig?.environment.capabilities.githubPublishOwners}
         />
       ) : null}
 

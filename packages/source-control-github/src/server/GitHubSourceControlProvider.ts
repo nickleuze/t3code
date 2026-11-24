@@ -433,6 +433,9 @@ function repositoryCloneUrls(
 }
 
 const decodeViewerLogin = decodeJsonResult(Schema.Struct({ login: TrimmedNonEmptyString }));
+const decodeOrganizationLogins = decodeJsonResult(
+  Schema.Array(Schema.Struct({ login: TrimmedNonEmptyString })),
+);
 
 const decodeRestPullRequests = decodeJsonResult(Schema.Array(Schema.Unknown));
 const decodeRestPullRequest = Schema.decodeUnknownOption(
@@ -1201,6 +1204,33 @@ export const make = Effect.gen(function* () {
             }),
           ),
         ),
+    ),
+    listPublishOwners: Effect.fn("GitHubSourceControlProvider.listPublishOwners")(
+      function* ({ cwd: _cwd }) {
+        const host = "github.com";
+        const account = yield* readViewerLogin(host);
+        const organizations = new Set<string>();
+        for (let page = 1; ; page++) {
+          const response = yield* rest({
+            host,
+            operation: "listPublishOrganizations",
+            path: "user/orgs?per_page=100&page=" + page,
+            allowReserve: true,
+          });
+          const decoded = decodeOrganizationLogins(response.body);
+          if (Result.isFailure(decoded)) {
+            return yield* failure("GitHub returned an invalid organization list.", decoded.failure);
+          }
+          for (const organization of decoded.success) organizations.add(organization.login);
+          if (!response.headers.link?.includes('rel="next"')) break;
+        }
+        return {
+          account,
+          organizations: [...organizations].toSorted((left, right) => left.localeCompare(right)),
+        };
+      },
+      (effect, input) =>
+        effect.pipe(Effect.mapError(providerError("listPublishOwners", input.cwd))),
     ),
     createRepository: Effect.fn("GitHubSourceControlProvider.createRepository")(
       function* (input) {

@@ -27,7 +27,7 @@ Install Git and authenticate on the machine running your T3 Code server (for rem
 
 - **New project**: Run **New project** from the command palette (`Cmd/Ctrl+K`) or **Add Project** to initialize a new Git repo in `~/.t3/projects/<slug>` with a README, icon, and first commit (optionally creating a private GitHub repo).
 - **Clone**: Use **Add Project** to pick a host (enable non-GitHub hosts in **Settings → Source control & issues**) or paste a Git URL or web page URL. Cloning runs in the background so you can draft your first prompt immediately; falls back to HTTPS if SSH auth fails. Enable **Clone into host folders** (**Settings → Threads**, or **Source control** on mobile) for `ghq`-style `<host>/<owner>/<repo>` paths.
-- **Publish**: For a local repo without a remote, **Publish Repository** creates the remote, adds `origin`, and pushes commits.
+- **Publish**: For a local repo without a remote, **Publish Repository** creates the remote, adds `origin`, and pushes commits. For GitHub.com, choose an organization under **GitHub repository owner** or enter its `owner/repo` path in **Repository**.
 
 ## Review turn changes
 

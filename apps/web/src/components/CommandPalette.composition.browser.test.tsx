@@ -131,7 +131,10 @@ vi.mock("../state/filesystem", async (original) => ({
 }));
 vi.mock("../state/query", async (original) => ({
   ...(await original<typeof import("../state/query")>()),
-  useEnvironmentQuery: () => ({ data: scopes.sourceControl, isLoading: false }),
+  useEnvironmentQuery: (atom: unknown) => ({
+    data: atom === null ? null : (scopes.sourceControl ?? null),
+    isLoading: false,
+  }),
 }));
 vi.mock("./settings/useAvailableSettingsSearchItems", () => ({
   useAvailableSettingsSearchItems: () => [],
