@@ -470,6 +470,8 @@ import {
   SourceControlCloneRepositoryInput,
   SourceControlCloneRepositoryResult,
   SourceControlDiscoveryResult,
+  GitHubPublishOwners,
+  GitHubPublishOwnersInput,
   SourceControlPublishRepositoryInput,
   SourceControlPublishRepositoryResult,
   SourceControlRepositoryError,
@@ -718,6 +720,7 @@ export const WS_METHODS = {
   sourceControlLookupRepository: "sourceControl.lookupRepository",
   sourceControlCloneRepository: "sourceControl.cloneRepository",
   sourceControlPublishRepository: "sourceControl.publishRepository",
+  sourceControlGitHubPublishOwners: "sourceControl.githubPublishOwners",
   sourceControlSignInStart: "sourceControl.signInStart",
   sourceControlSignInWait: "sourceControl.signInWait",
   sourceControlSignInCancel: "sourceControl.signInCancel",
@@ -1621,6 +1624,15 @@ const WsSubscribeProjectClonesRpc = Rpc.make(WS_METHODS.subscribeProjectClones, 
   error: EnvironmentAuthorizationError,
   stream: true,
 });
+
+const WsSourceControlGitHubPublishOwnersRpc = Rpc.make(
+  WS_METHODS.sourceControlGitHubPublishOwners,
+  {
+    payload: GitHubPublishOwnersInput,
+    success: GitHubPublishOwners,
+    error: Schema.Union([SourceControlRepositoryError, EnvironmentAuthorizationError]),
+  },
+);
 
 const WsSourceControlPublishRepositoryRpc = Rpc.make(WS_METHODS.sourceControlPublishRepository, {
   payload: SourceControlPublishRepositoryInput,
@@ -2617,6 +2629,7 @@ export const WsRpcGroup = RpcGroup.make(
   WsSourceControlLookupRepositoryRpc,
   WsSourceControlCloneRepositoryRpc,
   WsSourceControlPublishRepositoryRpc,
+  WsSourceControlGitHubPublishOwnersRpc,
   WsSourceControlSignInStartRpc,
   WsSourceControlSignInWaitRpc,
   WsSourceControlSignInCancelRpc,

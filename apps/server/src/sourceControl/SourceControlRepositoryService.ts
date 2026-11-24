@@ -13,6 +13,8 @@ import {
   SourceControlProviderError,
   SourceControlRepositoryError,
   type GitCommandFailureReason,
+  type GitHubPublishOwners,
+  type GitHubPublishOwnersInput,
   type SourceControlCloneRepositoryInput,
   type SourceControlCloneRepositoryResult,
   type SourceControlCloneProtocol,
@@ -61,6 +63,9 @@ export class SourceControlRepositoryService extends Context.Service<
     readonly discardClone: (
       destinationPath: string,
     ) => Effect.Effect<void, SourceControlRepositoryError>;
+    readonly githubPublishOwners: (
+      input: GitHubPublishOwnersInput,
+    ) => Effect.Effect<GitHubPublishOwners, SourceControlRepositoryError>;
     readonly publishRepository: (
       input: SourceControlPublishRepositoryInput,
     ) => Effect.Effect<SourceControlPublishRepositoryResult, SourceControlRepositoryError>;
@@ -533,6 +538,41 @@ export const make = Effect.gen(function* () {
     );
   });
 
+  const githubAccountForCheckout = Effect.fn(
+    "SourceControlRepositoryService.githubAccountForCheckout",
+  )(function* (cwd: string) {
+    const { projectSettingsOverrides } = yield* settings.getSettings;
+    if (!Object.values(projectSettingsOverrides).some((entry) => entry.githubAccount)) return null;
+    const workspaceRoot = yield* fileSystem.realPath(cwd);
+    const project = Option.getOrNull(yield* projects.findActiveByWorkspaceRoot(workspaceRoot));
+    return project ? (projectSettingsOverrides[project.projectId]?.githubAccount ?? null) : null;
+  });
+
+  const githubPublishOwners = Effect.fn("SourceControlRepositoryService.githubPublishOwners")(
+    function* (input: GitHubPublishOwnersInput) {
+      const kind = SourceControlProviderKind.make("github");
+      const provider = yield* providers.get(kind);
+      if (!provider.listPublishOwners) {
+        return yield* new SourceControlRepositoryError({
+          operation: "githubPublishOwners",
+          provider: kind,
+          detail: "GitHub publishing is unavailable on this environment.",
+        });
+      }
+      const account =
+        input.cwd === undefined
+          ? (input.githubAccount ?? null)
+          : yield* githubAccountForCheckout(input.cwd);
+      return yield* provider
+        .listPublishOwners({ cwd: input.cwd ?? config.cwd })
+        .pipe(Effect.provideService(ProjectGitHubAccount, account));
+    },
+    (effect) =>
+      effect.pipe(
+        mapRepositoryError("githubPublishOwners", SourceControlProviderKind.make("github")),
+      ),
+  );
+
   const publishRepository = Effect.fn("SourceControlRepositoryService.publishRepository")(
     function* (input: SourceControlPublishRepositoryInput) {
       const providerKind = yield* ensureConcreteProvider({
@@ -540,19 +580,8 @@ export const make = Effect.gen(function* () {
         provider: input.provider,
       });
       const provider = yield* providers.get(providerKind);
-      let githubAccount: string | null = null;
-      if (providerKind === "github") {
-        const { projectSettingsOverrides } = yield* settings.getSettings;
-        if (Object.values(projectSettingsOverrides).some((entry) => entry.githubAccount)) {
-          const workspaceRoot = yield* fileSystem.realPath(input.cwd);
-          const project = Option.getOrNull(
-            yield* projects.findActiveByWorkspaceRoot(workspaceRoot),
-          );
-          githubAccount = project
-            ? (projectSettingsOverrides[project.projectId]?.githubAccount ?? null)
-            : null;
-        }
-      }
+      const githubAccount =
+        providerKind === "github" ? yield* githubAccountForCheckout(input.cwd) : null;
       const urls = yield* provider
         .createRepository({
           cwd: input.cwd,
@@ -640,6 +669,7 @@ export const make = Effect.gen(function* () {
 
   // Forwarders retain the underlying operation spans.
   return SourceControlRepositoryService.of({
+    githubPublishOwners,
     lookupRepository: Effect.fnUntraced(function* (input) {
       return yield* lookupRepository(input).pipe(
         mapRepositoryError("lookupRepository", input.provider),

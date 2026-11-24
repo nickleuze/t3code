@@ -167,6 +167,7 @@ export const ExecutionEnvironmentCapabilities = Schema.Struct({
   /** Server keeps `pinned` and `archived` from project.update. Older servers drop them. */
   projectOrganization: Schema.optionalKey(Schema.Boolean),
   projectGitHubAccountOnCreate: Schema.optionalKey(Schema.Boolean),
+  githubPublishOwners: Schema.optionalKey(Schema.Boolean),
   /** Server answers projects.listIgnoredFiles. */
   ignoredFileListing: Schema.optionalKey(Schema.Boolean),
   /** projects.listIgnoredFiles honors `query`. Older servers ignore it. */

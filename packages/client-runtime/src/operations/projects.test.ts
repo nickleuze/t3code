@@ -49,6 +49,16 @@ describe("add project shared logic", () => {
     if (target === null) throw new Error("Missing GitHub publish target.");
     expect(getNewProjectRepository(target, "/projects/demo")).toBe("work/demo");
     expect(getNewProjectPublishRepository(target, "/projects/demo")).toBe("github.com/work/demo");
+    const orgTarget = getNewProjectPublishTarget(
+      getNewProjectPublishTargets(null, undefined, "work"),
+      github,
+      "InMotion-Robotic",
+    );
+    if (orgTarget === null) throw new Error("Missing GitHub publish target.");
+    expect(getNewProjectRepository(orgTarget, "/projects/demo")).toBe("InMotion-Robotic/demo");
+    expect(getNewProjectPublishRepository(orgTarget, "/projects/demo")).toBe(
+      "github.com/InMotion-Robotic/demo",
+    );
   });
 
   it("asks for a repository name when GitHub input is only an owner path", () => {
