@@ -51,8 +51,9 @@ and other phone-only settings ignore the filter.
 ## Choose a GitHub account
 
 Choose **GitHub account** in **New Project** to use one of the GitHub CLI accounts signed in on
-the project's environment. If you also create a private GitHub repository in that flow, T3 Code
-creates it under the selected account. Git push and pull use the checkout's Git credentials.
+the project's environment. When you enable **Create private repository on GitHub**,
+**GitHub repository owner** lets you choose your account or an organization visible to that
+login. Git push and pull use the checkout's Git credentials.
 
 To change the account later, open **Settings → Projects**, select the project and its environment,
 then choose **GitHub account**. Select **Use environment account** to follow the environment's

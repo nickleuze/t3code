@@ -203,6 +203,40 @@ it.effect("requires settings write permission when creating a project with a Git
   }),
 );
 
+it.effect("requires settings authority to discover owners for a different GitHub account", () =>
+  Effect.gen(function* () {
+    const group = WsRpcGroup.omit(
+      ...[...WsRpcGroup.requests.keys()].filter(
+        (
+          tag,
+        ): tag is Exclude<
+          keyof typeof RPC_REQUIRED_SCOPES,
+          typeof WS_METHODS.sourceControlGitHubPublishOwners
+        > => tag !== WS_METHODS.sourceControlGitHubPublishOwners,
+      ),
+    );
+    const result = { account: "default", organizations: ["example"] };
+    const client = yield* RpcTest.makeClient(group).pipe(
+      Effect.provide(
+        Layer.merge(
+          group.toLayerHandler(WS_METHODS.sourceControlGitHubPublishOwners, () =>
+            Effect.succeed(result),
+          ),
+          RpcAuthorization.layer([AuthOrchestrationReadScope]),
+        ),
+      ),
+    );
+    expect(yield* client[WS_METHODS.sourceControlGitHubPublishOwners]({})).toEqual(result);
+    const error = yield* client[WS_METHODS.sourceControlGitHubPublishOwners]({
+      githubAccount: "other",
+    }).pipe(Effect.flip);
+    expect(error).toMatchObject({
+      _tag: "EnvironmentAuthorizationError",
+      requiredPermission: AuthSettingsWriteScope,
+    });
+  }),
+);
+
 it.effect("allows issue reads but requires a source-control grant before commenting", () =>
   Effect.gen(function* () {
     const tested = [WS_METHODS.issuesList, WS_METHODS.issuesComment] as const;

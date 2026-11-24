@@ -215,8 +215,9 @@ under **Settings → Threads** (or **Source control** on mobile). Clones then de
 folders. You can still change the destination before cloning.
 
 For a local Git repository without a remote, **Publish Repository** creates a hosted repository,
-adds it as `origin`, and pushes your commits. If there are no commits yet, it creates the remote;
-make your first commit before pushing.
+adds it as `origin`, and pushes your commits. For GitHub.com, choose an organization under
+**GitHub repository owner** or enter its `owner/repo` path in **Repository**. If there are no
+commits yet, publish creates the remote and you can push after your first commit.
 
 ## Create a pull request
 

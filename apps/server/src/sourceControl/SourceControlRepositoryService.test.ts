@@ -831,10 +831,25 @@ it.effect("publishes a GitHub repository with its project's account", () =>
       visibility: "private",
     });
     assert.equal(result.repository.nameWithOwner, "work/new-project");
+    assert.deepStrictEqual(yield* service.githubPublishOwners({ cwd: workspaceRoot }), {
+      account: "work",
+      organizations: ["Acme"],
+    });
+    assert.deepStrictEqual(yield* service.githubPublishOwners({ githubAccount: "second" }), {
+      account: "second",
+      organizations: ["Example"],
+    });
   }).pipe(
     Effect.provide(
       layer({
         provider: makeProvider({
+          listPublishOwners: () =>
+            ProjectGitHubAccount.pipe(
+              Effect.map((account) => ({
+                account: account ?? "default",
+                organizations: account === "work" ? ["Acme"] : ["Example"],
+              })),
+            ),
           createRepository: ({ repository }) =>
             ProjectGitHubAccount.pipe(
               Effect.map((account) => {

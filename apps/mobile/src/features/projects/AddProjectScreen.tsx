@@ -95,6 +95,7 @@ import { EnvironmentMachineSymbol } from "../../components/EnvironmentMachineSym
 import { ErrorBanner } from "../../components/ui/ErrorBanner";
 import { SourceControlIcon } from "./SourceControlIcon";
 import { ProjectGitHubAccountChoices } from "./ProjectGitHubAccountChoices";
+import { ListChoiceRow } from "../../components/ui/ListChoiceRow";
 import { sourceControlClients } from "@t3tools/client-runtime/source-control-clients";
 import { ThemedSwitch } from "../../components/ui/ThemedSwitch";
 import { uuidv4 } from "../../lib/uuid";
@@ -124,6 +125,7 @@ interface EnvironmentOption {
   readonly baseDirectory: string | null;
   readonly newProjectsRoot: string | null;
   readonly canSetGitHubAccountOnCreate: boolean;
+  readonly supportsGitHubPublishOwners: boolean;
   readonly projectAreas: { readonly root: string; readonly names: ReadonlyArray<string> } | null;
   readonly connectionState: EnvironmentConnectionPhase;
   readonly connectionError: string | null;
@@ -474,6 +476,7 @@ function useEnvironmentOptions(
           config?.environment.capabilities.projectGitHubAccountOnCreate === true &&
           !isManagedSettingPath(config.managedPolicy, "githubAccount") &&
           !isManagedSettingPath(config.managedPolicy, "projectSettingsOverrides"),
+        supportsGitHubPublishOwners: config?.environment.capabilities.githubPublishOwners === true,
         projectAreas: config?.projectAreas ?? null,
         connectionState: runtime?.connectionState ?? "available",
         connectionError: runtime?.connectionError ?? null,
@@ -1223,7 +1226,30 @@ export function AddProjectNewScreen(props: { readonly environmentId?: string | s
   const [area, setArea] = useState<string | null>(null);
   const [publishes, setPublishes] = useState(false);
   const [publishKind, setPublishKind] = useState<SourceControlProviderKind | null>(null);
-  const publishTarget = getNewProjectPublishTarget(publishTargets, publishKind);
+  const [organizationChoice, setOrganizationChoice] = useState<{
+    readonly environmentId: EnvironmentId;
+    readonly account: string | null;
+    readonly organization: string;
+  } | null>(null);
+  const githubOrganization =
+    organizationChoice !== null &&
+    environment !== null &&
+    organizationChoice.environmentId === environment.environmentId &&
+    organizationChoice.account === githubAccount
+      ? organizationChoice.organization
+      : null;
+  const publishTarget = getNewProjectPublishTarget(publishTargets, publishKind, githubOrganization);
+  const publishOwners = useEnvironmentQuery(
+    environment !== null &&
+      publishes &&
+      publishTarget?.host === "github.com" &&
+      environment.supportsGitHubPublishOwners
+      ? sourceControlEnvironment.githubPublishOwners({
+          environmentId: environment.environmentId,
+          input: githubAccount === null ? {} : { githubAccount },
+        })
+      : null,
+  ).data;
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const trimmedName = name.trim();
@@ -1268,7 +1294,10 @@ export function AddProjectNewScreen(props: { readonly environmentId?: string | s
               ) : null
             }
             onPress={() => {
-              if (!selected) setAccountChoice(null);
+              if (!selected) {
+                setAccountChoice(null);
+                setOrganizationChoice(null);
+              }
               setSelectedEnvironmentId(option.environmentId);
             }}
           />
@@ -1443,13 +1472,14 @@ export function AddProjectNewScreen(props: { readonly environmentId?: string | s
                   accounts={githubAccounts}
                   value={githubAccount}
                   disabled={isSubmitting}
-                  onChange={(account) =>
+                  onChange={(account) => {
+                    if (account !== githubAccount) setOrganizationChoice(null);
                     setAccountChoice(
                       account === null
                         ? null
                         : { environmentId: environment.environmentId, account },
-                    )
-                  }
+                    );
+                  }}
                 />
               </ListSection>
             </View>
@@ -1516,6 +1546,35 @@ export function AddProjectNewScreen(props: { readonly environmentId?: string | s
                   })
                 : null}
             </ListSection>
+          ) : null}
+          {publishOwners && publishOwners.organizations.length > 0 ? (
+            <View className="gap-2">
+              <SectionTitle>{gt("GitHub repository owner")}</SectionTitle>
+              <ListSection>
+                <ListChoiceRow
+                  label={gt("{account} (personal account)", { account: publishOwners.account })}
+                  selected={githubOrganization === null}
+                  disabled={isSubmitting}
+                  onPress={() => setOrganizationChoice(null)}
+                />
+                {publishOwners.organizations.map((organization) => (
+                  <ListChoiceRow
+                    key={organization}
+                    label={organization}
+                    selected={githubOrganization === organization}
+                    disabled={isSubmitting}
+                    separated
+                    onPress={() =>
+                      setOrganizationChoice({
+                        environmentId: environment.environmentId,
+                        account: githubAccount,
+                        organization,
+                      })
+                    }
+                  />
+                ))}
+              </ListSection>
+            </View>
           ) : null}
           <PrimaryActionButton
             label={gt("Create project")}
