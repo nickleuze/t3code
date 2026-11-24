@@ -22,6 +22,7 @@ import {
   getCloneDirectoryName,
   getDefaultCloneUrl,
   getNewProjectPathPreview,
+  getNewProjectPublishRepository,
   getNewProjectPublishTarget,
   getNewProjectPublishTargets,
   getNewProjectRepository,
@@ -53,12 +54,15 @@ import {
 import { resolvePastedPath } from "@t3tools/shared/path";
 import {
   AuthOrchestrationOperateScope,
+  AuthSettingsWriteScope,
   AuthSourceControlWriteScope,
   AuthFilesystemReadScope,
   CommandId,
   type EnvironmentId,
   type EnvironmentMachineKind,
+  isManagedSettingPath,
   ProjectId,
+  projectGitHubAccountOptions,
   resolveEnvironmentMachineKind,
   SourceControlProviderKind,
 } from "@t3tools/contracts";
@@ -90,6 +94,7 @@ import { AppText as Text, AppTextInput as TextInput } from "../../components/ui/
 import { EnvironmentMachineSymbol } from "../../components/EnvironmentMachineSymbol";
 import { ErrorBanner } from "../../components/ui/ErrorBanner";
 import { SourceControlIcon } from "./SourceControlIcon";
+import { ProjectGitHubAccountChoices } from "./ProjectGitHubAccountChoices";
 import { sourceControlClients } from "@t3tools/client-runtime/source-control-clients";
 import { ThemedSwitch } from "../../components/ui/ThemedSwitch";
 import { uuidv4 } from "../../lib/uuid";
@@ -118,6 +123,7 @@ interface EnvironmentOption {
   readonly machine: EnvironmentMachineKind;
   readonly baseDirectory: string | null;
   readonly newProjectsRoot: string | null;
+  readonly canSetGitHubAccountOnCreate: boolean;
   readonly projectAreas: { readonly root: string; readonly names: ReadonlyArray<string> } | null;
   readonly connectionState: EnvironmentConnectionPhase;
   readonly connectionError: string | null;
@@ -464,6 +470,10 @@ function useEnvironmentOptions(
         machine: resolveEnvironmentMachineKind(config ?? null),
         baseDirectory: config?.settings.addProjectBaseDirectory ?? null,
         newProjectsRoot: config?.newProjectsRoot ?? null,
+        canSetGitHubAccountOnCreate:
+          config?.environment.capabilities.projectGitHubAccountOnCreate === true &&
+          !isManagedSettingPath(config.managedPolicy, "githubAccount") &&
+          !isManagedSettingPath(config.managedPolicy, "projectSettingsOverrides"),
         projectAreas: config?.projectAreas ?? null,
         connectionState: runtime?.connectionState ?? "available",
         connectionError: runtime?.connectionError ?? null,
@@ -1185,9 +1195,29 @@ export function AddProjectNewScreen(props: { readonly environmentId?: string | s
           input: {},
         }),
   );
+  const canWriteSettings = useEnvironmentScope(
+    environment?.environmentId ?? null,
+    AuthSettingsWriteScope,
+  );
+  const githubAccounts =
+    canWriteSettings && environment?.canSetGitHubAccountOnCreate === true
+      ? projectGitHubAccountOptions(discoveryState.data?.sourceControlProviders ?? [])
+      : [];
+  const [accountChoice, setAccountChoice] = useState<{
+    readonly environmentId: EnvironmentId;
+    readonly account: string;
+  } | null>(null);
+  const githubAccount =
+    accountChoice !== null &&
+    environment !== null &&
+    accountChoice.environmentId === environment.environmentId
+      ? accountChoice.account
+      : null;
+  const canSubmitWithAccount = githubAccount === null || githubAccounts.includes(githubAccount);
   const publishTargets = getNewProjectPublishTargets(
     discoveryState.data,
     environment?.offeredSourceControlProviders,
+    githubAccount,
   );
   const [name, setName] = useState("");
   const [area, setArea] = useState<string | null>(null);
@@ -1237,7 +1267,10 @@ export function AddProjectNewScreen(props: { readonly environmentId?: string | s
                 />
               ) : null
             }
-            onPress={() => setSelectedEnvironmentId(option.environmentId)}
+            onPress={() => {
+              if (!selected) setAccountChoice(null);
+              setSelectedEnvironmentId(option.environmentId);
+            }}
           />
         );
       })}
@@ -1287,14 +1320,19 @@ export function AddProjectNewScreen(props: { readonly environmentId?: string | s
   // State lags a render behind, so a double tap could start a second create.
   const submittingRef = useRef(false);
   const submit = async () => {
-    if (!environment || trimmedName.length === 0 || submittingRef.current) return;
+    if (!environment || trimmedName.length === 0 || !canSubmitWithAccount || submittingRef.current)
+      return;
     const originRoute = getActiveRoute(navigation);
     submittingRef.current = true;
     setError(null);
     setIsSubmitting(true);
     const result = await createNew({
       environmentId: environment.environmentId,
-      input: { name: trimmedName, ...(selectedArea !== null ? { area: selectedArea } : {}) },
+      input: {
+        name: trimmedName,
+        ...(selectedArea !== null ? { area: selectedArea } : {}),
+        ...(githubAccount === null ? {} : { githubAccount }),
+      },
     });
     if (AsyncResult.isFailure(result)) {
       submittingRef.current = false;
@@ -1312,7 +1350,7 @@ export function AddProjectNewScreen(props: { readonly environmentId?: string | s
         input: {
           cwd: workspaceRoot,
           provider: publishTarget.definition.kind,
-          repository: getNewProjectRepository(publishTarget, workspaceRoot),
+          repository: getNewProjectPublishRepository(publishTarget, workspaceRoot),
           visibility: "private",
         },
       }).then((publishResult) => {
@@ -1397,6 +1435,25 @@ export function AddProjectNewScreen(props: { readonly environmentId?: string | s
           ) : null}
           {machineRows}
           {areaRows}
+          {githubAccounts.length > 0 || githubAccount !== null ? (
+            <View className="gap-2">
+              <SectionTitle>{gt("GitHub account")}</SectionTitle>
+              <ListSection>
+                <ProjectGitHubAccountChoices
+                  accounts={githubAccounts}
+                  value={githubAccount}
+                  disabled={isSubmitting}
+                  onChange={(account) =>
+                    setAccountChoice(
+                      account === null
+                        ? null
+                        : { environmentId: environment.environmentId, account },
+                    )
+                  }
+                />
+              </ListSection>
+            </View>
+          ) : null}
           {publishTarget !== null ? (
             <ListSection>
               <ListRow
@@ -1462,7 +1519,7 @@ export function AddProjectNewScreen(props: { readonly environmentId?: string | s
           ) : null}
           <PrimaryActionButton
             label={gt("Create project")}
-            disabled={isSubmitting || trimmedName.length === 0}
+            disabled={isSubmitting || trimmedName.length === 0 || !canSubmitWithAccount}
             onPress={() => void submit()}
             loading={isSubmitting}
           />

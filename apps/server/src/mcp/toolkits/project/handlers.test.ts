@@ -43,6 +43,7 @@ import * as ManagedProjectFolders from "../../../project/ManagedProjectFolders.t
 import * as PeerForwarding from "../../../peer/PeerForwarding.ts";
 import * as SourceControlProviderRegistry from "../../../sourceControl/SourceControlProviderRegistry.ts";
 import * as Repositories from "../../../sourceControl/SourceControlRepositoryService.ts";
+import * as ProjectStore from "../../../orchestration-v2/ProjectStore.ts";
 import * as GitVcsDriver from "../../../vcs/GitVcsDriver.ts";
 import * as VcsProcess from "../../../vcs/VcsProcess.ts";
 import * as McpInvocationContext from "../../McpInvocationContext.ts";
@@ -1154,6 +1155,7 @@ it.effect("an agent's clone is not cut off while git is still transferring", () 
       launched: [],
     });
     const repositories = Repositories.layer.pipe(
+      Layer.provide(Layer.mock(ProjectStore.ProjectStoreV2)({})),
       Layer.provide(
         Layer.mock(SourceControlProviderRegistry.SourceControlProviderRegistry)({
           resolveLink: () => undefined,

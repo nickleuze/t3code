@@ -11,6 +11,7 @@ import {
   requiredScopesForServerSettingsPatch,
   requiredScopesForProjectMutation,
   ProjectMutation,
+  ProjectCreateNewInput,
   SecretRequestAnswerInput,
   AuthSettingsWriteScope,
   AuthProvidersManageScope,
@@ -285,6 +286,7 @@ const requiredScopesForSettingsUpdate = (payload: unknown) => {
 };
 
 const decodeProjectMutation = Schema.decodeUnknownSync(ProjectMutation);
+const isProjectCreateNewInput = Schema.is(ProjectCreateNewInput);
 const decodeAssetCreateUrlInput = Schema.decodeUnknownSync(AssetCreateUrlInput);
 const decodeSecretRequestAnswer = Schema.decodeUnknownSync(SecretRequestAnswerInput);
 
@@ -349,6 +351,13 @@ const requiredScopesForRpcCall = (
     decodeSecretRequestAnswer(payload).answer.type === "reference"
   ) {
     return [AuthOrchestrationOperateScope, AuthProvidersManageScope];
+  }
+  if (
+    method === WS_METHODS.projectsCreateNew &&
+    isProjectCreateNewInput(payload) &&
+    payload.githubAccount !== undefined
+  ) {
+    return [AuthOrchestrationOperateScope, AuthSettingsWriteScope];
   }
   if (method === WS_METHODS.projectsMutate) {
     return requiredScopesForProjectMutation(decodeProjectMutation(payload));

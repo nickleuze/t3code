@@ -1307,7 +1307,7 @@ export const SETTINGS_SEARCH_ITEMS = [
   {
     id: "project-github-account",
     title: msg("GitHub account"),
-    to: "/settings/source-control",
+    to: "/settings/projects",
     scope: "project",
     searchTerms: [msg("project github login personal work pull requests account")],
   },

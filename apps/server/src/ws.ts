@@ -3093,7 +3093,7 @@ export const layerWsRpc = (
         [WS_METHODS.projectsCreateNew]: ({ area, ...input }) =>
           (area === undefined
             ? managedFolders.createNamedProject(input)
-            : areaProjects.createNew({ area, name: input.name })
+            : areaProjects.createNew({ ...input, area })
           ).pipe(
             Effect.mapError(
               (cause: { readonly message: string }) =>

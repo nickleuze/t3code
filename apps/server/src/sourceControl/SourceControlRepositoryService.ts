@@ -3,6 +3,7 @@ import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 import * as Schedule from "effect/Schedule";
 import * as Schema from "effect/Schema";
@@ -24,6 +25,9 @@ import {
 } from "@t3tools/contracts";
 
 import * as ServerConfig from "../config.ts";
+import * as ServerSettings from "../serverSettings.ts";
+import * as ProjectStore from "../orchestration-v2/ProjectStore.ts";
+import { ProjectGitHubAccount } from "@t3tools/source-control-github/server/driver";
 import { expandHomePath } from "@t3tools/provider-core/server/pathExpansion";
 import * as SourceControlRateLimit from "@t3tools/source-control-core/server/SourceControlRateLimit";
 import {
@@ -206,6 +210,8 @@ export const make = Effect.gen(function* () {
   const git = yield* GitVcsDriver.GitVcsDriver;
   const path = yield* Path.Path;
   const providers = yield* SourceControlProviderRegistry.SourceControlProviderRegistry;
+  const settings = yield* ServerSettings.ServerSettingsService;
+  const projects = yield* ProjectStore.ProjectStoreV2;
 
   const ensureConcreteProvider = (input: {
     readonly operation: string;
@@ -534,11 +540,26 @@ export const make = Effect.gen(function* () {
         provider: input.provider,
       });
       const provider = yield* providers.get(providerKind);
-      const urls = yield* provider.createRepository({
-        cwd: input.cwd,
-        repository: input.repository.trim(),
-        visibility: input.visibility,
-      });
+      let githubAccount: string | null = null;
+      if (providerKind === "github") {
+        const { projectSettingsOverrides } = yield* settings.getSettings;
+        if (Object.values(projectSettingsOverrides).some((entry) => entry.githubAccount)) {
+          const workspaceRoot = yield* fileSystem.realPath(input.cwd);
+          const project = Option.getOrNull(
+            yield* projects.findActiveByWorkspaceRoot(workspaceRoot),
+          );
+          githubAccount = project
+            ? (projectSettingsOverrides[project.projectId]?.githubAccount ?? null)
+            : null;
+        }
+      }
+      const urls = yield* provider
+        .createRepository({
+          cwd: input.cwd,
+          repository: input.repository.trim(),
+          visibility: input.visibility,
+        })
+        .pipe(Effect.provideService(ProjectGitHubAccount, githubAccount));
       const remoteUrl = selectRemoteUrl(urls, input.protocol);
       const remoteName = yield* git.ensureRemote({
         cwd: input.cwd,

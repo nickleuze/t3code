@@ -51,6 +51,39 @@ const run = (
 
 const services = Layer.mergeAll(NodeServices.layer, NodeCrypto.layer);
 
+it.live("sets the chosen GitHub account when creating an Area project", () =>
+  Effect.gen(function* () {
+    const command = yield* fakeCommand({
+      projects_create: { applied: true, path: "/p/creative/tiny-game" },
+    });
+    const created: ProjectService.ProjectCreateInput[] = [];
+    const service = yield* AreaProjects.AreaProjects.pipe(
+      Effect.provide(
+        Layer.effect(AreaProjects.AreaProjects, AreaProjects.make(command)).pipe(
+          Layer.provide(
+            Layer.mock(ProjectService.ProjectService)({
+              getByWorkspaceRoot: () => Effect.succeedNone,
+              create: (input) =>
+                Effect.sync(() => {
+                  created.push(input);
+                  return project(input.projectId, input.workspaceRoot);
+                }),
+            }),
+          ),
+          Layer.provide(ProcessRunner.layer),
+        ),
+      ),
+    );
+    const result = yield* service.createNew({
+      area: "creative",
+      name: "Tiny Game",
+      githubAccount: "work",
+    });
+    assert.equal(created[0]?.projectId, result.projectId);
+    assert.equal(created[0]?.githubAccount, "work");
+  }).pipe(Effect.scoped, Effect.provide(services)),
+);
+
 it.live("adds a created Area project to T3 with its folder and title", () =>
   Effect.gen(function* () {
     const command = yield* fakeCommand({

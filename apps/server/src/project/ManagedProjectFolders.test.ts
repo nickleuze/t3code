@@ -455,11 +455,17 @@ it.effect("starts a named project as a committed repository, and suffixes a take
         yield* git(baseDir, ["config", "--file", crlfConfig, "core.attributesFile", attributes]);
         (yield* HostProcess.Environment).GIT_CONFIG_GLOBAL = crlfConfig;
 
-        const first = yield* folders.createNamedProject({ name: "Pinball Stats" });
+        const first = yield* folders.createNamedProject({
+          name: "Pinball Stats",
+          githubAccount: "work",
+        });
         const second = yield* folders.createNamedProject({ name: "pinball stats" });
 
         assert.equal(first.workspaceRoot, path.join(root, "pinball-stats"));
         assert.equal(second.workspaceRoot, path.join(root, "pinball-stats-2"));
+        const overrides = (yield* settings.getSettings).projectSettingsOverrides;
+        assert.equal(overrides[first.projectId]?.githubAccount, "work");
+        assert.isUndefined(overrides[second.projectId]);
         yield* settings.updateSettings({ newProjectDirectory: "" });
         const restored = yield* folders.createNamedProject({ name: "Default location" });
         assert.equal(

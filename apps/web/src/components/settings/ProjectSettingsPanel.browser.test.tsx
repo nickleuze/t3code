@@ -121,6 +121,7 @@ vi.mock(import("../ui/toast"), async (original) => {
 vi.mock(import("./ProjectDefaultsSettings"), async (original) => ({
   ...(await original()),
   ProjectDefaultsSettings: (() => null) as never,
+  ProjectGitHubAccountSetting: (() => null) as never,
 }));
 vi.mock(import("./ProjectActionsSettings"), async (original) => ({
   ...(await original()),

@@ -743,6 +743,62 @@ it.layer(layerTest)("ProjectService", (it) => {
     }),
   );
 
+  it.effect("clears the chosen GitHub account when project registration is rejected", () =>
+    Effect.gen(function* () {
+      const projects = yield* ProjectService.ProjectService;
+      const settings = yield* ServerSettings.ServerSettingsService;
+      const projectId = ProjectId.make("project:duplicate-account");
+      const workspaceRoot = "/work/duplicate-account";
+      const owner = yield* projects.create({
+        projectId: ProjectId.make("project:account-owner"),
+        commandId: CommandId.make("command:account-owner"),
+        title: "Owner",
+        workspaceRoot,
+        githubAccount: "personal",
+      });
+      const error = yield* projects
+        .create({
+          projectId,
+          commandId: CommandId.make("command:duplicate-account"),
+          title: "Duplicate",
+          workspaceRoot,
+          githubAccount: "work",
+        })
+        .pipe(Effect.flip);
+      assert.equal(error._tag, "ProjectConflictError");
+      const overrides = (yield* settings.getSettings).projectSettingsOverrides;
+      assert.equal(overrides[owner.id]?.githubAccount, "personal");
+      assert.isUndefined(overrides[projectId]);
+    }),
+  );
+
+  it.effect("keeps the created project's actions when a create with an account is retried", () =>
+    Effect.gen(function* () {
+      const projects = yield* ProjectService.ProjectService;
+      const settings = yield* ServerSettings.ServerSettingsService;
+      const script = {
+        id: "dev",
+        name: "Dev",
+        command: "vp run dev",
+        icon: "play" as const,
+        runOnWorktreeCreate: false,
+      };
+      const input = {
+        projectId: ProjectId.make("project:retried-account"),
+        commandId: CommandId.make("command:retried-account"),
+        title: "Retried",
+        workspaceRoot: "/work/retried-account",
+        githubAccount: "work",
+        scripts: [script],
+      };
+      yield* projects.create(input);
+      yield* projects.create(input);
+      const entry = (yield* settings.getSettings).projectSettingsOverrides[input.projectId];
+      assert.equal(entry?.githubAccount, "work");
+      assert.deepEqual(entry?.defaultProjectScripts, [script]);
+    }),
+  );
+
   it.effect("replays a workspace conflict after the workspace frees up", () =>
     Effect.gen(function* () {
       const service = yield* ProjectService.ProjectService;

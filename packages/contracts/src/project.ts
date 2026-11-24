@@ -572,6 +572,7 @@ export const ProjectCreateNewInput = Schema.Struct({
   name: TrimmedNonEmptyString.check(Schema.isMaxLength(200)),
   /** Fork: create it as an Area project in `<projectAreas.root>/<area>/`. */
   area: Schema.optionalKey(TrimmedNonEmptyString),
+  githubAccount: Schema.optionalKey(TrimmedNonEmptyString),
 });
 export type ProjectCreateNewInput = typeof ProjectCreateNewInput.Type;
 
