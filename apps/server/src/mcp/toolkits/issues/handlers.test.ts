@@ -29,6 +29,7 @@ import { v2PullRequestThread } from "../../../orchestration-v2/testkit/pullReque
 import * as IssueTrackerBindings from "../../../persistence/IssueTrackerBindings.ts";
 import * as ProjectService from "../../../project/ProjectService.ts";
 import * as RepositoryIdentityResolver from "../../../project/RepositoryIdentityResolver.ts";
+import * as ServerSettings from "../../../serverSettings.ts";
 import * as McpInvocationContext from "../../McpInvocationContext.ts";
 import * as McpToolAccess from "../../McpToolAccess.ts";
 import * as McpToolAccessTestkit from "../../McpToolAccess.testkit.ts";
@@ -260,6 +261,7 @@ describe("issue toolkit handlers", () => {
           Layer.mergeAll(
             projectLayer,
             Layer.mock(RepositoryIdentityResolver.RepositoryIdentityResolver)({}),
+            Layer.orDie(ServerSettings.layerTest()),
             Layer.mock(IssueTrackerBindings.IssueTrackerBindingsRepository)({
               list: () => Effect.succeed(new Map([[PROJECT_ID, { tracker, scope: "ENG" }]])),
             }),
@@ -314,6 +316,7 @@ describe("issue toolkit handlers", () => {
           Layer.mergeAll(
             projectLayer,
             Layer.mock(RepositoryIdentityResolver.RepositoryIdentityResolver)({}),
+            Layer.orDie(ServerSettings.layerTest()),
             Layer.mock(IssueTrackerBindings.IssueTrackerBindingsRepository)({
               list: () =>
                 Effect.succeed(

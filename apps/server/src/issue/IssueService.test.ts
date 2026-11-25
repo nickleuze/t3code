@@ -18,6 +18,7 @@ import {
   type TrackerIssueDetail,
 } from "@t3tools/source-control-core/server/IssueTracker";
 import { IssueTrackerAccount } from "@t3tools/source-control-core/server/IssueTrackerHost";
+import { ProjectGitHubAccount } from "@t3tools/source-control-github/server/driver";
 
 import { PersistenceSqlError } from "../persistence/Errors.ts";
 import * as IssueTrackerBindings from "../persistence/IssueTrackerBindings.ts";
@@ -25,6 +26,7 @@ import { normalizeGitRemoteUrl } from "@t3tools/shared/git";
 
 import * as ProjectService from "../project/ProjectService.ts";
 import * as RepositoryIdentityResolver from "../project/RepositoryIdentityResolver.ts";
+import * as ServerSettings from "../serverSettings.ts";
 import * as IssueService from "./IssueService.ts";
 import * as IssueTrackerRegistry from "./IssueTrackerRegistry.ts";
 
@@ -159,6 +161,7 @@ function makeService(input: {
   readonly projects: ReadonlyArray<OrchestrationProjectShell>;
   readonly trackers: ReadonlyArray<IssueTrackerApi>;
   readonly bindings?: Record<string, IssueTrackerProjectBinding>;
+  readonly githubAccounts?: Record<string, string>;
   readonly readBindings?: ReturnType<
     IssueTrackerBindings.IssueTrackerBindingsRepository["Service"]["list"]
   >;
@@ -194,6 +197,14 @@ function makeService(input: {
             Layer.mock(RepositoryIdentityResolver.RepositoryIdentityResolver)({
               resolve: () => Effect.succeed(null),
             }),
+            ServerSettings.layerTest({
+              projectSettingsOverrides: Object.fromEntries(
+                Object.entries(input.githubAccounts ?? {}).map(([id, githubAccount]) => [
+                  id as ProjectId,
+                  { githubAccount },
+                ]),
+              ),
+            }),
           ),
         ),
       ),
@@ -222,6 +233,48 @@ describe("IssueService", () => {
         host: "dev.azure.com",
         scope: "acme/Web App",
       });
+    }),
+  );
+
+  it.effect("reads and writes a project's GitHub issues as the account it chose", () =>
+    Effect.gen(function* () {
+      const calls: string[] = [];
+      const record = (call: string) =>
+        Effect.map(ProjectGitHubAccount, (account) => {
+          calls.push(`${call} as ${account ?? "environment"}`);
+        });
+      const service = yield* makeService({
+        // `copy` is the same repository without a choice: the choosing project reads it.
+        projects: [
+          project({ id: "home", repository: "me/home" }),
+          project({ id: "copy", repository: "acme/web" }),
+          project({ id: "work", repository: "acme/web" }),
+        ],
+        githubAccounts: { work: "work-login" },
+        trackers: [
+          fakeTracker({
+            getViewer: () => Effect.as(record("viewer"), "viewer"),
+            listIssues: (input) =>
+              Effect.as(record(`list ${input.scope}`), { items: [], nextCursor: null }),
+            getIssue: (input) => Effect.as(record("get"), issue(input.key)),
+            comment: () => record("comment"),
+          }),
+        ],
+      });
+
+      yield* service.list({ state: "open", involvement: "assigned" });
+      expect(calls.toSorted()).toEqual([
+        "list acme/web as work-login",
+        "list me/home as environment",
+        "viewer as environment",
+        "viewer as work-login",
+      ]);
+
+      calls.length = 0;
+      const ref = { tracker: GITHUB, scope: "acme/web", key: "1", projectId: "work" as ProjectId };
+      yield* service.detail(ref);
+      yield* service.comment({ ...ref, body: "Done" });
+      expect(calls).toEqual(["get as work-login", "comment as work-login"]);
     }),
   );
 

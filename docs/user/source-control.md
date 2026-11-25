@@ -58,7 +58,7 @@ over that choice; a host turned off stays off either way.
 To use a different login for a specific project on `github.com`, select that project in
 **Settings → Source control & issues** and choose its **GitHub account**. Choose **Use environment
 account** to restore the environment default. The project selection uses a signed-in GitHub
-CLI account for T3 Code's pull request actions, overriding the environment's account or token.
+CLI account for T3 Code's pull requests and issues, overriding the environment's account or token.
 If the selected login is signed out, sign it in again or change the project setting. Git push
 and pull still use the repository's Git credentials.
 
