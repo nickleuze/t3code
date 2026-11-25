@@ -124,8 +124,12 @@ after the drop.
 
 New threads appear above the active threads you have arranged. Settling clears a thread's active
 position, so using **Un-settle** returns it to the top. Pinning and snoozing preserve its active
-position until you move it again. Thread activity does not change the order. The settled shelf
-continues to use settlement time.
+position until you move it again. In **Manual** order, activity does not rearrange threads. The
+settled shelf continues to use settlement time.
+
+On web and desktop, open **Sort threads** beside Search to order the active list by **Last activity**,
+**Last message**, or **Created**. With the Working section off, choose **Manual** to restore your
+drag arrangement.
 
 If dragging is unavailable for one environment, update the T3 Code server running in that
 environment. Pinned and active reordering require server support. Threads from older servers keep
@@ -150,7 +154,7 @@ Threads that are working or waiting on work they will resume from move into a co
 **Working** section below the active list.
 That includes subagents, watched pull requests with checks still running, Claude monitors and
 `sleep` timers, and background commands or other monitors the agent says it is waiting on. A dev server or other process an agent leaves running does not keep a thread
-there. A thread returns to the top of the active list when it finishes, fails, or needs an approval or
+there. A thread returns to the active list when it finishes, fails, or needs an approval or
 answer. The Working section lists the thread you last sent work to first. Pinned threads stay in
 the pinned section.
 
@@ -158,12 +162,10 @@ This is on by default. Turn it off with **Settings → General → Working secti
 or **Settings → General → Working section** on iOS and Android. Each device keeps its own
 choice.
 
-While this is on, the active list is ordered by when each thread last came back to you, so you
-cannot drag or move threads within it. Your saved order returns when you turn it off.
-
-To keep working threads in the inbox and still order it by activity, turn off the Working section
-and turn on **Settings → General → Sort by activity**. A thread moves to the top when you send it a
-message and again when its turn finishes. Dragging within the inbox is off while it is on.
+By default, a thread appears at the top of the active list when it comes back to you. On web and
+desktop, use **Sort threads** to change the order or choose **Last returned** to restore the default.
+Each mode remembers its own sort choice. For drag ordering within the active list, turn the Working
+section off and choose **Manual**.
 
 ### Group threads by project (beta)
 

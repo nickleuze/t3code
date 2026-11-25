@@ -3,6 +3,7 @@ import { msg, T, useGT, useMessages } from "gt-react";
 import { m } from "../i18n/messages";
 import { attachSidebarTree } from "../lib/sidebarTree";
 import { type EnvironmentId, type ScopedProjectRef } from "@t3tools/contracts";
+import { SidebarThreadSortOrder } from "@t3tools/contracts/settings";
 import type { EnvironmentServerConfig } from "@t3tools/client-runtime/connection";
 import {
   dropThreadContext,
@@ -69,6 +70,7 @@ import {
 } from "@t3tools/client-runtime/state/threads";
 
 import {
+  ArrowUpDownIcon,
   CheckIcon,
   ChevronDownIcon,
   FolderIcon,
@@ -137,7 +139,7 @@ import { useSidebarProjectGroups } from "../hooks/useSidebarProjectGroups";
 import { isCommandPaletteOpen, openCommandPalette } from "../commandPaletteBus";
 import { registerSettleAndAdvance } from "../settleAndAdvance";
 import { resolveThreadActionProjectRef, startNewThreadFromContext } from "../lib/chatThreadActions";
-import { useClientSettings } from "../hooks/useSettings";
+import { updateClientSettings, useClientSettings } from "../hooks/useSettings";
 import { useCopyToClipboard } from "../hooks/useCopyToClipboard";
 import { useLocalStorage } from "../hooks/useLocalStorage";
 import { useNowMinute } from "../hooks/useNowMinute";
@@ -209,13 +211,13 @@ import {
   shouldNavigateAfterThreadPark,
   sidebarListItemId,
   sidebarThreadKeyAtY,
-  sortInboxThreadsByReturn,
   sortPinnedThreadsForSidebar,
-  sortThreadsForSidebar,
+  sortSidebarActiveThreads,
   sortWorkingThreadsBySend,
   useSnoozeWakeClock,
   threadShortcutContext,
   useThreadJumpHintsVisible,
+  type SidebarActiveThreadSortOrder,
   type SidebarListItem,
   type SidebarSection,
 } from "./Sidebar.logic";
@@ -246,6 +248,7 @@ import { titleRegenerationToast } from "./threadTitleRegenerationToast";
 import { copyThreadReference } from "../lib/copyThreadReference";
 import { threadChipCopyTarget } from "@t3tools/client-runtime/thread-reference";
 import { Button } from "./ui/button";
+import { Menu, MenuPopup, MenuRadioGroup, MenuRadioItem, MenuTrigger } from "./ui/menu";
 import { isProjectPinShortcut, ProjectPinButton } from "./ProjectPinButton";
 import {
   Combobox,
@@ -352,6 +355,10 @@ const SETTLED_TAIL_PAGE_COUNT = 25;
 const SETTLED_SHELF_EXPANDED_KEY = "t3code:sidebar:settled-expanded";
 const SNOOZED_SHELF_EXPANDED_KEY = "t3code:sidebar:snoozed-expanded";
 const WORKING_SHELF_EXPANDED_KEY = "t3code:sidebar:working-expanded";
+const INBOX_SORT_ORDER_KEY = "t3code:sidebar:inbox-sort-order";
+const SidebarInboxSortOrder = Schema.Literals(["returned", "activity", "updated_at", "created_at"]);
+const isSidebarInboxSortOrder = Schema.is(SidebarInboxSortOrder);
+const isSidebarThreadSortOrder = Schema.is(SidebarThreadSortOrder);
 
 const inboxReturns = createInboxReturnTracker();
 
@@ -375,8 +382,7 @@ interface SidebarThreadPartitionInput {
   readonly connectedEnvironmentIds: readonly EnvironmentId[];
   readonly optimisticDrop: SidebarOptimisticDrop | null;
   readonly workingShelfEnabled: boolean;
-  /** The inbox follows latest activity instead of the saved order. */
-  readonly activeTimeOrdered: boolean;
+  readonly threadSortOrder: SidebarActiveThreadSortOrder;
   /** Boring mode: folders list active threads by the user's latest message. */
   readonly sortActiveBySend: boolean;
   // Snooze wakes, the queued-turn grace and the Working shelf's exit grace depend
@@ -404,9 +410,9 @@ function resolveDraggedOrders(input: {
   readonly threadByKey: ReadonlyMap<string, EnvironmentThreadShell>;
   readonly settledThreads: readonly EnvironmentThreadShell[];
   readonly activeThreads: readonly EnvironmentThreadShell[];
-  readonly activeTimeOrdered: boolean;
+  readonly threadSortOrder: SidebarActiveThreadSortOrder;
 }): typeof NO_DRAGGED_ORDERS {
-  const { drag, threadByKey, settledThreads, activeThreads, activeTimeOrdered } = input;
+  const { drag, threadByKey, settledThreads, activeThreads, threadSortOrder } = input;
   const thread = threadByKey.get(drag.activeKey);
   if (thread === undefined) return NO_DRAGGED_ORDERS;
   const others = (list: readonly EnvironmentThreadShell[]) =>
@@ -416,12 +422,14 @@ function resolveDraggedOrders(input: {
       ...others(settledThreads),
       applySidebarThreadDrop(thread, "settled", drag.occurredAt),
     ]).map(threadShellKey),
-    activeOrder: activeTimeOrdered
-      ? sortInboxThreadsByReturn(
-          [...others(activeThreads), applySidebarThreadDrop(thread, "active", drag.occurredAt)],
-          inboxReturns.returnedAt,
-        ).map(threadShellKey)
-      : undefined,
+    activeOrder:
+      threadSortOrder !== "manual"
+        ? sortSidebarActiveThreads(
+            [...others(activeThreads), applySidebarThreadDrop(thread, "active", drag.occurredAt)],
+            threadSortOrder,
+            inboxReturns.returnedAt,
+          ).map(threadShellKey)
+        : undefined,
   };
 }
 
@@ -468,7 +476,17 @@ function useSidebarThreads(input: {
   const workingShelfEnabled =
     useClientSettings((s) => s.sidebarWorkingShelfEnabled) && folderGroups === null;
   const sortActiveByActivity = useClientSettings((s) => s.sidebarSortActiveByActivity);
-  const activeTimeOrdered = workingShelfEnabled || (sortActiveByActivity && folderGroups === null);
+  const flatSortOrder = useClientSettings((s) => s.sidebarFlatThreadSortOrder);
+  const [inboxSortOrder, setInboxSortOrder] = useLocalStorage(
+    INBOX_SORT_ORDER_KEY,
+    "returned",
+    SidebarInboxSortOrder,
+  );
+  const threadSortOrder: SidebarActiveThreadSortOrder = workingShelfEnabled
+    ? inboxSortOrder
+    : folderGroups === null
+      ? (flatSortOrder ?? (sortActiveByActivity ? "activity" : "manual"))
+      : "manual";
   const inboxReturnsVersion = useSyncExternalStore(
     inboxReturns.subscribe,
     inboxReturns.getSnapshot,
@@ -512,7 +530,7 @@ function useSidebarThreads(input: {
     connectedEnvironmentIds,
     optimisticDrop,
     workingShelfEnabled,
-    activeTimeOrdered,
+    threadSortOrder,
     sortActiveBySend: folderGroups !== null,
     clockKey: `${nowMinute}:${snoozeWakeClock}:${inboxReturnsVersion}`,
   });
@@ -594,7 +612,18 @@ function useSidebarThreads(input: {
     ...partition,
     threads,
     workingShelfEnabled,
-    activeTimeOrdered,
+    activeTimeOrdered: threadSortOrder !== "manual",
+    threadSortOrder,
+    selectThreadSortOrder(value: unknown) {
+      if (workingShelfEnabled) {
+        if (isSidebarInboxSortOrder(value)) setInboxSortOrder(value);
+      } else if (value === "manual" || value === "activity" || isSidebarThreadSortOrder(value)) {
+        void updateClientSettings({
+          sidebarSortActiveByActivity: value === "activity",
+          sidebarFlatThreadSortOrder: isSidebarThreadSortOrder(value) ? value : null,
+        });
+      }
+    },
     searchableThreads: [
       ...pinnedThreads,
       ...activeThreads,
@@ -652,7 +681,7 @@ function partitionSidebarThreads(input: SidebarThreadPartitionInput) {
     serverConfigs,
     optimisticDrop,
     workingShelfEnabled,
-    activeTimeOrdered,
+    threadSortOrder,
     sortActiveBySend,
   } = input;
   const preciseNow = new Date().toISOString();
@@ -713,9 +742,7 @@ function partitionSidebarThreads(input: SidebarThreadPartitionInput) {
   const sortedPinned = sortPinnedThreadsForSidebar(pinned);
   const sortedActive = sortActiveBySend
     ? sortWorkingThreadsBySend(active)
-    : activeTimeOrdered
-      ? sortInboxThreadsByReturn(active, inboxObservation.returnedAt)
-      : sortThreadsForSidebar(active);
+    : sortSidebarActiveThreads(active, threadSortOrder, inboxObservation.returnedAt);
   return {
     pinnedThreads:
       optimisticDrop?.section !== "pinned" || optimisticDrop.order === null
@@ -1355,6 +1382,9 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
 
   const {
     activeTimeOrdered,
+    workingShelfEnabled,
+    threadSortOrder,
+    selectThreadSortOrder,
     pinnedThreads,
     draggableThreadKeys,
     activeReorderableThreadKeys,
@@ -2119,7 +2149,7 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
           threadByKey,
           settledThreads,
           activeThreads,
-          activeTimeOrdered,
+          threadSortOrder,
         });
   const sidebarSortingStrategy = createSidebarSortingStrategy({
     items: sidebarListItems,
@@ -3118,6 +3148,19 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
       ? shortcutLabelForCommand(keybindings, "chat.newLocal")
       : undefined);
   const newThreadInProjectShortcutLabel = shortcutLabelForCommand(keybindings, "chat.newLocal");
+  const threadSortLabels = {
+    returned: gt("Last returned"),
+    manual: gt("Manual"),
+    activity: gt("Last activity"),
+    updated_at: gt("Last message"),
+    created_at: gt("Created"),
+  };
+  const threadSortOptions = [
+    workingShelfEnabled ? "returned" : "manual",
+    "activity",
+    "updated_at",
+    "created_at",
+  ] as const;
   return (
     <SidebarFolderDrop>
       <SidebarChromeHeader isElectron={isElectron} />
@@ -3128,6 +3171,32 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
           <SidebarGroup className="z-[1]">
             <SidebarThreadHeader
               hasProjects={projectGroups.length > 0}
+              threadSort={
+                boringSidebarEnabled ? null : (
+                  <Menu>
+                    <MenuTrigger
+                      render={
+                        <SidebarHeaderIconButton
+                          label={gt("Sort threads: {order}", {
+                            order: threadSortLabels[threadSortOrder],
+                          })}
+                        />
+                      }
+                    >
+                      <ArrowUpDownIcon className="size-4" />
+                    </MenuTrigger>
+                    <MenuPopup align="end" side="bottom">
+                      <MenuRadioGroup value={threadSortOrder} onValueChange={selectThreadSortOrder}>
+                        {threadSortOptions.map((order) => (
+                          <MenuRadioItem key={order} value={order}>
+                            {threadSortLabels[order]}
+                          </MenuRadioItem>
+                        ))}
+                      </MenuRadioGroup>
+                    </MenuPopup>
+                  </Menu>
+                )
+              }
               projectScope={
                 <Combobox
                   items={projectScopeItems}

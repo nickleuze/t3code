@@ -549,7 +549,8 @@ export function useSettingsRestore(onRestored?: () => void) {
       ? [gt("Working section")]
       : []),
     ...(settings.sidebarSortActiveByActivity !==
-    DEFAULT_UNIFIED_SETTINGS.sidebarSortActiveByActivity
+      DEFAULT_UNIFIED_SETTINGS.sidebarSortActiveByActivity ||
+    settings.sidebarFlatThreadSortOrder != null
       ? ["Sort by activity"]
       : []),
     ...(settings.sidebarAutoSettleAfterDays !== DEFAULT_UNIFIED_SETTINGS.sidebarAutoSettleAfterDays
@@ -749,6 +750,7 @@ export function useSettingsRestore(onRestored?: () => void) {
       sidebarProjectSortOrder: DEFAULT_UNIFIED_SETTINGS.sidebarProjectSortOrder,
       sidebarWorkingShelfEnabled: DEFAULT_UNIFIED_SETTINGS.sidebarWorkingShelfEnabled,
       sidebarSortActiveByActivity: DEFAULT_UNIFIED_SETTINGS.sidebarSortActiveByActivity,
+      sidebarFlatThreadSortOrder: null,
       sidebarAutoSettleAfterDays: DEFAULT_UNIFIED_SETTINGS.sidebarAutoSettleAfterDays,
       sidebarAutoSettleKeepPullRequests: DEFAULT_UNIFIED_SETTINGS.sidebarAutoSettleKeepPullRequests,
       sidebarAutoSettleOnMerge: DEFAULT_UNIFIED_SETTINGS.sidebarAutoSettleOnMerge,
@@ -999,17 +1001,19 @@ export function GeneralSettingsPanel() {
         <SettingsRow
           {...setting("sort-by-activity")}
           description={gt(
-            "Order the inbox by latest activity: your last message or a finished turn. Working threads stay in the inbox, and dragging within it is off. The Working section already orders the inbox this way.",
+            "When the Working section is off, order the inbox by your latest message or a finished turn. More orders are available from the sidebar’s Sort threads menu.",
           )}
           resetAction={
             settings.sidebarSortActiveByActivity !==
-            DEFAULT_UNIFIED_SETTINGS.sidebarSortActiveByActivity ? (
+              DEFAULT_UNIFIED_SETTINGS.sidebarSortActiveByActivity ||
+            settings.sidebarFlatThreadSortOrder != null ? (
               <SettingResetButton
                 ariaLabel={gt("Reset sort by activity to default")}
                 onClick={() =>
                   updateSettings({
                     sidebarSortActiveByActivity:
                       DEFAULT_UNIFIED_SETTINGS.sidebarSortActiveByActivity,
+                    sidebarFlatThreadSortOrder: null,
                   })
                 }
               />
@@ -1019,7 +1023,10 @@ export function GeneralSettingsPanel() {
             <Switch
               checked={settings.sidebarSortActiveByActivity}
               onCheckedChange={(checked) =>
-                updateSettings({ sidebarSortActiveByActivity: Boolean(checked) })
+                updateSettings({
+                  sidebarSortActiveByActivity: Boolean(checked),
+                  sidebarFlatThreadSortOrder: null,
+                })
               }
               aria-label={gt("Sort by activity")}
             />
