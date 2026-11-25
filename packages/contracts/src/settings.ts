@@ -566,6 +566,7 @@ export const ClientSettingsSchema = Schema.Struct({
   sidebarSortActiveByActivity: Schema.Boolean.pipe(
     Schema.withDecodingDefault(Effect.succeed(false)),
   ),
+  sidebarFlatThreadSortOrder: Schema.optionalKey(Schema.NullOr(SidebarThreadSortOrder)),
   sidebarProjectGroupingMode: SidebarProjectGroupingMode.pipe(
     Schema.withDecodingDefault(Effect.succeed(DEFAULT_SIDEBAR_PROJECT_GROUPING_MODE)),
   ),
@@ -2196,6 +2197,7 @@ export const ClientSettingsPatch = Schema.Struct({
   threadDetailsItems: Schema.optionalKey(Schema.Record(Schema.String, Schema.Boolean)),
   sidebarWorkingShelfEnabled: Schema.optionalKey(Schema.Boolean),
   sidebarSortActiveByActivity: Schema.optionalKey(Schema.Boolean),
+  sidebarFlatThreadSortOrder: Schema.optionalKey(Schema.NullOr(SidebarThreadSortOrder)),
   sidebarProjectGroupingMode: Schema.optionalKey(SidebarProjectGroupingMode),
   sidebarProjectGroupingOverrides: Schema.optionalKey(
     Schema.Record(TrimmedNonEmptyString, SidebarProjectGroupingMode),

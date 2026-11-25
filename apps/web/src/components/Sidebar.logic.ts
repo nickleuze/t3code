@@ -1,6 +1,10 @@
 import type { EnvironmentServerConfig } from "@t3tools/client-runtime/connection";
 import { scopeThreadRef, scopedThreadKey } from "@t3tools/client-runtime/environment";
-import { resolveThreadWorkingStartedAt } from "@t3tools/client-runtime/state/models";
+import {
+  resolveThreadWorkingStartedAt,
+  type EnvironmentThreadShell,
+} from "@t3tools/client-runtime/state/models";
+import { sortInboxThreadsByReturn } from "@t3tools/client-runtime/state/thread-inbox";
 import { isShownUnderParent } from "@t3tools/client-runtime/state/threads";
 import { backgroundWorkHoldsCompletion } from "@t3tools/shared/orchestrationV2PendingBackgroundWork";
 import { threadPullRequestSearchTerms } from "@t3tools/shared/threadPullRequests";
@@ -35,6 +39,7 @@ import {
 import {
   getThreadSortTimestamp,
   planPinnedReorder,
+  sortActiveThreadsByOrderKey,
   sortThreads,
   toSortableTimestamp,
   type ThreadSortInput,
@@ -1123,11 +1128,39 @@ export function firstValidTimestampMs(
   return 0;
 }
 
-export { sortActiveThreadsByOrderKey as sortThreadsForSidebar } from "@t3tools/client-runtime/state/thread-sort";
-export {
-  sortInboxThreadsByReturn,
-  sortWorkingThreadsBySend,
-} from "@t3tools/client-runtime/state/thread-inbox";
+export type SidebarActiveThreadSortOrder =
+  | SidebarThreadSortOrder
+  | "manual"
+  | "returned"
+  | "activity";
+
+export function sortSidebarActiveThreads(
+  threads: readonly EnvironmentThreadShell[],
+  order: SidebarActiveThreadSortOrder,
+  returnedAt: (thread: EnvironmentThreadShell) => number | undefined,
+): EnvironmentThreadShell[] {
+  switch (order) {
+    case "manual":
+      return sortActiveThreadsByOrderKey(threads);
+    case "returned":
+      return sortInboxThreadsByReturn(threads, returnedAt);
+    case "activity":
+      return sortInboxThreadsByReturn(
+        threads,
+        (thread) =>
+          toSortableTimestamp(
+            (thread.latestUserAuthoredMessageAt === undefined
+              ? thread.latestUserMessageAt
+              : thread.latestUserAuthoredMessageAt) ?? undefined,
+          ) ?? undefined,
+      );
+    default:
+      return sortThreads(threads, order);
+  }
+}
+
+export { sortInboxThreadsByReturn };
+export { sortWorkingThreadsBySend } from "@t3tools/client-runtime/state/thread-inbox";
 
 export { pinOrderKeyBetween } from "@t3tools/client-runtime/state/thread-sort";
 export { sortPinnedThreadsByOrderKey as sortPinnedThreadsForSidebar } from "@t3tools/client-runtime/state/thread-sort";

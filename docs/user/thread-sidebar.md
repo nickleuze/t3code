@@ -33,11 +33,7 @@ Threads don't require a project. Pick **No project** (or press `mod+alt+n` on we
 
 Enabled by default (**Settings → General → Working section**, per device). Unpinned threads that are actively running—or waiting on subagents, watched PRs, or monitors—collapse into a **Working** section below Active, and return to the top of Active when they finish, fail, or need input.
 
-While enabled, Active is sorted by most recent return (manual reordering is paused until you turn it off).
-
-To keep working threads in the inbox and still order it by activity, turn off the Working section
-and turn on **Settings → General → Sort by activity**. A thread moves to the top when you send it a
-message and again when its turn finishes. Dragging within the inbox is off while it is on.
+By default, a thread appears at the top of Active when it comes back to you. On web and desktop, open **Sort threads** beside Search to order Active by **Last activity**, **Last message**, or **Created**, or choose **Last returned** for the default. Each mode remembers its own choice. For drag ordering within Active, turn the Working section off and choose **Manual**.
 
 ### Group threads by project (beta)
 

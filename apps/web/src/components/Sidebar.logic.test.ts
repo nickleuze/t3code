@@ -25,6 +25,7 @@ import {
   searchSidebarThreads,
   shouldRecedeSidebarThread,
   sortInboxThreadsByReturn,
+  sortSidebarActiveThreads,
   resolveSidebarDropTarget,
   planSidebarThreadDrop,
   resolveSidebarReorderableThreadKeys,
@@ -1124,6 +1125,36 @@ describe("Working shelf (beta)", () => {
         hasActionableProposedPlan: true,
       }),
     ).toBe(false);
+  });
+
+  it("can order the active list by return, activity, message, or creation time", () => {
+    const shell = (id: string, createdAt: string) => ({
+      ...presentThreadShell(localEnvironmentId, makeThreadFixture().source),
+      id: ThreadId.make(id),
+      createdAt,
+      updatedAt: createdAt,
+      latestUserAuthoredMessageAt: null,
+    });
+    const returned = shell("returned", "2026-03-09T09:00:00.000Z");
+    const finished = {
+      ...shell("finished", "2026-03-09T09:15:00.000Z"),
+      latestRun: makeLatestRun({ completedAt: "2026-03-09T12:00:00.000Z" }),
+    };
+    const messaged = {
+      ...shell("messaged", "2026-03-09T09:30:00.000Z"),
+      latestUserAuthoredMessageAt: "2026-03-09T11:30:00.000Z",
+    };
+    const created = shell("created", "2026-03-09T10:00:00.000Z");
+    const threads = [returned, finished, messaged, created];
+    const first = (order: Parameters<typeof sortSidebarActiveThreads>[1]) =>
+      sortSidebarActiveThreads(threads, order, (thread) =>
+        thread === returned ? Date.parse("2026-03-09T12:30:00.000Z") : undefined,
+      )[0]?.id;
+
+    expect(first("returned")).toBe(returned.id);
+    expect(first("activity")).toBe(finished.id);
+    expect(first("updated_at")).toBe(messaged.id);
+    expect(first("created_at")).toBe(created.id);
   });
 
   describe("sortInboxThreadsByReturn", () => {
