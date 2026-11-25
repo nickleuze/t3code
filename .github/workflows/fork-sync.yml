@@ -47,6 +47,12 @@ jobs:
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           # The runner keeps .git between runs; drop a rebase a failed run left behind.
           git rebase --quit 2>/dev/null || true
+          # Merges the measured byte counts by arithmetic; OpenCode can't measure them.
+          # Copied, because the rebase starts from upstream's tree, which lacks the script.
+          cp .github/scripts/fork-merge-budget.sh "$RUNNER_TEMP/"
+          git config merge.fork-budget.driver "'$RUNNER_TEMP/fork-merge-budget.sh' %O %A %B"
+          mkdir -p .git/info
+          echo "apps/server/src/provider/agentContextBudget.json merge=fork-budget" > .git/info/attributes
 
           read -r latest latest_commit < <(.github/scripts/fork-upstream-tags.sh)
           marker="nick/sync-conflict/${latest}"
