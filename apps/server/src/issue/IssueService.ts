@@ -51,12 +51,17 @@ import {
   type TrackerIssueDetail,
   type TrackerIssueLink,
 } from "@t3tools/source-control-core/server/IssueTracker";
-import { asIssueTrackerAccount } from "@t3tools/source-control-core/server/IssueTrackerHost";
+import {
+  aroundIssueTrackerCalls,
+  asIssueTrackerAccount,
+} from "@t3tools/source-control-core/server/IssueTrackerHost";
+import { ProjectGitHubAccount } from "@t3tools/source-control-github/server/driver";
 import { parseUrl } from "@t3tools/shared/url";
 
 import * as IssueTrackerBindings from "../persistence/IssueTrackerBindings.ts";
 import * as ProjectService from "../project/ProjectService.ts";
 import * as RepositoryIdentityResolver from "../project/RepositoryIdentityResolver.ts";
+import * as ServerSettings from "../serverSettings.ts";
 import { sourceControlDefinitions } from "../sourceControl/sourceControlDefinitions.ts";
 import * as IssueTrackerRegistry from "./IssueTrackerRegistry.ts";
 
@@ -117,6 +122,8 @@ interface ProjectTrackerBinding {
 interface SupportedProject extends ProjectTrackerBinding {
   readonly project: OrchestrationProjectShell;
   readonly api: IssueTrackerApi;
+  /** The GitHub account the project chose in settings; null reads as the environment's. */
+  readonly githubAccount: string | null;
 }
 
 /**
@@ -151,8 +158,9 @@ function listCursorKey(project: ProjectTrackerBinding): string {
     : `${project.host} ${project.accountId}/${scope}`;
 }
 
-function viewerKey(project: ProjectTrackerBinding): string {
-  return project.accountId === null ? project.host : `${project.host} ${project.accountId}`;
+function viewerKey(project: SupportedProject): string {
+  const account = project.accountId ?? project.githubAccount;
+  return account === null ? project.host : `${project.host} ${account}`;
 }
 
 function isTrackerUnusable(error: IssueTrackerError): boolean {
@@ -240,6 +248,7 @@ const make = Effect.gen(function* () {
   const projects = yield* ProjectService.ProjectService;
   const repositoryIdentities = yield* RepositoryIdentityResolver.RepositoryIdentityResolver;
   const bindings = yield* IssueTrackerBindings.IssueTrackerBindingsRepository;
+  const serverSettings = yield* ServerSettings.ServerSettingsService;
   const details = yield* Cache.makeWith((read: DetailRead) => read.lookup, {
     capacity: DETAIL_CACHE_CAPACITY,
     timeToLive: (exit) => (Exit.isSuccess(exit) ? DETAIL_CACHE_TTL : Duration.zero),
@@ -319,12 +328,29 @@ const make = Effect.gen(function* () {
                 }),
             ),
           );
+          const { projectSettingsOverrides } = yield* serverSettings.getSettings.pipe(
+            Effect.mapError(
+              (cause) =>
+                new IssueOperationError({
+                  operation: "listProjects",
+                  detail: "The project GitHub account settings could not be read.",
+                  cause,
+                }),
+            ),
+          );
           return yield* Effect.forEach(
             shells,
             (project) =>
               resolveProjectTracker(project, bound.get(project.id)).pipe(
                 Effect.map((candidates) =>
-                  candidates.map((candidate) => ({ project, ...candidate })),
+                  candidates.map((candidate) => ({
+                    project,
+                    ...candidate,
+                    githubAccount:
+                      candidate.tracker === "github" && candidate.host === "github.com"
+                        ? (projectSettingsOverrides[project.id]?.githubAccount ?? null)
+                        : null,
+                  })),
                 ),
               ),
             { concurrency: SCOPE_CONCURRENCY },
@@ -352,7 +378,17 @@ const make = Effect.gen(function* () {
             else counted.projectIds.add(candidate.project.id);
             continue;
           }
-          supported.push({ ...candidate, api: asIssueTrackerAccount(api, candidate.accountId) });
+          const asAccount = asIssueTrackerAccount(api, candidate.accountId);
+          supported.push({
+            ...candidate,
+            api:
+              candidate.githubAccount === null
+                ? asAccount
+                : aroundIssueTrackerCalls(
+                    asAccount,
+                    Effect.provideService(ProjectGitHubAccount, candidate.githubAccount),
+                  ),
+          });
         }
         return { supported, unimplemented };
       }),
@@ -404,12 +440,15 @@ const make = Effect.gen(function* () {
     const host = input.host?.trim().toLowerCase();
     const limit = input.limit ?? DEFAULT_LIST_LIMIT;
     // Worktrees of one repository are separate projects, and every repository of an Azure
-    // DevOps project shares its work items; read each scope once.
+    // DevOps project shares its work items; read each scope once, as the account a project
+    // chose for it over the environment's, which may not see the repository.
     const scopes = new Map<string, SupportedProject>();
     for (const project of supported) {
       if (host !== undefined && project.host !== host) continue;
       const key = listCursorKey(project);
-      if (!scopes.has(key)) scopes.set(key, project);
+      const held = scopes.get(key);
+      if (held === undefined || (held.githubAccount === null && project.githubAccount !== null))
+        scopes.set(key, project);
     }
     const continuing = input.cursors;
     const viewers = new Map<string, string>();

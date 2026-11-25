@@ -35,9 +35,16 @@ export function asIssueTrackerAccount(
   api: IssueTrackerApi,
   accountId: IssueTrackerAccountId | null,
 ): IssueTrackerApi {
-  if (accountId === null) return api;
-  const as = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
-    Effect.provideService(effect, IssueTrackerAccount, accountId);
+  return accountId === null
+    ? api
+    : aroundIssueTrackerCalls(api, Effect.provideService(IssueTrackerAccount, accountId));
+}
+
+/** The tracker with `as` applied to every call. */
+export function aroundIssueTrackerCalls(
+  api: IssueTrackerApi,
+  as: <A, E, R>(effect: Effect.Effect<A, E, R>) => Effect.Effect<A, E, R>,
+): IssueTrackerApi {
   const {
     getIssueLink,
     create,
