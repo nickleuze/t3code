@@ -233,3 +233,16 @@ it("drops an invalid saved thread order while retaining unrelated preferences", 
   );
   await expect(loadPreferences()).resolves.toEqual({ baseFontSize: 18 });
 });
+
+it("keeps the Working and flat thread orders across preference updates and reloads", async () => {
+  await savePreferencesPatch({
+    sidebarFlatThreadSortOrder: "updated_at",
+    workingShelfEnabled: false,
+  });
+  await savePreferencesPatch({ inboxThreadSortOrder: "created_at", workingShelfEnabled: true });
+  await expect(loadPreferences()).resolves.toMatchObject({
+    sidebarFlatThreadSortOrder: "updated_at",
+    inboxThreadSortOrder: "created_at",
+    workingShelfEnabled: true,
+  });
+});

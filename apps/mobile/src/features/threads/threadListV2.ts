@@ -610,8 +610,21 @@ function sortSettledThreadsReusingLast(
   return lastSettledOutput;
 }
 
+export type ActiveThreadSortOrder = SidebarFlatThreadSortOrder | "returned";
+
+export function sortActiveThreadsForListV2(
+  threads: readonly EnvironmentThreadShell[],
+  order: ActiveThreadSortOrder,
+  returnedAt: ((thread: EnvironmentThreadShell) => number | undefined) | undefined,
+  manual: (threads: readonly EnvironmentThreadShell[]) => EnvironmentThreadShell[],
+): EnvironmentThreadShell[] {
+  return order === "returned"
+    ? sortInboxThreadsByReturn(threads, returnedAt)
+    : sortThreadsByFlatOrder(threads, order, manual);
+}
+
 export function buildThreadListV2Items(input: {
-  readonly flatThreadSortOrder?: SidebarFlatThreadSortOrder;
+  readonly activeThreadSortOrder?: ActiveThreadSortOrder;
   readonly pendingOrder?: PendingThreadOrder | null;
   readonly threads: ReadonlyArray<EnvironmentThreadShell>;
   readonly environmentId: EnvironmentId | null;
@@ -812,11 +825,12 @@ export function buildThreadListV2Items(input: {
     };
   }
 
-  const orderedActive = workingShelfEnabled
-    ? sortInboxThreadsByReturn(active, input.inboxReturnAt)
-    : sortThreadsByFlatOrder(active, input.flatThreadSortOrder ?? "manual", (threads) =>
-        applyPendingThreadOrder(sortThreadsForListV2(threads), "active", pending),
-      );
+  const orderedActive = sortActiveThreadsForListV2(
+    active,
+    input.activeThreadSortOrder ?? (workingShelfEnabled ? "returned" : "manual"),
+    input.inboxReturnAt,
+    (threads) => applyPendingThreadOrder(sortThreadsForListV2(threads), "active", pending),
+  );
   // Newest send first; finishing and waking again do not move a row.
   const orderedWorking = sortWorkingThreadsBySend(working);
   const orderedSnoozed = [...snoozed].sort(

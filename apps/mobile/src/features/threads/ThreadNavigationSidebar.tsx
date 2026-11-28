@@ -49,7 +49,7 @@ import { useThreadJumpShortcuts } from "../keyboard/threadKeyboardShortcuts";
 import { requestThreadMessageJump } from "./threadMessageJump";
 import { useThreadListSearchMatches } from "./useThreadListSearchMatches";
 import { useHomeListOptions } from "../home/home-list-options";
-import { buildHomeListFilterMenu } from "../home/home-list-filter-menu";
+import { buildHomeListFilterMenu, buildThreadSortMenuActions } from "../home/home-list-filter-menu";
 import { buildHomeProjectScopes } from "../home/homeThreadList";
 import { SwipeableScrollGateProvider, useSwipeableScrollGate } from "../home/thread-swipe-actions";
 import { usePendingTaskListActions } from "../home/usePendingTaskListActions";
@@ -269,7 +269,9 @@ function ThreadNavigationSidebarPane(
     loaded: shelfPreferencesLoaded,
     settledShelfExpanded,
     snoozedShelfExpanded,
-    flatThreadSortOrder,
+    activeThreadSortOrder,
+    threadSortOptions,
+    setThreadSortOrder,
     workingShelfEnabled,
     workingShelfExpanded,
     toggleSettledShelf,
@@ -313,7 +315,7 @@ function ThreadNavigationSidebarPane(
     pendingOrder,
     shelfPreferencesLoaded,
     workingShelfEnabled,
-    flatThreadSortOrder,
+    activeThreadSortOrder,
     workingShelfExpanded,
     snoozedShelfExpanded,
     settledShelfExpanded,
@@ -335,6 +337,9 @@ function ThreadNavigationSidebarPane(
           },
         ]
       : threadListV2Items;
+  const sortActions = shelfPreferencesLoaded
+    ? buildThreadSortMenuActions(threadSortOptions, activeThreadSortOrder)
+    : [];
   const listMenuActions = [
     {
       id: "environment",
@@ -377,6 +382,9 @@ function ThreadNavigationSidebarPane(
             ],
           },
         ] satisfies MenuAction[])),
+    ...(sortActions.length > 0
+      ? [{ id: "sort", title: "Sort threads", subactions: sortActions }]
+      : []),
   ] satisfies MenuAction[];
   const handleListMenuAction = ({
     nativeEvent,
@@ -406,6 +414,7 @@ function ThreadNavigationSidebarPane(
       }
       return;
     }
+    setThreadSortOrder(event);
   };
 
   const [measuredHeaderHeight, setMeasuredHeaderHeight] = useState<number | null>(null);
@@ -471,7 +480,7 @@ function ThreadNavigationSidebarPane(
     listEnvironments,
     threadSearchMatchByKey,
     // Rows read these for their reorder menu items.
-    flatThreadSortOrder,
+    activeThreadSortOrder,
     workingShelfEnabled,
   };
   useThreadJumpShortcuts(listItems, handleSelectThread);
@@ -604,7 +613,7 @@ function ThreadNavigationSidebarPane(
               item.item.pinned
                 ? pinReorderEnvironmentIds.has(thread.environmentId)
                 : !workingShelfEnabled &&
-                  flatThreadSortOrder === "manual" &&
+                  activeThreadSortOrder === "manual" &&
                   activeReorderEnvironmentIds.has(thread.environmentId)
             }
             canMoveUp={item.canMoveUp}
@@ -678,6 +687,18 @@ function ThreadNavigationSidebarPane(
     onEnvironmentChange: setSelectedEnvironmentId,
     onProjectChange: setSelectedProjectKey,
   });
+  if (sortActions.length > 0) {
+    filterMenu.items.push({
+      type: "submenu",
+      title: "Sort threads",
+      items: sortActions.map((action) => ({
+        type: "action",
+        title: action.title,
+        state: action.state ?? "off",
+        onPress: () => setThreadSortOrder(action.id),
+      })),
+    });
+  }
   const nativeHeaderItems = createSidebarHeaderItems({
     filterIcon,
     filterMenu,
@@ -881,7 +902,7 @@ function ThreadNavigationSidebarPane(
             />
             <View className="flex-row items-center gap-2.5">
               <Menu actions={listMenuActions} onPressAction={handleListMenuAction}>
-                <SidebarFilterButton accessibilityLabel="Filter threads" icon={filterIcon} />
+                <SidebarFilterButton accessibilityLabel="Thread list options" icon={filterIcon} />
               </Menu>
               <SidebarHeaderActions onOpenSettings={props.onOpenSettings} />
             </View>

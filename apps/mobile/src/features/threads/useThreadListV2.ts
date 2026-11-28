@@ -1,5 +1,5 @@
 import type { OlderSettledScope } from "@t3tools/client-runtime/state/threads";
-import type { EnvironmentId, SidebarFlatThreadSortOrder } from "@t3tools/contracts";
+import type { EnvironmentId } from "@t3tools/contracts";
 import { useMemo, useSyncExternalStore } from "react";
 
 import { scopedProjectKey } from "../../lib/scopedEntities";
@@ -10,6 +10,7 @@ import {
   buildThreadListV2ListItems,
   getThreadListV2OrderedSection,
   threadListInboxReturns,
+  type ActiveThreadSortOrder,
 } from "./threadListV2";
 import { computeThreadMoveAvailability } from "./threadOrder";
 
@@ -50,8 +51,7 @@ export function useThreadListV2(input: {
   readonly pendingOrder: LayoutInput["pendingOrder"];
   readonly shelfPreferencesLoaded: boolean;
   readonly workingShelfEnabled: boolean;
-  /** The saved flat order; only "manual" lets active cards move. */
-  readonly flatThreadSortOrder: SidebarFlatThreadSortOrder;
+  readonly activeThreadSortOrder: ActiveThreadSortOrder;
   readonly workingShelfExpanded: boolean;
   readonly snoozedShelfExpanded: boolean;
   readonly settledShelfExpanded: boolean;
@@ -90,7 +90,7 @@ export function useThreadListV2(input: {
     });
   const moveAvailability = new Map([
     ...sectionAvailability("pinned"),
-    ...(workingShelfEnabled || input.flatThreadSortOrder !== "manual"
+    ...(workingShelfEnabled || input.activeThreadSortOrder !== "manual"
       ? []
       : sectionAvailability("active")),
   ]);
@@ -103,7 +103,7 @@ export function useThreadListV2(input: {
     visibleCount: input.searchQuery.trim().length === 0 ? input.settledLimit : 0,
   });
   const layout = buildThreadListV2Items({
-    flatThreadSortOrder: input.flatThreadSortOrder,
+    activeThreadSortOrder: input.activeThreadSortOrder,
     pendingOrder: input.pendingOrder,
     threads: threads.filter((thread) => thread.archivedAt === null),
     environmentId: input.environmentId,

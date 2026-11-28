@@ -418,7 +418,7 @@ export function HomeScreen(props: HomeScreenProps) {
     loaded: shelfPreferencesLoaded,
     settledShelfExpanded,
     snoozedShelfExpanded,
-    flatThreadSortOrder,
+    activeThreadSortOrder,
     workingShelfEnabled,
     workingShelfExpanded,
     toggleSettledShelf,
@@ -462,7 +462,7 @@ export function HomeScreen(props: HomeScreenProps) {
     pendingOrder,
     shelfPreferencesLoaded,
     workingShelfEnabled,
-    flatThreadSortOrder,
+    activeThreadSortOrder,
     workingShelfExpanded,
     snoozedShelfExpanded,
     settledShelfExpanded,
@@ -610,7 +610,7 @@ export function HomeScreen(props: HomeScreenProps) {
           item.item.pinned
             ? pinReorderEnvironmentIds.has(thread.environmentId)
             : !workingShelfEnabled &&
-              flatThreadSortOrder === "manual" &&
+              activeThreadSortOrder === "manual" &&
               activeReorderEnvironmentIds.has(thread.environmentId)
         }
         canMoveUp={item.canMoveUp}
@@ -642,7 +642,7 @@ export function HomeScreen(props: HomeScreenProps) {
     selectedThreadKey,
     threadSearchMatchByKey,
     // Rows read these for their reorder menu items.
-    flatThreadSortOrder,
+    activeThreadSortOrder,
     workingShelfEnabled,
   };
 

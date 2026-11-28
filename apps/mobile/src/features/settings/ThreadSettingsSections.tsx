@@ -9,13 +9,13 @@ import { View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import { DEFAULT_SERVER_SETTINGS } from "@t3tools/contracts";
-import { FLAT_THREAD_SORT_OPTIONS } from "@t3tools/client-runtime/state/thread-sort";
 import { supportsSharedSettingsSync } from "@t3tools/client-runtime/state/shared-settings";
 import { AppText as Text } from "../../components/ui/AppText";
 import { useEnvironments } from "../../state/environments";
 import { mobilePreferencesAtom, updateMobilePreferencesAtom } from "../../state/preferences";
 import { serverEnvironment } from "../../state/server";
 import { useAtomCommand } from "../../state/use-atom-command";
+import { useThreadListV2ShelfPreferences } from "../threads/use-thread-list-v2-shelf-preferences";
 import { SettingsChoiceRow } from "./components/SettingsChoiceRow";
 import { SettingsSection } from "./components/SettingsSection";
 import { SettingsSwitchRow } from "./components/SettingsSwitchRow";
@@ -193,9 +193,8 @@ export function WorkingSectionSettings() {
         />
       </SettingsSection>
       <Text className="px-2 text-sm text-foreground-muted">
-        Fold working and monitoring threads into a Working section. They return to the top of the
-        list when they need you. While this is on, active threads are ordered by time and cannot be
-        moved.
+        Fold working and monitoring threads into a Working section. They return to Active when they
+        need you. Choose Last returned to see those threads first.
       </Text>
     </View>
   );
@@ -285,28 +284,20 @@ function LegacySettingsSection() {
   );
 }
 
-/** Device-local flat order for active threads; hidden while the Working section orders them. */
 export function ThreadSortSettingsSection() {
-  const savePreferences = useAtomSet(updateMobilePreferencesAtom);
-  const preferences = useAtomValue(mobilePreferencesAtom);
-  const ready = AsyncResult.isSuccess(preferences) && !preferences.waiting;
-  const selected = AsyncResult.isSuccess(preferences)
-    ? (preferences.value.sidebarFlatThreadSortOrder ?? "manual")
-    : null;
-  // The Working beta orders the inbox by time, so the choice would have no effect.
-  if (!AsyncResult.isSuccess(preferences) || preferences.value.workingShelfEnabled !== false)
-    return null;
+  const { loaded, activeThreadSortOrder, threadSortOptions, setThreadSortOrder } =
+    useThreadListV2ShelfPreferences();
+  if (!loaded) return null;
   return (
     <SettingsSection title="Thread order">
-      {FLAT_THREAD_SORT_OPTIONS.map((option, index) => (
+      {threadSortOptions.map((option, index) => (
         <SettingsChoiceRow
           key={option.value}
           label={option.label}
           description={option.description}
-          selected={selected === option.value}
+          selected={activeThreadSortOrder === option.value}
           separated={index > 0}
-          disabled={!ready}
-          onPress={() => savePreferences({ sidebarFlatThreadSortOrder: option.value })}
+          onPress={() => setThreadSortOrder(option.value)}
         />
       ))}
     </SettingsSection>

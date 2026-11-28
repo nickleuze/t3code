@@ -81,6 +81,14 @@ export type WorkspaceSelections = typeof WorkspaceSelections.Type;
 const isThreadListFilters = Schema.is(ThreadListFilters);
 const isWorkspaceSelections = Schema.is(WorkspaceSelections);
 const isPullRequestListPreferences = Schema.is(PullRequestListPreferences);
+const InboxThreadSortOrder = Schema.Literals([
+  "returned",
+  "last_activity",
+  "updated_at",
+  "created_at",
+]);
+export type InboxThreadSortOrder = typeof InboxThreadSortOrder.Type;
+const isInboxThreadSortOrder = Schema.is(InboxThreadSortOrder);
 const ThreadProject = Schema.Struct({
   environmentId: Schema.NonEmptyString,
   projectId: Schema.NonEmptyString,
@@ -120,6 +128,7 @@ export interface Preferences {
   readonly useLastProjectForNewThreads?: boolean;
   readonly lastThreadProject?: typeof ThreadProject.Type;
   readonly sidebarFlatThreadSortOrder?: SidebarFlatThreadSortOrder;
+  readonly inboxThreadSortOrder?: InboxThreadSortOrder;
   readonly modelFavorites?: ReadonlyArray<{
     readonly provider: ProviderInstanceId;
     readonly model: string;
@@ -203,6 +212,7 @@ function sanitizePreferences(parsed: Preferences): Preferences {
     useLastProjectForNewThreads?: boolean;
     lastThreadProject?: typeof ThreadProject.Type;
     sidebarFlatThreadSortOrder?: SidebarFlatThreadSortOrder;
+    inboxThreadSortOrder?: InboxThreadSortOrder;
     modelFavorites?: Preferences["modelFavorites"];
     threadListSettledShelfExpanded?: boolean;
     threadListSnoozedShelfExpanded?: boolean;
@@ -328,6 +338,9 @@ function sanitizePreferences(parsed: Preferences): Preferences {
   }
   if (isSidebarFlatThreadSortOrder(parsed.sidebarFlatThreadSortOrder)) {
     preferences.sidebarFlatThreadSortOrder = parsed.sidebarFlatThreadSortOrder;
+  }
+  if (isInboxThreadSortOrder(parsed.inboxThreadSortOrder)) {
+    preferences.inboxThreadSortOrder = parsed.inboxThreadSortOrder;
   }
   if (typeof parsed.workingShelfEnabled === "boolean") {
     preferences.workingShelfEnabled = parsed.workingShelfEnabled;

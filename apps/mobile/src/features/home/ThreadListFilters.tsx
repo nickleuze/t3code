@@ -1,6 +1,8 @@
 import { Pressable, ScrollView } from "react-native";
 import { SymbolView } from "../../components/ui/AppSymbol";
 import { ListFilterMenu } from "../workspace/ListFilterMenu";
+import { useThreadListV2ShelfPreferences } from "../threads/use-thread-list-v2-shelf-preferences";
+import { buildThreadSortMenuActions } from "./home-list-filter-menu";
 import type { HomeHeaderProps } from "./HomeHeader.types";
 
 export function ThreadListFilters(
@@ -17,6 +19,8 @@ export function ThreadListFilters(
     readonly gutter: number;
   },
 ) {
+  const { loaded, activeThreadSortOrder, threadSortOptions, setThreadSortOrder } =
+    useThreadListV2ShelfPreferences();
   const selectedEnvironment = props.environments.find(
     (environment) => environment.environmentId === props.selectedEnvironmentId,
   );
@@ -30,6 +34,17 @@ export function ThreadListFilters(
       style={{ marginHorizontal: -props.gutter }}
       contentContainerStyle={{ paddingHorizontal: 20, paddingTop: 2, paddingBottom: 10, gap: 8 }}
     >
+      {loaded ? (
+        <ListFilterMenu
+          label={
+            threadSortOptions.find((option) => option.value === activeThreadSortOrder)?.label ??
+            "Sort threads"
+          }
+          accessibilityLabel="Sort threads"
+          actions={buildThreadSortMenuActions(threadSortOptions, activeThreadSortOrder)}
+          onSelect={setThreadSortOrder}
+        />
+      ) : null}
       <ListFilterMenu
         label={selectedEnvironment?.label ?? "All environments"}
         accessibilityLabel="Filter threads by environment"

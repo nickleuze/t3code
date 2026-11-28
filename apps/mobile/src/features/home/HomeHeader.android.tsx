@@ -1,6 +1,8 @@
 import type { MenuAction } from "@react-native-menu/menu";
 import { useCallback, useMemo } from "react";
 import { NativeStackScreenOptions } from "../../native/StackHeader";
+import { useThreadListV2ShelfPreferences } from "../threads/use-thread-list-v2-shelf-preferences";
+import { buildThreadSortMenuActions } from "./home-list-filter-menu";
 import { ThreadListToolbar } from "./ThreadListToolbar";
 import type { HomeHeaderProps } from "./HomeHeader.types";
 
@@ -11,6 +13,8 @@ function checkedMenuState(checked: boolean) {
 }
 
 export function HomeHeader(props: HomeHeaderProps) {
+  const { loaded, activeThreadSortOrder, threadSortOptions, setThreadSortOrder } =
+    useThreadListV2ShelfPreferences();
   const hasCustomListOptions =
     props.selectedEnvironmentId !== null || props.selectedProjectKey !== null;
   const menuActions = useMemo<MenuAction[]>(
@@ -51,8 +55,25 @@ export function HomeHeader(props: HomeHeaderProps) {
               ],
             },
           ] satisfies MenuAction[])),
+      ...(loaded
+        ? [
+            {
+              id: "sort",
+              title: "Sort threads",
+              subactions: buildThreadSortMenuActions(threadSortOptions, activeThreadSortOrder),
+            },
+          ]
+        : []),
     ],
-    [props.environments, props.projects, props.selectedEnvironmentId, props.selectedProjectKey],
+    [
+      props.environments,
+      props.projects,
+      props.selectedEnvironmentId,
+      props.selectedProjectKey,
+      loaded,
+      threadSortOptions,
+      activeThreadSortOrder,
+    ],
   );
   const handleMenuAction = useCallback(
     (event: { nativeEvent: { event: string } }) => {
@@ -85,8 +106,9 @@ export function HomeHeader(props: HomeHeaderProps) {
         }
         return;
       }
+      setThreadSortOrder(id);
     },
-    [props],
+    [props, setThreadSortOrder],
   );
 
   return (

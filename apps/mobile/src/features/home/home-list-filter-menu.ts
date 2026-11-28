@@ -29,6 +29,17 @@ export interface HomeListFilterMenu {
   readonly items: Array<HomeListFilterMenuAction | HomeListFilterMenuSubmenu>;
 }
 
+export function buildThreadSortMenuActions(
+  options: readonly { readonly value: string; readonly label: string }[],
+  selected: string,
+) {
+  return options.map((option) => ({
+    id: option.value,
+    title: option.label,
+    state: option.value === selected ? ("on" as const) : undefined,
+  }));
+}
+
 export function buildHomeListFilterMenu(props: {
   readonly environments: ReadonlyArray<HomeListFilterMenuEnvironment>;
   readonly projects: ReadonlyArray<HomeListFilterMenuProject>;

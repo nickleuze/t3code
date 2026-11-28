@@ -176,25 +176,54 @@ it("uses saved activity order without lifecycle timestamps, while retaining manu
     activeOrderKey: "z",
     latestUserMessageAt: "2026-01-03T00:00:00Z",
   });
-  expect(ids(build([older, newest], { flatThreadSortOrder: "manual" }))).toEqual([
+  expect(ids(build([older, newest], { activeThreadSortOrder: "manual" }))).toEqual([
     ownerId,
     newest.id,
   ]);
-  expect(ids(build([older, newest], { flatThreadSortOrder: "last_activity" }))).toEqual([
+  expect(ids(build([older, newest], { activeThreadSortOrder: "last_activity" }))).toEqual([
     newest.id,
     ownerId,
   ]);
-  expect(ids(build([older, newest], { flatThreadSortOrder: "updated_at" }))).toEqual([
+  expect(ids(build([older, newest], { activeThreadSortOrder: "updated_at" }))).toEqual([
     newest.id,
     ownerId,
   ]);
   expect(
     ids(
       build([{ ...older, createdAt: "2026-01-04T00:00:00Z" }, newest], {
-        flatThreadSortOrder: "created_at",
+        activeThreadSortOrder: "created_at",
       }),
     ),
   ).toEqual([ownerId, newest.id]);
+});
+
+it("sorts Active independently of the Working shelf", () => {
+  const createdFirst = {
+    ...owner,
+    createdAt: "2026-01-01T00:00:00Z",
+    latestUserMessageAt: "2026-01-03T00:00:00Z",
+  };
+  const createdLast = makeThreadShellFixture({
+    environmentId: env,
+    id: ThreadId.make("created-last"),
+    createdAt: "2026-01-02T00:00:00Z",
+  });
+  const working = makeThreadShellFixture({
+    environmentId: env,
+    id: ThreadId.make("working"),
+    t3Goal: goal,
+  });
+  const threads = [createdFirst, createdLast, working];
+  const shelves = {
+    workingShelfEnabled: true,
+    workingShelfExpanded: true,
+    inboxReturnAt: (thread: EnvironmentThreadShell) =>
+      thread.id === createdFirst.id ? Date.parse(now) : undefined,
+  };
+  expect(ids(build(threads, shelves))).toEqual([createdFirst.id, createdLast.id, working.id]);
+  const sorted = build(threads, { ...shelves, activeThreadSortOrder: "created_at" });
+  expect(ids(sorted)).toEqual([createdLast.id, createdFirst.id, working.id]);
+  expect(sorted.workingCount).toBe(1);
 });
 
 it("keeps a goal needing input in the inbox despite owner background work", () => {
